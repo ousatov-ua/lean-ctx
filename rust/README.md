@@ -658,6 +658,35 @@ Or use the interactive shell:
 lean-ctx shell
 ```
 
+### LSP Integration (Optional)
+
+`ctx_refactor` provides LSP-powered code intelligence (rename, references, go-to-definition, find-implementations). It requires an external language server to be installed — this is **optional** and not needed for core functionality.
+
+**Supported language servers:**
+
+| Language | Binary | Install |
+|---|---|---|
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
+| TypeScript/JS | `typescript-language-server` | `npm i -g typescript-language-server typescript` |
+| Python | `pylsp` | `pip install python-lsp-server` |
+| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+
+**Check availability:**
+
+```bash
+lean-ctx doctor    # Shows LSP server status in a dedicated section
+```
+
+**Custom paths** (in `~/.lean-ctx/config.toml`):
+
+```toml
+[lsp]
+rust = "/opt/custom/rust-analyzer"
+python = "~/.venvs/main/bin/pylsp"
+```
+
+Without language servers, `ctx_search`, `ctx_symbol`, `ctx_graph`, and `ctx_callgraph` still provide powerful code navigation — LSP adds semantic precision for complex refactorings.
+
 ## Persistent Stats & Web Dashboard
 
 lean-ctx tracks all compressions (both MCP tools and shell hook) in `~/.lean-ctx/stats.json`:

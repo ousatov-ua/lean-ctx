@@ -882,6 +882,12 @@ Key design decisions:
 
 Supported servers: rust-analyzer, typescript-language-server, pylsp, gopls (configured in `lsp/config.rs`).
 
+Optional enhancement — graceful degradation:
+- If no language server is installed, `ctx_refactor` returns a clear error with install instructions
+- `lean-ctx doctor` shows LSP availability in a dedicated section (not counted in score)
+- Custom paths configurable via `[lsp]` section in `config.toml`
+- Core features (`ctx_search`, `ctx_symbol`, `ctx_graph`) work without any language server
+
 ## Archive Full-Text Search (FTS5)
 
 The archive FTS subsystem (`core/archive_fts.rs`) enables cross-archive fulltext search using SQLite FTS5.

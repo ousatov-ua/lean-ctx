@@ -993,6 +993,13 @@ pub fn run() {
     }
     print_check(&ram_outcome);
 
+    // LSP servers (optional, informational)
+    println!("\n  {BOLD}{WHITE}LSP (optional — for ctx_refactor):{RST}");
+    let lsp_outcomes = lsp_server_outcomes();
+    for lsp_check in &lsp_outcomes {
+        print_check(lsp_check);
+    }
+
     let mut effective_total = total + 8; // session_state + integrity + cache_safety + bm25_health + daemon + mem_profile + mem_cleanup + ram_guardian
     effective_total += docker_outcomes.len() as u32;
     if pi.is_some() {
@@ -1003,6 +1010,7 @@ pub fn run() {
     }
     println!();
     println!("  {BOLD}{WHITE}Summary:{RST}  {GREEN}{passed}{RST}{DIM}/{effective_total}{RST} checks passed");
+    println!("  {DIM}LSP servers are optional enhancements (not counted in score){RST}");
     println!("  {DIM}{}{RST}", crate::core::integrity::origin_line());
 }
 
@@ -1496,6 +1504,35 @@ fn ram_guardian_outcome() -> Outcome {
             snap.rss_limit_bytes as f64 / 1_048_576.0,
         ),
     }
+}
+
+fn lsp_server_outcomes() -> Vec<Outcome> {
+    use crate::lsp::config::{find_binary_in_path, KNOWN_SERVERS};
+
+    KNOWN_SERVERS
+        .iter()
+        .map(|info| {
+            let found = find_binary_in_path(info.binary);
+            match found {
+                Some(path) => Outcome {
+                    ok: true,
+                    line: format!(
+                        "{BOLD}{}{RST}  {GREEN}✓ {}{RST}  {DIM}{}{RST}",
+                        info.language,
+                        info.binary,
+                        path.display()
+                    ),
+                },
+                None => Outcome {
+                    ok: false,
+                    line: format!(
+                        "{BOLD}{}{RST}  {DIM}not installed{RST}  {YELLOW}{}{RST}",
+                        info.language, info.install_hint
+                    ),
+                },
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

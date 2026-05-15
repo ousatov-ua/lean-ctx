@@ -323,6 +323,10 @@ pub struct Config {
     /// Override via LEAN_CTX_PROJECT_ROOT env var.
     #[serde(default)]
     pub project_root: Option<String>,
+    /// LSP server overrides. Map language name to custom binary path.
+    /// Example: `[lsp]\nrust = "/opt/rust-analyzer"\npython = "~/.venvs/main/bin/pylsp"`
+    #[serde(default)]
+    pub lsp: std::collections::HashMap<String, String>,
 }
 
 /// Settings for the zero-loss compression archive (large tool outputs saved to disk).
@@ -535,6 +539,7 @@ impl Default for Config {
             max_ram_percent: serde_defaults::default_max_ram_percent(),
             savings_footer: SavingsFooter::default(),
             project_root: None,
+            lsp: std::collections::HashMap::new(),
         }
     }
 }
