@@ -34,7 +34,7 @@ fn claude_mcp_add_json_used_when_available() {
     if cfg!(windows) {
         write_exe(
             &claude,
-            "@echo off\r\nset OUT=%HOME%\\claude-mcp.json\r\nmore > \"%OUT%\"\r\nexit /b 0\r\n",
+            "@echo off\r\nset OUT=%HOME%\\claude-mcp.json\r\npowershell -NoProfile -Command \"[Console]::In.ReadToEnd() | Set-Content -Path $env:OUT -NoNewline\"\r\nexit /b 0\r\n",
         );
     } else {
         write_exe(
