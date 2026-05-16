@@ -832,6 +832,11 @@ pub fn run_setup_with_options(opts: SetupOptions) -> Result<SetupReport, String>
 }
 
 fn spawn_index_build_background(root: &std::path::Path) {
+    if std::env::var("LEAN_CTX_DISABLED").is_ok()
+        || matches!(std::env::var("LEAN_CTX_QUIET"), Ok(v) if v.trim() == "1")
+    {
+        return;
+    }
     let root_str = crate::core::graph_index::normalize_project_root(&root.to_string_lossy());
     if !crate::core::graph_index::is_safe_scan_root_public(&root_str) {
         tracing::info!("[setup: skipping background graph build for unsafe root {root_str}]");
