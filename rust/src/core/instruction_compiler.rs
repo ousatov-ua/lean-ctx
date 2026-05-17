@@ -75,7 +75,10 @@ pub fn compile(
     let mut rules_files = Vec::new();
     if opts.include_rules_files && client_id == "claude-code" {
         rules_files.push(CompiledRuleFile {
-            path: "~/.claude/rules/lean-ctx.md".to_string(),
+            path: format!(
+                "{}/rules/lean-ctx.md",
+                crate::core::editor_registry::paths::claude_config_display_prefix()
+            ),
             content: crate::rules_inject::rules_dedicated_markdown().to_string(),
         });
     }

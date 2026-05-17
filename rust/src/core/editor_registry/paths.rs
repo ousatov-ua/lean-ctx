@@ -169,6 +169,16 @@ pub fn claude_rules_dir(home: &Path) -> PathBuf {
     claude_state_dir(home).join("rules")
 }
 
+pub fn claude_config_display_prefix() -> String {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let dir = dir.trim().to_string();
+        if !dir.is_empty() {
+            return dir;
+        }
+    }
+    "~/.claude".to_string()
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
