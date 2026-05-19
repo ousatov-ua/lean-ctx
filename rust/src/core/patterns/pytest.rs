@@ -169,6 +169,16 @@ pub fn compress(command: &str, output: &str) -> Option<String> {
                     skipped = n;
                 }
             }
+            if let Some(n) = extract_counter(trimmed, " xfailed") {
+                if xfailed == 0 {
+                    xfailed = n;
+                }
+            }
+            if let Some(n) = extract_counter(trimmed, " xpassed") {
+                if xpassed == 0 {
+                    xpassed = n;
+                }
+            }
             if let Some(n) = extract_counter(trimmed, " warning") {
                 warnings = n;
             }
