@@ -1161,6 +1161,16 @@ fn extract_json_field(input: &str, field: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn expect_wrapped(cmd: &str, binary: &str) -> String {
+        if cfg!(windows) {
+            let escaped = cmd.replace('"', "\\\"");
+            format!("{binary} -c \"{escaped}\"")
+        } else {
+            let shell_escaped = cmd.replace('\'', "'\\''");
+            format!("{binary} -c '{shell_escaped}'")
+        }
+    }
+
     #[test]
     fn is_rewritable_basic() {
         assert!(is_rewritable("git status"));
@@ -1245,13 +1255,16 @@ mod tests {
     #[test]
     fn wrap_single() {
         let r = wrap_single_command("git status", "lean-ctx");
-        assert_eq!(r, "lean-ctx -c 'git status'");
+        assert_eq!(r, expect_wrapped("git status", "lean-ctx"));
     }
 
     #[test]
     fn wrap_with_quotes() {
         let r = wrap_single_command(r#"curl -H "Auth" https://api.com"#, "lean-ctx");
-        assert_eq!(r, r#"lean-ctx -c 'curl -H "Auth" https://api.com'"#);
+        assert_eq!(
+            r,
+            expect_wrapped(r#"curl -H "Auth" https://api.com"#, "lean-ctx")
+        );
     }
 
     #[test]
@@ -1266,7 +1279,7 @@ mod tests {
     fn rewrite_candidate_wraps_single_command() {
         assert_eq!(
             rewrite_candidate("git status", "lean-ctx"),
-            Some("lean-ctx -c 'git status'".to_string())
+            Some(expect_wrapped("git status", "lean-ctx"))
         );
     }
 
@@ -1304,19 +1317,15 @@ mod tests {
     #[test]
     fn compound_rewrite_and_chain() {
         let result = build_rewrite_compound("cd src && git status && echo done", "lean-ctx");
-        assert_eq!(
-            result,
-            Some("cd src && lean-ctx -c 'git status' && echo done".into())
-        );
+        let w = expect_wrapped("git status", "lean-ctx");
+        assert_eq!(result, Some(format!("cd src && {w} && echo done")));
     }
 
     #[test]
     fn compound_rewrite_pipe() {
         let result = build_rewrite_compound("git log --oneline | head -5", "lean-ctx");
-        assert_eq!(
-            result,
-            Some("lean-ctx -c 'git log --oneline' | head -5".into())
-        );
+        let w = expect_wrapped("git log --oneline", "lean-ctx");
+        assert_eq!(result, Some(format!("{w} | head -5")));
     }
 
     #[test]
@@ -1328,37 +1337,32 @@ mod tests {
     #[test]
     fn compound_rewrite_multiple_rewritable() {
         let result = build_rewrite_compound("git add . && cargo test && npm run lint", "lean-ctx");
-        assert_eq!(
-            result,
-            Some(
-                "lean-ctx -c 'git add .' && lean-ctx -c 'cargo test' && lean-ctx -c 'npm run lint'"
-                    .into()
-            )
-        );
+        let w1 = expect_wrapped("git add .", "lean-ctx");
+        let w2 = expect_wrapped("cargo test", "lean-ctx");
+        let w3 = expect_wrapped("npm run lint", "lean-ctx");
+        assert_eq!(result, Some(format!("{w1} && {w2} && {w3}")));
     }
 
     #[test]
     fn compound_rewrite_semicolons() {
         let result = build_rewrite_compound("git add .; git commit -m 'fix'", "lean-ctx");
-        assert_eq!(
-            result,
-            Some("lean-ctx -c 'git add .' ; lean-ctx -c 'git commit -m '\\''fix'\\'''".into())
-        );
+        let w1 = expect_wrapped("git add .", "lean-ctx");
+        let w2 = expect_wrapped("git commit -m 'fix'", "lean-ctx");
+        assert_eq!(result, Some(format!("{w1} ; {w2}")));
     }
 
     #[test]
     fn compound_rewrite_or_chain() {
         let result = build_rewrite_compound("git pull || echo failed", "lean-ctx");
-        assert_eq!(result, Some("lean-ctx -c 'git pull' || echo failed".into()));
+        let w = expect_wrapped("git pull", "lean-ctx");
+        assert_eq!(result, Some(format!("{w} || echo failed")));
     }
 
     #[test]
     fn compound_skips_already_rewritten() {
         let result = build_rewrite_compound("lean-ctx -c git status && git diff", "lean-ctx");
-        assert_eq!(
-            result,
-            Some("lean-ctx -c git status && lean-ctx -c 'git diff'".into())
-        );
+        let w = expect_wrapped("git diff", "lean-ctx");
+        assert_eq!(result, Some(format!("lean-ctx -c git status && {w}")));
     }
 
     #[test]
@@ -1474,42 +1478,40 @@ mod tests {
     #[test]
     fn wrap_single_command_em_dash() {
         let r = wrap_single_command("gh --comment \"closing — see #407\"", "lean-ctx");
-        assert_eq!(r, "lean-ctx -c 'gh --comment \"closing — see #407\"'");
+        assert_eq!(
+            r,
+            expect_wrapped("gh --comment \"closing — see #407\"", "lean-ctx")
+        );
     }
 
     #[test]
     fn wrap_single_command_dollar_sign() {
         let r = wrap_single_command("echo $HOME", "lean-ctx");
-        assert_eq!(r, "lean-ctx -c 'echo $HOME'");
+        assert_eq!(r, expect_wrapped("echo $HOME", "lean-ctx"));
     }
 
     #[test]
     fn wrap_single_command_backticks() {
         let r = wrap_single_command("echo `date`", "lean-ctx");
-        assert_eq!(r, "lean-ctx -c 'echo `date`'");
+        assert_eq!(r, expect_wrapped("echo `date`", "lean-ctx"));
     }
 
     #[test]
     fn wrap_single_command_nested_single_quotes() {
         let r = wrap_single_command("echo 'hello world'", "lean-ctx");
-        assert_eq!(r, r"lean-ctx -c 'echo '\''hello world'\'''");
+        assert_eq!(r, expect_wrapped("echo 'hello world'", "lean-ctx"));
     }
 
     #[test]
     fn wrap_single_command_exclamation_mark() {
         let r = wrap_single_command("echo hello!", "lean-ctx");
-        assert_eq!(r, "lean-ctx -c 'echo hello!'");
+        assert_eq!(r, expect_wrapped("echo hello!", "lean-ctx"));
     }
 
     #[test]
     fn wrap_single_command_find_with_many_excludes() {
-        let r = wrap_single_command(
-            "find . -not -path ./node_modules -not -path ./.git -not -path ./dist",
-            "lean-ctx",
-        );
-        assert_eq!(
-            r,
-            "lean-ctx -c 'find . -not -path ./node_modules -not -path ./.git -not -path ./dist'"
-        );
+        let cmd = "find . -not -path ./node_modules -not -path ./.git -not -path ./dist";
+        let r = wrap_single_command(cmd, "lean-ctx");
+        assert_eq!(r, expect_wrapped(cmd, "lean-ctx"));
     }
 }
