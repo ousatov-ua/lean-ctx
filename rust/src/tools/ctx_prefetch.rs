@@ -19,33 +19,37 @@ pub fn handle(
     crp_mode: CrpMode,
 ) -> String {
     let project_root = if root.trim().is_empty() { "." } else { root };
-    let Some(open) = graph_provider::open_or_build(project_root) else {
-        return "ctx_prefetch: no graph available".to_string();
-    };
-    let gp = &open.provider;
+    let open = graph_provider::open_or_build(project_root);
+    let gp = open.as_ref().map(|o| &o.provider);
 
     let mut candidates: BTreeMap<String, f64> = BTreeMap::new();
 
     if let Some(t) = task {
-        let (task_files, task_keywords) = parse_task_hints(t);
-        let relevance = compute_relevance(gp, &task_files, &task_keywords);
-        for r in relevance.iter().take(50) {
-            if r.score < 0.1 {
-                break;
+        if let Some(gp) = gp {
+            let (task_files, task_keywords) = parse_task_hints(t);
+            let relevance = compute_relevance(gp, &task_files, &task_keywords);
+            for r in relevance.iter().take(50) {
+                if r.score < 0.1 {
+                    break;
+                }
+                candidates.insert(r.path.clone(), r.score);
             }
-            candidates.insert(r.path.clone(), r.score);
         }
     }
 
     if let Some(changed) = changed_files {
         for p in changed {
             let rel = normalize_rel_path(p, project_root);
-            for (path, dist) in blast_radius(gp, &rel, 2) {
-                let boost = 1.0 / (dist.max(1) as f64);
-                candidates
-                    .entry(path)
-                    .and_modify(|s| *s = (*s + boost).min(1.0))
-                    .or_insert(boost.min(1.0));
+            if let Some(gp) = gp {
+                for (path, dist) in blast_radius(gp, &rel, 2) {
+                    let boost = 1.0 / (dist.max(1) as f64);
+                    candidates
+                        .entry(path)
+                        .and_modify(|s| *s = (*s + boost).min(1.0))
+                        .or_insert(boost.min(1.0));
+                }
+            } else {
+                candidates.entry(rel).or_insert(1.0);
             }
         }
     }
