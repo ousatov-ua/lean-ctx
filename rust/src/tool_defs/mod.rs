@@ -72,7 +72,7 @@ use ctx_call (available in lazy mode) to invoke discovered tools:\n\
 }
 
 pub fn is_full_mode() -> bool {
-    std::env::var("LEAN_CTX_FULL_TOOLS").is_ok()
+    std::env::var("LEAN_CTX_FULL_TOOLS").is_ok_and(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
         || std::env::var("LEAN_CTX_LAZY_TOOLS")
             .is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false"))
 }

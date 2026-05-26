@@ -188,6 +188,14 @@ impl ConfigSchema {
             ),
         );
         root.insert(
+            "profile".into(),
+            key(
+                "string",
+                serde_json::json!(cfg.profile.as_deref().unwrap_or("")),
+                "Persistent profile name. Checked after LEAN_CTX_PROFILE env var. Set via: lean-ctx config set profile passthrough",
+            ),
+        );
+        root.insert(
             "rules_scope".into(),
             key_enum(
                 &["both", "global", "project"],

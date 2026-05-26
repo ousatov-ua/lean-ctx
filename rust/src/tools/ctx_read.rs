@@ -363,12 +363,13 @@ fn handle_with_options_inner(
         cache_snapshot
     {
         if mode == "full" {
-            // Fast mtime check: if file unchanged on disk AND full content was previously
-            // delivered, return a minimal stub. After host compaction, delivery flags are
-            // reset so the agent gets full content again automatically.
-            // "safe" policy never returns stubs — always delivers content.
+            let no_deg = crate::core::config::Config::load().no_degrade_effective();
+            let prof = crate::core::profiles::active_profile();
+            let force_full = no_deg
+                || (prof.read.default_mode_effective() == "full"
+                    && prof.compression.crp_mode_effective() == "off");
             let policy_allows_stub =
-                crate::server::compaction_sync::effective_cache_policy() != "safe";
+                crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full;
             if policy_allows_stub
                 && !crate::core::cache::is_cache_entry_stale(path, cached_mtime)
                 && cache.is_full_delivered(path)
@@ -685,6 +686,12 @@ fn handle_full_with_auto_delta(
         return (out, sent);
     };
 
+    let no_deg = crate::core::config::Config::load().no_degrade_effective();
+    let prof = crate::core::profiles::active_profile();
+    let force_full = no_deg
+        || (prof.read.default_mode_effective() == "full"
+            && prof.compression.crp_mode_effective() == "off");
+
     let old_content = cache
         .get(path)
         .and_then(crate::core::cache::CacheEntry::content)
@@ -692,7 +699,8 @@ fn handle_full_with_auto_delta(
     let store_result = cache.store(path, &disk_content);
 
     if store_result.was_hit {
-        let policy_allows_stub = crate::server::compaction_sync::effective_cache_policy() != "safe";
+        let policy_allows_stub =
+            crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full;
         if policy_allows_stub && store_result.full_content_delivered {
             let out = if crate::core::protocol::meta_visible() {
                 format!(
@@ -736,7 +744,10 @@ fn handle_full_with_auto_delta(
     let diff_tokens = count_tokens(&diff);
     let full_tokens = store_result.original_tokens;
 
-    if full_tokens > 0 && (diff_tokens as f64) < (full_tokens as f64 * AUTO_DELTA_THRESHOLD) {
+    if !force_full
+        && full_tokens > 0
+        && (diff_tokens as f64) < (full_tokens as f64 * AUTO_DELTA_THRESHOLD)
+    {
         let savings = protocol::format_savings(full_tokens, diff_tokens);
         let head = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {
             format!("{file_ref}={short}")

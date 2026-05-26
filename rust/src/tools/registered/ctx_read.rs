@@ -55,7 +55,7 @@ Modes: full|map|signatures|diff|aggressive|entropy|task|reference|lines:N-M. fre
                     "path": { "type": "string", "description": "Absolute file path to read" },
                     "mode": {
                         "type": "string",
-                        "description": "Compression mode (default: full). Use 'map' for context-only files. For line ranges: 'lines:N-M' (e.g. 'lines:400-500')."
+                        "description": "Compression mode (default: auto — resolved per file type/size). Explicit 'full' for guaranteed complete content. Use 'map' for context-only files. For line ranges: 'lines:N-M' (e.g. 'lines:400-500')."
                     },
                     "start_line": {
                         "type": "integer",

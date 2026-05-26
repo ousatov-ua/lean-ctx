@@ -323,6 +323,10 @@ pub struct Config {
     /// Override via LCTX_NO_DEGRADE=1 env var.
     #[serde(default)]
     pub no_degrade: bool,
+    /// Persistent profile name. Checked after LEAN_CTX_PROFILE env var.
+    /// Set via `lean-ctx config set profile passthrough` or editing config.toml.
+    #[serde(default)]
+    pub profile: Option<String>,
     #[serde(default)]
     pub loop_detection: LoopDetectionConfig,
     /// Controls where lean-ctx installs agent rule files.
@@ -863,6 +867,7 @@ impl Default for Config {
             disabled_tools: Vec::new(),
             default_tool_categories: Vec::new(),
             no_degrade: false,
+            profile: None,
             loop_detection: LoopDetectionConfig::default(),
             rules_scope: None,
             extra_ignore_patterns: Vec::new(),
@@ -2109,6 +2114,9 @@ impl Config {
         }
         if local.no_degrade {
             self.no_degrade = true;
+        }
+        if local.profile.is_some() {
+            self.profile = local.profile;
         }
         if local.proxy_timeout_ms.is_some() {
             self.proxy_timeout_ms = local.proxy_timeout_ms;

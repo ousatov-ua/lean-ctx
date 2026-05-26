@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [3.6.19] — 2026-05-26
+
+### Added
+- **Built-in `passthrough` profile**: No output modification — always full content, zero compression. Use via `LEAN_CTX_PROFILE=passthrough` or `lean-ctx config set profile passthrough`. Includes `default_mode=full`, `crp_mode=off`, `degradation.enforce=false`, `pipeline: all false`, `max_tokens_per_file=10M`, `max_context_tokens=1M`.
+- **Persistent profile selection via config.toml**: New `profile` field in config.toml provides a fallback when `LEAN_CTX_PROFILE` env var is not set. Resolution order: env var → config.toml → "coder" default. Set via `lean-ctx config set profile <name>`.
+- **Profile config schema entry**: `lean-ctx config show` now displays the `profile` key.
+
+### Fixed
+- **`LEAN_CTX_FULL_TOOLS=0` incorrectly treated as ON**: `is_ok()` only checked existence, not value. Now `=0` and `=false` are correctly treated as disabled.
+- **`mode=full` returning stubs/deltas in passthrough mode**: `handle_full_with_auto_delta` ignored `no_degrade` and passthrough profiles. Cache stubs and auto-deltas are now skipped when `no_degrade=true` or when the active profile has `default_mode=full` + `crp_mode=off`.
+- **MCP schema claimed default mode was `full`**: The `ctx_read` tool description said "default: full" but the actual default was `auto` (resolved by AutoModeResolver). Agents that omitted the `mode` argument got compressed output instead of full content. Schema now correctly states "default: auto".
+- **Silent fallback to `coder` profile**: When `LEAN_CTX_PROFILE` pointed to a non-existent profile name, lean-ctx silently fell back to `coder` without any warning. Now logs a `tracing::warn` with the missing profile name and creation instructions.
+
 ## [3.6.18] — 2026-05-26
 
 ### Added
