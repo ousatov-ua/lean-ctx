@@ -27,6 +27,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **BM25 + graph caches use a `(mtime, size)` content fingerprint** instead of mtime alone: coarse (1–2 s) filesystem mtime could miss a same-second background rebuild; pairing it with the file size catches those rewrites without the cost of hashing a multi-MB index on every per-query freshness check. A rebuild is still picked up immediately within the TTL window.
 
 ### Fixed
+- **Instruction token-cap truncation was O(lines) tokenizations** — `truncate_to_token_cap` re-counted tokens once per line while walking back from the end. On large session/knowledge blocks this is wasteful, and it timed out the coverage job's ptrace-instrumented run. Replaced with a binary search over line boundaries (O(log lines) tokenizations, identical output).
 - **CI: `dropin_install_tests` failed on shell-less runners** (regression from #309): the new "is the shell installed?" guard skips writing zsh hooks when no `zsh` binary is present, but the drop-in install tests assert the hooks are written — so they failed on the zsh-less `ubuntu-latest` runner. Added `LEAN_CTX_SHELL_HOOK_FORCE` (`1`/`true`/`all` or a comma list like `zsh,bash`) to force hook installation regardless of detection — useful in minimal containers / custom images, and the seam the tests use to stay host-independent.
 
 ## [3.6.23] — 2026-05-28

@@ -348,21 +348,33 @@ fn assemble_within_cap(base: &str, suffix: &str, cap_tokens: usize) -> String {
 }
 
 fn truncate_to_token_cap(s: &str, cap_tokens: usize) -> String {
-    if crate::core::tokens::count_tokens(s) <= cap_tokens {
+    use crate::core::tokens::count_tokens;
+    if count_tokens(s) <= cap_tokens {
         return s.to_string();
     }
-    let mut end = s.len();
-    loop {
-        match s[..end].rfind('\n') {
-            Some(pos) if pos > 0 => {
-                end = pos;
-                if crate::core::tokens::count_tokens(&s[..end]) <= cap_tokens {
-                    return s[..end].to_string();
-                }
-            }
-            _ => break,
+    // Keep whole lines: candidate cut points are the byte offsets of each
+    // newline. Token count is monotonic in prefix length, so binary-search for
+    // the longest whole-line prefix within the cap. This costs O(log lines)
+    // tokenizations instead of O(lines) — the per-line loop was pathologically
+    // slow on large session blocks (and timed out under coverage's ptrace
+    // instrumentation).
+    let cuts: Vec<usize> = s.match_indices('\n').map(|(i, _)| i).collect();
+    let (mut lo, mut hi) = (0usize, cuts.len());
+    let mut best: Option<usize> = None;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let end = cuts[mid];
+        if end > 0 && count_tokens(&s[..end]) <= cap_tokens {
+            best = Some(end);
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
+    if let Some(end) = best {
+        return s[..end].to_string();
+    }
+    // No line boundary fits — fall back to a char-boundary byte approximation.
     let byte_approx = cap_tokens * 4;
     let safe = s.floor_char_boundary(byte_approx.min(s.len()));
     s[..safe].to_string()
