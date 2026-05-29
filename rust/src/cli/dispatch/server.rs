@@ -12,6 +12,8 @@ pub(super) fn run_mcp_server() -> Result<()> {
 
     crate::core::startup_guard::crash_loop_backoff(crate::core::startup_guard::MCP_PROCESS_NAME);
 
+    cleanup_orphan_mcp_processes();
+
     // Concurrency hardening:
     // - Smooths "thundering herd" MCP startups (multiple agent sessions).
     // - Limits Tokio worker/blocking threads to avoid host degradation.
@@ -47,6 +49,10 @@ pub(super) fn run_mcp_server() -> Result<()> {
             "lean-ctx v{} MCP server starting",
             env!("CARGO_PKG_VERSION")
         );
+
+        // Orphan watchdog: if our parent process dies (IDE crashed/closed without
+        // closing stdin), we exit cleanly instead of hanging forever.
+        spawn_parent_watchdog();
 
         let transport =
             mcp_stdio::HybridStdioTransport::new_server(tokio::io::stdin(), tokio::io::stdout());
@@ -91,6 +97,78 @@ pub(super) fn run_mcp_server() -> Result<()> {
 
         Ok(())
     })
+}
+
+/// Kill orphan MCP server processes whose parent (IDE) has died.
+/// These are lean-ctx stdio processes reparented to PID 1 (init).
+fn cleanup_orphan_mcp_processes() {
+    #[cfg(unix)]
+    {
+        let my_pid = std::process::id();
+        let pids = crate::ipc::process::find_pids_by_name("lean-ctx");
+        for pid in pids {
+            if pid == my_pid {
+                continue;
+            }
+            if !is_orphan_mcp(pid) {
+                continue;
+            }
+            tracing::info!("[orphan-cleanup] killing orphan MCP process {pid} (parent=1)");
+            let _ = crate::ipc::process::terminate_gracefully(pid);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_orphan_mcp(pid: u32) -> bool {
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "ppid=,command=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.trim();
+    if line.is_empty() {
+        return false;
+    }
+    let ppid_str = line.split_whitespace().next().unwrap_or("");
+    let ppid: u32 = ppid_str.trim().parse().unwrap_or(0);
+    // Parent is init (1) = orphaned, and it looks like an MCP/serve process
+    ppid <= 1 && (line.contains("serve") || line.contains("mcp") || !line.contains("daemon"))
+}
+
+/// Spawns a background thread that monitors the parent process.
+/// If the parent dies (IDE closed without properly closing stdin),
+/// the MCP server exits cleanly to prevent orphan processes.
+fn spawn_parent_watchdog() {
+    #[cfg(unix)]
+    {
+        let ppid = unsafe { libc::getppid() } as u32;
+        if ppid <= 1 {
+            return;
+        }
+        std::thread::Builder::new()
+            .name("parent-watchdog".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let current_ppid = unsafe { libc::getppid() } as u32;
+                    // On Unix, when the parent dies, ppid becomes 1 (init/systemd)
+                    // or the subreaper PID. Either way, it changes from our original.
+                    if current_ppid != ppid || current_ppid <= 1 {
+                        tracing::info!(
+                            "[parent-watchdog] parent PID changed ({ppid} → {current_ppid}), \
+                             IDE likely closed — exiting to prevent orphan"
+                        );
+                        core::stats::flush();
+                        core::heatmap::flush();
+                        std::process::exit(0);
+                    }
+                }
+            })
+            .ok();
+    }
 }
 
 pub(super) fn resolve_worker_threads(parallelism: usize) -> usize {

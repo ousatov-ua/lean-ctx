@@ -79,7 +79,7 @@ pub(super) fn cmd_restart() {
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    let remaining = ipc::process::find_pids_by_name("lean-ctx");
+    let remaining = ipc::process::find_killable_pids("lean-ctx");
     if !remaining.is_empty() {
         eprintln!(
             "  Force-killing {} stubborn process(es): {:?}",
