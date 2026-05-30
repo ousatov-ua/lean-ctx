@@ -419,6 +419,13 @@ pub fn run() {
     }
     print_check(&bm25_health);
 
+    // 15b) Archive FTS footprint
+    let archive_footprint = archive_footprint_outcome();
+    if archive_footprint.ok {
+        passed += 1;
+    }
+    print_check(&archive_footprint);
+
     // 16) Memory profile
     let mem_profile = memory_profile_outcome();
     passed += 1;
@@ -468,7 +475,7 @@ pub fn run() {
         print_check(lsp_check);
     }
 
-    let mut effective_total = total + 9; // session_state + integrity + cache_safety + bm25_health + daemon + mem_profile + mem_cleanup + ram_guardian + proxy_health
+    let mut effective_total = total + 10; // session_state + integrity + cache_safety + bm25_health + archive_footprint + daemon + mem_profile + mem_cleanup + ram_guardian + proxy_health
     effective_total += cap_warnings.len() as u32;
     effective_total += docker_outcomes.len() as u32;
     if pi.is_some() {

@@ -391,3 +391,4 @@ pub mod pathjail;
 pub mod signatures;
 #[cfg(feature = "tree-sitter")]
 pub mod signatures_ts;
+pub mod storage_maintenance;

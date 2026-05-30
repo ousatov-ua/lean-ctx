@@ -7,11 +7,46 @@ use super::data_dir::lean_ctx_data_dir;
 static DB: std::sync::LazyLock<Mutex<Option<Connection>>> =
     std::sync::LazyLock::new(|| Mutex::new(open_db()));
 
+/// Default maximum on-disk size for the archive FTS database. Overridable via
+/// `LEAN_CTX_ARCHIVE_DB_MAX_MB`. Without enforcement this DB grew unbounded
+/// (observed 576 MB in the field — see EPIC 6 / #2364).
+const DEFAULT_MAX_DB_MB: u64 = 500;
+
+/// Run cap enforcement roughly every N inserts to amortize the VACUUM cost.
+const ENFORCE_EVERY_N_INSERTS: usize = 200;
+
+fn max_db_bytes() -> u64 {
+    std::env::var("LEAN_CTX_ARCHIVE_DB_MAX_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|m| *m > 0)
+        .unwrap_or(DEFAULT_MAX_DB_MB)
+        .saturating_mul(1024 * 1024)
+}
+
 fn db_path() -> PathBuf {
     lean_ctx_data_dir()
         .unwrap_or_else(|_| PathBuf::from(".lean-ctx"))
         .join("archives")
         .join("index.db")
+}
+
+/// Current on-disk size of the archive DB in bytes (including WAL). Used by
+/// `doctor` to surface the footprint budget.
+pub fn db_size_bytes() -> u64 {
+    let base = db_path();
+    let mut total = 0u64;
+    for suffix in ["", "-wal", "-shm"] {
+        let p = if suffix.is_empty() {
+            base.clone()
+        } else {
+            PathBuf::from(format!("{}{suffix}", base.display()))
+        };
+        if let Ok(meta) = std::fs::metadata(&p) {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
 }
 
 fn open_db() -> Option<Connection> {
@@ -67,6 +102,67 @@ pub fn index_entry(archive_id: &str, tool: &str, command: &str, content: &str) {
         "INSERT INTO archive_fts (archive_id, tool, command, content) VALUES (?1, ?2, ?3, ?4)",
         params![archive_id, tool, command, content],
     );
+
+    // Amortized cap enforcement: only check periodically, since size checks +
+    // VACUUM are not free.
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM archive_meta", [], |row| row.get(0))
+        .unwrap_or(0);
+    if (count as usize).is_multiple_of(ENFORCE_EVERY_N_INSERTS) {
+        enforce_cap_locked(conn);
+    }
+}
+
+/// Enforces the on-disk size cap by deleting the oldest archive entries (by
+/// `created_at`) in batches until the DB is back under budget, then reclaims
+/// space with VACUUM. Operates on an already-locked connection.
+fn enforce_cap_locked(conn: &Connection) {
+    let cap = max_db_bytes();
+    if db_size_bytes() <= cap {
+        return;
+    }
+    // Delete in batches of ~10% of current rows (min 50) until under cap or empty.
+    for _ in 0..50 {
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM archive_meta", [], |row| row.get(0))
+            .unwrap_or(0);
+        if count == 0 {
+            break;
+        }
+        let batch = (count / 10).max(50);
+        let ids: Vec<String> = conn
+            .prepare("SELECT archive_id FROM archive_meta ORDER BY created_at ASC LIMIT ?1")
+            .and_then(|mut stmt| {
+                let rows = stmt.query_map(params![batch], |row| row.get::<_, String>(0))?;
+                Ok(rows.flatten().collect::<Vec<_>>())
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            break;
+        }
+        for id in &ids {
+            let _ = conn.execute(
+                "DELETE FROM archive_meta WHERE archive_id = ?1",
+                params![id],
+            );
+            let _ = conn.execute("DELETE FROM archive_fts WHERE archive_id = ?1", params![id]);
+        }
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+        if db_size_bytes() <= cap {
+            break;
+        }
+    }
+}
+
+/// Public entry point to enforce the archive DB size cap on demand (e.g. from
+/// idle maintenance or `doctor`). Returns the resulting size in bytes.
+pub fn enforce_cap() -> u64 {
+    if let Ok(guard) = DB.lock() {
+        if let Some(conn) = guard.as_ref() {
+            enforce_cap_locked(conn);
+        }
+    }
+    db_size_bytes()
 }
 
 pub fn remove_entry(archive_id: &str) {

@@ -850,6 +850,37 @@ pub(super) fn bm25_cache_health_outcome() -> Outcome {
     }
 }
 
+pub(super) fn archive_footprint_outcome() -> Outcome {
+    let bytes = crate::core::archive_fts::db_size_bytes();
+    let cap_mb = std::env::var("LEAN_CTX_ARCHIVE_DB_MAX_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|m| *m > 0)
+        .unwrap_or(500);
+    let cap_bytes = cap_mb * 1024 * 1024;
+    let mb = bytes as f64 / 1_048_576.0;
+    if bytes > cap_bytes {
+        Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}Archive FTS{RST}  {RED}{mb:.0} MB exceeds {cap_mb} MB cap{RST}  {DIM}(run: lean-ctx cache prune; auto-enforced on next session){RST}"
+            ),
+        }
+    } else if bytes > cap_bytes * 80 / 100 {
+        Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Archive FTS{RST}  {YELLOW}{mb:.0} MB (>80% of {cap_mb} MB cap){RST}"
+            ),
+        }
+    } else {
+        Outcome {
+            ok: true,
+            line: format!("{BOLD}Archive FTS{RST}  {GREEN}{mb:.1} MB / {cap_mb} MB cap{RST}"),
+        }
+    }
+}
+
 pub(super) fn memory_profile_outcome() -> Outcome {
     let cfg = crate::core::config::Config::load();
     let profile = crate::core::config::MemoryProfile::effective(&cfg);
