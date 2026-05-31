@@ -68,6 +68,14 @@ lean-ctx login <email>             # credentials → ~/.lean-ctx/cloud/credentia
 lean-ctx forgot-password <email>   # reset link
 ```
 
+**Golden output — the default, signed-out state.** Cloud is opt-in, so a fresh
+install reports exactly that and points you at the first step:
+
+```text
+Not connected to LeanCTX Cloud.
+Get started: lean-ctx login <email>
+```
+
 ```bash
 lean-ctx sync                      # push your local data to the cloud
 ```
@@ -85,15 +93,15 @@ nothing to send ("No … to sync yet").
 
 ```bash
 lean-ctx contribute                # send anonymized compression data points
-lean-ctx cloud update              # pull refreshed adaptive compression models
+lean-ctx cloud pull-models         # pull refreshed adaptive compression models
 lean-ctx upgrade                   # account/plan upgrade flow
 ```
 
 - `contribute` uploads anonymized compression samples that improve the shared
   adaptive models (it tells you to "use lean-ctx for a while first" if there's
   nothing to send).
-- `cloud update` downloads refreshed models and prints an estimated compression
-  improvement. Fully optional — local heuristics work without it.
+- `cloud pull-models` downloads refreshed models and prints an estimated
+  compression improvement. Fully optional — local heuristics work without it.
 
 ---
 

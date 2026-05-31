@@ -192,7 +192,7 @@ flowchart TB
         ProjectHash["Project Hash — repo fingerprint via git remote + identity"]
         ConfigLoader["Config — .lean-ctx.toml + env overrides"]
         Doctor["Doctor — 15-point diagnostics incl. SKILL check"]
-        HookInstaller["Hook Installer — 20 agents, HookMode (MCP/CLI-redirect/Hybrid)"]
+        HookInstaller["Hook Installer — 34 agent targets, HookMode (MCP/Hybrid)"]
         SkillInstaller["SKILL Installer — Claude, Cursor, Codex skill files"]
         DaemonMgr["Daemon Manager — PID, socket, start/stop/status"]
     end
@@ -821,7 +821,7 @@ flowchart LR
 | Module | Purpose |
 |:---|:---|
 | `hooks/` | Agent-specific installation (20+ agents/IDEs) |
-| `hooks/mod.rs` | HookMode enum (Mcp/CliRedirect/Hybrid), smart mode selection |
+| `hooks/mod.rs` | HookMode enum (Mcp/Hybrid), smart mode selection |
 | `hooks/agents/` | Per-agent installers (20 agents: cursor, claude, codex, copilot, gemini, jetbrains, windsurf, cline, amp, kiro, opencode, crush, hermes, pi, ...) |
 | `rules_inject.rs` | Rule file injection into project/home directories |
 | `setup.rs` | SKILL installation, smart hook mode, all-agent coverage |
@@ -1074,7 +1074,7 @@ The frontend (`cockpit-context.js`) renders these as a unified control panel wit
 
 13. **Multi-tokenizer support** — Token counting supports o200k_base (GPT), cl100k_base (Claude/Llama), and Gemini (with 1.1x correction). Auto-detected from client name.
 
-14. **CLI-redirect hook mode** — Agents with verified hook interception for all tool types (Cursor, Codex, Gemini CLI) can use CLI commands instead of MCP tools, eliminating schema overhead. Most agents use Hybrid mode (MCP + hooks) to ensure full Context OS features. `lean-ctx init --agent cursor --mode cli-redirect`.
+14. **Hybrid hook mode** — Agents with reliable shell access use Hybrid mode: MCP for cached reads/search plus shell hooks that compress command output (`git`, `cargo`, `npm`, …) with zero schema overhead. Agents without reliable shell hooks (most IDE extensions) use MCP-only. Mode is auto-detected per agent (`recommend_hook_mode`) and can be overridden with `lean-ctx init --agent cursor --mode hybrid|mcp`.
 
 15. **Field-wise profile merge** — Child profiles inherit unset fields from parents using `Option<T>` + `.or()` semantics. A child with only `[read] default_mode = "map"` inherits all other fields.
 

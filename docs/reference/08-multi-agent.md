@@ -32,6 +32,18 @@ CCP, Journey 3). Multi-agent builds **coordination** on top of that shared memor
 All of it is persisted under the data dir (`agents/`, `handoffs/`), so it survives
 restarts and works whether agents run side-by-side or one after another.
 
+**Golden output — where presence lives.** The roster is a single file,
+`~/.lean-ctx/agents/registry.json`. On a fresh project it is the empty state
+below; each `ctx_agent action=register` appends an entry to `agents`:
+
+```json
+{
+  "agents": [],
+  "scratchpad": [],
+  "updated_at": "2026-05-30T13:32:14.977520Z"
+}
+```
+
 These tools are in the **standard** (`ctx_agent`) and **power** (`ctx_task`,
 `ctx_handoff`, `ctx_share`) profiles.
 

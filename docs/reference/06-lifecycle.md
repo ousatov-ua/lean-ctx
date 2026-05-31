@@ -3,6 +3,10 @@
 > You're set up and using lean-ctx. Now you need to update it, fix something, or
 > remove it cleanly. This journey covers the whole lifecycle.
 
+> **Just need to fix a specific symptom?** Jump to the central
+> [Journey 12 — Troubleshooting Playbook](12-troubleshooting.md) (symptom →
+> diagnosis → fix). This journey covers the lifecycle *commands* themselves.
+
 Source files:
 - `rust/src/core/updater.rs` — self-update + post-update rewire
 - `rust/src/core/update_scheduler.rs` — auto-update scheduling
@@ -147,8 +151,26 @@ from loading at all.
 ```bash
 lean-ctx cache list          # show file-read cache entries
 lean-ctx cache stats         # cache size + hit stats
+lean-ctx cache invalidate <file>  # drop one file from the read cache
 lean-ctx cache clear         # clear the read cache
-lean-ctx cache prune         # remove quarantined/corrupt BM25 indexes
+lean-ctx cache reset [--project]  # reset all cache (or just this project)
+lean-ctx cache prune         # remove oversized/quarantined/orphaned indexes (BM25 + graphs)
+```
+
+Use `cache invalidate <file>` for surgical eviction (e.g. a file changed outside
+the watcher); `cache reset --project` wipes only the current project's cache,
+while `cache reset` wipes everything.
+
+**Golden output — `lean-ctx cache stats`** reports the read cache size and how
+often re-reads were served from it (each hit is a ~13-token read instead of a
+full file):
+
+```text
+CLI Cache Stats:
+  Entries:   1
+  Reads:     3
+  Hits:      1
+  Hit Rate:  33%
 ```
 
 The doctor warns when the BM25 cache has quarantined indexes or when the archive

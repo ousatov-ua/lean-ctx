@@ -50,7 +50,7 @@ parsing noisy shell output, and losing context between sessions.
 
 > **LeanCTX** stands for **Lean Context**: a lightweight cognitive layer that helps AI agents perceive, compress, remember, route, and reuse context across workflows.
 
-> It governs every token between your code and the AI — so you make better decisions, not just cheaper ones. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 23+ other agents — no config needed.
+> It governs every token between your code and the AI — so you make better decisions, not just cheaper ones. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 24+ other agents — no config needed.
 
 <p align="center"><strong>See it in action:</strong></p>
 
@@ -461,7 +461,7 @@ lean-ctx benchmark report .
 - **1,800+ GitHub stars** in 4 months
 - **190+ forks** — active community contributions
 - **181 releases** — shipped daily since launch
-- **28 supported AI coding agents** — broadest MCP compatibility
+- **30+ supported AI coding agents** — broadest MCP compatibility
 - **67 MCP tools** — from simple file reads to multi-agent orchestration
 - Used in production by teams running Claude Code, Cursor, and Codex daily
 

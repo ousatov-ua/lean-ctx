@@ -160,7 +160,20 @@ lean-ctx index build-graph       # (re)build the property graph
 lean-ctx index watch             # keep it fresh on file changes
 ```
 
-Index scanning can be disabled with `LEAN_CTX_NO_INDEX=1` /
+**Golden output — `lean-ctx index status`** shows each index, its readiness,
+size, and build timestamp, so you can tell at a glance whether search and the
+graph are current:
+
+```text
+  Project:     /Users/you/dev/lean-ctx
+  Graph Index: (ready, 896 files, 407.3 KB, built 2026-05-30 12:10:48 UTC)
+  BM25 Index:  (ready, 2.7 MB, built 2026-05-30 12:10:50 UTC)
+  Code Graph:  (ready, 0 nodes, 1.3 MB, built 2026-05-31 14:49:12 UTC)
+  Semantic:    idle
+```
+
+`Semantic: idle` means the optional embedding backend is not running — BM25 +
+graph still work. Index scanning can be disabled with `LEAN_CTX_NO_INDEX=1` /
 `LEAN_CTX_DISABLE_SEARCH_INDEX=1`, and bounded with `graph_index_max_files`.
 
 ---

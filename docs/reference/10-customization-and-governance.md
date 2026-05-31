@@ -5,6 +5,11 @@
 > what rules your team enforces. This journey covers every knob and every
 > governance surface — the "make it behave exactly how we want" journey.
 
+> **Looking for the security surface** (PathJail, shell allowlist, secret
+> redaction, sandbox, `harden`, role policies)? That's
+> [Journey 13 — Security & Governance](13-security-and-governance.md). This
+> journey is about *behavior* tuning; Journey 13 is about *guardrails*.
+
 Source files referenced here:
 - `rust/src/cli/cheatsheet_cmd.rs` — `compression` / `terse` levels
 - `rust/src/cli/profile_cmd.rs` — `tools` (MCP profiles) + `profile` (context profiles)
@@ -28,9 +33,14 @@ lean-ctx compression standard      # set it (alias: lean-ctx terse standard)
 | Level | When to use |
 |-------|-------------|
 | `off` | debugging lean-ctx itself; you want raw output |
-| `lite` | maximum fidelity, light savings |
-| `standard` | balanced default for most teams |
+| `lite` | **default** — plain, concise prose; maximum fidelity, light savings |
+| `standard` | balanced — denser symbolic "power mode" output |
 | `max` | aggressive — smallest context, densest agent prompts |
+
+> **Default:** `lite` (`compression_level = "lite"`). `lite` keeps the model's
+> prose plain and readable; `standard`/`max` switch on the denser symbolic
+> styles. This dial controls the **model's output style**, not lean-ctx's own
+> tool-output compression (which is always on).
 
 Each level is not a single switch — it expands into **four coordinated
 components** (shown by `lean-ctx compression`):
@@ -68,20 +78,38 @@ Fewer tools = fewer tokens spent on tool definitions and less agent confusion.
 
 ```bash
 lean-ctx tools                     # show active profile
-lean-ctx tools minimal             # ~core read/search/session tools
-lean-ctx tools standard            # the everyday set (default)
+lean-ctx tools minimal             # ~5 core read/search/session tools
+lean-ctx tools standard            # the balanced everyday set (~20 tools)
 lean-ctx tools power               # everything (graph, control, agent, …)
 lean-ctx tools list                # list tools per profile
 ```
 
-| Profile | Best for |
-|---------|----------|
-| `minimal` | small models / strict token budgets |
-| `standard` | most users |
-| `power` | code-intelligence + multi-agent + context-engineering work |
+| Profile | Tools | Best for |
+|---------|-------|----------|
+| `minimal` | ~5 | small models / strict token budgets |
+| `standard` | ~20 | most users — recommended everyday trim |
+| `power` | all (67) | code-intelligence + multi-agent + context-engineering work |
 
-> See the [MCP tool map](appendix-mcp-tools.md) for exactly which tool sits in
-> which profile.
+> **Default:** with no explicit `tool_profile` in config, lean-ctx exposes the
+> **`power`** set (every tool) — `tool_profile_effective()` falls back to `power`.
+> Run `lean-ctx tools standard` to trim to the everyday set, or `minimal` for
+> strict token budgets. See the [MCP tool map](appendix-mcp-tools.md) for exactly
+> which tool sits in which profile.
+
+**Golden output — `lean-ctx tools`** shows the active profile, the exact tool
+count, and where the value came from (so the `power`/67 default is verifiable):
+
+```text
+Tool Profile: power
+  Tools exposed: 67
+  Description:   All tools exposed
+  Source:         default (backward compatible)
+
+  Switch with: lean-ctx tools <minimal|standard|power>
+```
+
+`Source: default (backward compatible)` is exactly the fallback described above —
+no `tool_profile` was set, so `power` is in effect.
 
 ---
 

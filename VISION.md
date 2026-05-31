@@ -105,7 +105,7 @@ LeanCTX delivers strong coverage of Dimensions 1 and 3, with foundations for 2 a
 - Full output verification layer with 19 versioned contracts and CI drift gates
 
 ### Platform Coverage
-- Works with 24+ AI tools: Cursor, Claude Code, Copilot, Windsurf, Pi, Codex, Gemini, Kiro, Cline, JetBrains, Amp, Crush, Antigravity, OpenCode, OpenClaw, Hermes, and more
+- Works with 30+ AI tools: Cursor, Claude Code, Copilot, Windsurf, Pi, Codex, Gemini, Kiro, Cline, JetBrains, Amp, Crush, Antigravity, OpenCode, OpenClaw, Hermes, and more
 - Single Rust binary, zero telemetry, local-first
 
 ## Where We're Going — Context OS

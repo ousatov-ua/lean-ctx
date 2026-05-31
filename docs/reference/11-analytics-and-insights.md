@@ -78,6 +78,22 @@ lean-ctx token-report --json
 Where `gain` focuses on savings, `token-report` (alias `report-tokens`) adds the
 memory side: how much session/knowledge/cache state lean-ctx is holding.
 
+**Golden output — `lean-ctx token-report`** combines the knowledge store, the
+live session, and the latest CEP scorecard in one view:
+
+```text
+lean-ctx token-report  v3.6.26
+  project: /Users/you/dev/lean-ctx
+  data:    /Users/you/.lean-ctx
+  knowledge: 105 active, 97 archived, 0 patterns, 91 history
+  session: 1953 calls, 90710600 tok saved, 333 files read (17 repeated)
+  cep(last): score=66 cache_hit_rate=18 mode_diversity=100 compression_rate=82 tok_saved=284748
+  report saved: /Users/you/.lean-ctx/report/latest.json
+```
+
+The `cep(last)` line is the most recent Context Engineering Protocol scorecard
+(see §9); `17 repeated` reads are the cache wins that cost ~13 tokens each.
+
 ---
 
 ## 4. Finding waste — `discover` and `ghost`

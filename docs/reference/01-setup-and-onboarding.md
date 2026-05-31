@@ -182,7 +182,7 @@ summary with an action-oriented footer.
 lean-ctx doctor                 # full diagnostics
 lean-ctx doctor --fix           # auto-repair what's fixable
 lean-ctx doctor --json          # machine-readable
-lean-ctx doctor integrations    # deep Cursor/Claude Code checks
+lean-ctx doctor integrations    # per-IDE wiring health (every detected agent)
 ```
 
 **Footer** (`doctor/mod.rs`): shows `N/M checks passed`; if any need attention,
@@ -191,6 +191,41 @@ lean-ctx doctor --fix`. Otherwise `Everything looks good.`
 
 `--fix` routes to `doctor::fix::run_fix`, which re-runs the merge-based setup and
 repairs MCP/rules/hook drift.
+
+**Golden output — `doctor integrations`** checks **every detected agent**, not
+just Cursor/Claude, and reports MCP config, hook freshness, and the rules file
+per agent. Hooks are verified for **staleness** (a hook pointing at an old binary
+path fails with `stale binary … — run lean-ctx setup --fix`), and JetBrains is
+shown as an **MCP snippet** because it has no auto-wiring (you paste it once):
+
+<details>
+<summary><code>lean-ctx doctor integrations</code> — per-IDE wiring health (excerpt)</summary>
+
+```text
+  Integration health:
+  ✓  Cursor
+       ✓  MCP config  ok (~/.cursor/mcp.json)
+       ✓  Hooks  ok (~/.cursor/hooks.json)
+  ✓  Claude Code
+       ✓  MCP config  ok (~/.claude.json)
+       ✓  Hooks  ok (~/.claude/settings.json)
+       ✓  Rules file  ~/.claude/rules/lean-ctx.md
+  ✓  Codex CLI
+       ✓  Codex MCP  ok (~/.codex/config.toml)
+       ✓  Codex hooks  enabled (~/.codex/config.toml)
+       ✓  Codex hooks.json  ok (~/.codex/hooks.json)
+  ✓  VS Code
+       ✓  VS Code MCP  ok (~/Library/Application Support/Code/User/mcp.json)
+  ✓  JetBrains IDEs
+       ✓  MCP snippet  ready — paste into Settings → Tools → AI Assistant → MCP (~/.jb-mcp.json)
+       ✓  Rules file  ~/.jb-rules/lean-ctx.md
+```
+
+</details>
+
+A healthy run ends with no repair line; otherwise it prints
+`Repair: run lean-ctx setup --fix`. Add `--json` for the same data as a
+`schemaVersion`-stamped report.
 
 ---
 
@@ -204,6 +239,22 @@ deep diagnostics.
 lean-ctx status
 lean-ctx status --json
 ```
+
+**Golden output — a healthy `status`** is five lines: the doctor ratio, the last
+setup result, and how many agents have MCP + rules wired up:
+
+```text
+lean-ctx status  v3.6.26
+  doctor: 6/6
+  last setup: 2026-05-30T20:06:46+00:00  success=true
+  mcp: 28/28 configured (detected tools)
+  rules: 17/17 up-to-date (detected tools)
+  report saved: /Users/you/.lean-ctx/status/latest.json
+```
+
+`mcp: 28/28` and `rules: 17/17` count **detected** agents (rules count is lower
+because MCP-only agents receive guidance via MCP instructions — see the
+[installation matrix](../integrations/installation-matrix.md)).
 
 ---
 

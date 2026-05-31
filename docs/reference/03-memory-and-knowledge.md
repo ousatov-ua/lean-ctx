@@ -53,8 +53,23 @@ session's context (findings, decisions, touched files, progress) into the
 system prompt as the `ACTIVE SESSION` block. **You don't call anything** — it
 happens because the MCP server detects the project and loads `latest.json`.
 
-This is what makes "start a new chat, it already knows where we were" work. If it
-*doesn't* work, see Journey 6 → `lean-ctx sessions doctor`.
+**Golden output — the restored context block.** This is the real, compact
+payload (~400 tokens) a new chat receives, also viewable on demand via
+`ctx_session(action="status")`:
+
+```text
+SESSION v2610 | 354h 37m | 1953 calls | 90710600 tok saved
+Task: Modified: 31 files changed, 1197 insertions(+), 780 deletions(-)
+Root: …/Projects/lean-ctx
+Findings (20): jetbrains.rs — deps: super::super::resolve_binary_path | setter.rs (227L) | schema.rs (1425L) | ctx_search.rs — pub struct CtxSearchTool;
+Files (50): [F1 …/agents/jetbrains.rs map] [F33 …/config/setter.rs signatures] [F30 …/registered/ctx_read.rs full] [F26 …/core/protocol.rs full]
+```
+
+The `[F1 … map]` / `[F33 … signatures]` entries are **persistent file
+references**: the next read of `F1` costs ~13 tokens because the agent already
+holds its compressed shape. This is what makes "start a new chat, it already
+knows where we were" work. If it *doesn't* work, see Journey 6 →
+`lean-ctx sessions doctor`.
 
 ### Managing saved snapshots — `lean-ctx sessions`
 

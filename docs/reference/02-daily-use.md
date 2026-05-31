@@ -57,6 +57,33 @@ lean-ctx read src/main.rs --fresh    # bypass cache
 file reference instead of content. The mode predictor (`mode_stats.json`) learns
 which mode works best for which file over time.
 
+**Golden output — the same file in three modes.** Reading
+`rust/src/hooks/agents/jetbrains.rs` (66 lines):
+
+`mode = map` — imports + API surface only:
+
+```text
+jetbrains.rs 66L
+  deps: super::super::resolve_binary_path
+  API:
+    λ+install_jetbrains_hook()
+    λ-print_jetbrains_manual_step(display_path:s)
+```
+
+`mode = signatures` — the same API as a flat signature list:
+
+```text
+jetbrains.rs 66L
+ deps super::super::resolve_binary_path
+λ+install_jetbrains_hook()
+λ-print_jetbrains_manual_step(display_path:s)
+```
+
+`mode = full` returns all 66 lines verbatim. The `λ+` / `λ-` markers encode
+visibility (`+` public, `-` private), so `map` and `signatures` convey the file's
+shape in ~5 lines instead of 66 — and the first read in a session may also prepend
+an `--- AUTO CONTEXT ---` block with related files and graph edges.
+
 ### `lean-ctx diff <a> <b>` / `ctx_delta`
 
 Compressed diff between two files (CLI) or incremental diff since the last read
@@ -103,6 +130,12 @@ output are redacted when `[secret_detection]` is on (default). Set
 tokens?"). Semantic search needs an index — it builds on first use and updates
 in the background.
 
+> **One call instead of three:** when you're exploring ("where is X handled?"),
+> `ctx_compose` answers in a single call — keywords + ranked files + matches +
+> the top symbol inline — instead of a separate search → read → search loop.
+> It's the highest-leverage everyday power tool; see
+> [Journey 7 — Context Engineering](07-context-engineering.md) for details.
+
 ---
 
 ## 4. Seeing what you saved — `lean-ctx gain`
@@ -123,6 +156,30 @@ lean-ctx gain --json         # machine-readable
 **Empty state:** a fresh install shows "No savings recorded yet — and that's
 expected," with next steps. Savings accrue as your AI uses the `ctx_*` tools;
 the first real numbers appear after a few file reads or commands.
+
+**Golden output — a populated dashboard** (real numbers from a long-running
+install; the "Cosmic Orbit" mascot levels up as savings grow):
+
+<details>
+<summary><code>lean-ctx gain</code> — token savings dashboard</summary>
+
+```text
+  ╭──────────────────────────────────────────────────────────────╮
+  │    ◆  lean-ctx   Token Savings Dashboard                     │
+  ├──────────────────────────────────────────────────────────────┤
+  │    388.8M        62.6%         18,707        $983.19         │
+  │    tokens saved  compression   commands      USD saved       │
+  ╰──────────────────────────────────────────────────────────────╯
+    past 30 days:  $971.96 saved
+
+  Cost Breakdown  @ $2.50/M input · $10.00/M output
+  ──────────────────────────────────────────────────────────────
+    Without lean-ctx     $1585.68   $1552.01 input + $33.67 output
+    With lean-ctx         $602.50   $580.05 input + $22.45 output
+    You saved             $983.19   input $971.96 + output $11.22
+```
+
+</details>
 
 Related: `lean-ctx token-report` (token + memory report), `lean-ctx ghost`
 (hidden token waste from uncompressed commands), `lean-ctx discover` (missed

@@ -123,6 +123,19 @@ ctx_dedup action=analyze        # then action=apply to reclaim
 `ctx_compose` is the highest-leverage everyday power tool: it replaces the
 typical search → read → outline → read chain (3–5 calls) with one rich response.
 
+**Golden output — the compact search primitive.** `ctx_compose` builds on
+`ctx_search`, whose results are deliberately terse — a header plus one line per
+hit (`path:line code`), so a match costs a handful of tokens instead of pages of
+grep context:
+
+```text
+1 matches in 805 files:
+hooks/mod.rs:153 pub fn refresh_installed_hooks() {
+```
+
+`ctx_compose` then ranks the surrounding files and inlines the top symbol, so the
+agent gets the answer — not just the location — in the same call.
+
 ---
 
 ## 4. Advanced reads & symbols

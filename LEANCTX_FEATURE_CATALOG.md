@@ -232,10 +232,9 @@ Previously deprecated aliases have been removed. Use the canonical tools:
 - Gemini tokenizer
 - Llama tokenizer
 
-### CLI-Redirect Hook Mode
-- `HookMode::Mcp` — full MCP server mode
-- `HookMode::CliRedirect` — shell hook only, no MCP
-- `HookMode::Hybrid` — both modes active
+### Hook Modes
+- `HookMode::Mcp` — MCP server only (IDE-extension agents without reliable shell hooks)
+- `HookMode::Hybrid` — MCP server + shell hooks (default where shell access exists)
 
 ### Smart Mode Selection in Setup
 - `lean-ctx setup` auto-detects editor and agent, selects optimal hook mode

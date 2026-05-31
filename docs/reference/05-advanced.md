@@ -28,6 +28,19 @@ lean-ctx proxy disable       # remove env + autostart
 lean-ctx proxy cleanup       # clear proxy state
 ```
 
+**Golden output — `lean-ctx proxy status`** tells you, at a glance, whether the
+proxy is configured, on which port, and whether the process is currently up:
+
+```text
+lean-ctx proxy:
+  Config:  enabled
+  Port:    4444
+  Process: not running
+```
+
+`Config: enabled` with `Process: not running` means it is wired up but not
+started — run `lean-ctx proxy start` (or rely on the LaunchAgent/systemd unit).
+
 **Under the hood:** runs on `LEAN_CTX_PROXY_PORT` (default 4444), auth via
 `session_token`. `proxy enable` writes `*_BASE_URL` exports into your shell RC,
 `~/.claude/settings.json` (`ANTHROPIC_BASE_URL`), and Codex `config.toml`
@@ -180,12 +193,20 @@ you. You rarely call them by hand, but they're documented for anyone integrating
 a new client or debugging an integration:
 
 ```bash
-lean-ctx instructions              # compile the MCP server instructions for a client
+lean-ctx instructions --client cursor          # compile guidance for one client
+lean-ctx instructions --client claude --profile standard --crp tdd
+lean-ctx instructions --client codex --json --include-rules
+lean-ctx instructions --list-clients           # which client IDs are supported
 ```
 
 `instructions` renders the system-prompt/tool-instruction block a given client
 should receive — useful when adding support for an editor `setup` doesn't know
-yet, or to inspect exactly what guidance lean-ctx injects.
+yet, or to inspect exactly what guidance lean-ctx injects. `--client <id>` selects
+the target (see `--list-clients`); `--profile` and `--crp off|compact|tdd` tune
+the tool surface and output style; `--unified` emits one combined block; `--json`
+adds metadata and, with `--include-rules`, the rules-file contents. Output is
+**deterministic** for the same inputs, which is what lets the docs-drift CI gate
+diff it reliably.
 
 ```bash
 lean-ctx hook <rewrite|redirect|observe|copilot|codex-pretooluse|codex-session-start|rewrite-inline>

@@ -28,15 +28,25 @@ Each journey document answers three questions for every feature:
 | 9 | [Team, Cloud & CI](09-team-cloud-ci.md) | sharing across a team or running headless | `team serve`/`token`/`sync`, `login`, `sync`, `contribute`, `bootstrap`, `serve` |
 | 10 | [Customization & Governance](10-customization-and-governance.md) | tuning behavior & enforcing rules | `compression`, `tools`, `profile`, `config`, `theme`, `filter`, `rules`, `harden` |
 | 11 | [Analytics, Insights & Reporting](11-analytics-and-insights.md) | measuring savings & finding waste | `gain`, `wrapped`, `token-report`, `discover`, `ghost`, `dashboard`, `watch`, `cep`, `stats` |
+| 12 | [Troubleshooting Playbook](12-troubleshooting.md) | something's not working | symptom → diagnosis → fix; `status`, `doctor`, `doctor integrations`, `sessions doctor`, `report-issue` |
+| 13 | [Security & Governance](13-security-and-governance.md) | putting lean-ctx in front of real code | PathJail, `shell_allowlist`, `secret_detection`, sandbox, `harden`, role policies |
+| 14 | [Performance Tuning](14-performance-tuning.md) | huge repo / constrained machine | `memory_profile`, `bm25_max_cache_mb`, `graph_index_max_files`, `LEAN_CTX_MAX_*`, `slow-log` |
 
 ## Cross-cutting references
 
 | Reference | What's in it |
 |-----------|--------------|
+| [Per-IDE quickstarts](appendix-ide-quickstarts.md) | Copy-paste setup + verify for Cursor, Claude, Codex, VS Code, JetBrains |
 | [CLI command map](appendix-cli-map.md) | Every CLI command + alias, one line each |
 | [MCP tool map](appendix-mcp-tools.md) | Every MCP tool, params, and which profile exposes it |
 | [Paths, env vars & config](appendix-paths-and-config.md) | Data dir layout, every `LEAN_CTX_*` var, every config key |
 | [Glossary](appendix-glossary.md) | MCP, CCP, hooks, modes, profiles, proxy — in one place |
+
+> **Generated, always-current appendices** (rendered directly from the code, so
+> they can never drift): [MCP tools](generated/mcp-tools.md) (every registered
+> tool + parameters) and [config keys](generated/config-keys.md) (every
+> `config.toml` key with type, default, and env override). Regenerate with
+> `cargo run --example gen_docs --features dev-tools`; CI fails if they are stale.
 
 ## The two mental models you need
 
@@ -54,5 +64,7 @@ paths smarter. If you remember only that, the rest falls into place.
 The journeys layer onto this: 1–4 are the core daily loop, 5 wires in external
 systems, 6 keeps it healthy, 7 gives you fine-grained control of the window,
 8–9 scale it to multiple agents and teams, and 10–11 let you tune behavior and
-measure the payoff. Every CLI command and MCP tool appears in at least one
+measure the payoff. **12–14 are the operations track**: a central troubleshooting
+playbook, the security/governance surface, and performance tuning for big repos
+and constrained machines. Every CLI command and MCP tool appears in at least one
 journey and in the appendices below.
