@@ -500,9 +500,7 @@ pub fn run_setup() {
             }
             terminal_ui::print_status_ok("Graph build started (background)");
         } else {
-            println!(
-                "  \x1b[2mRun `lean-ctx impact build` inside any git project to enable\x1b[0m"
-            );
+            println!("  \x1b[2mRun `lean-ctx graph build` inside any git project to enable\x1b[0m");
             println!(
                 "  \x1b[2mgraph-aware reads, impact analysis, and smart search fusion.\x1b[0m"
             );
