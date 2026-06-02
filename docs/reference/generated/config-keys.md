@@ -49,6 +49,7 @@ Top-level configuration keys
 - `rules_scope` (enum: both | global | project, default `both`) — Where agent rule files are installed. Override via LEAN_CTX_RULES_SCOPE
 - `sandbox_level` (u8, default `0` — env `LEAN_CTX_SANDBOX_LEVEL`) — Sandbox strictness level (0=default, 1=strict, 2=paranoid)
 - `savings_footer` (enum: auto | always | never, default `always` — env `LEAN_CTX_SAVINGS_FOOTER`) — Controls visibility of token savings footers: always (default, show on every response), never, auto (context-dependent). Also: LEAN_CTX_SHOW_SAVINGS=1|0
+- `shadow_mode` (bool, default `false` — env `LEAN_CTX_SHADOW_MODE`) — Transparently intercept native Read/Grep/Shell calls via hooks and route them through lean-ctx
 - `shell_activation` (enum: always | agents-only | off, default `always` — env `LEAN_CTX_SHELL_ACTIVATION`) — Controls when the shell hook auto-activates aliases
 - `shell_allowlist` (array, default `[]` — env `LEAN_CTX_SHELL_ALLOWLIST`) — Optional shell command allowlist. When non-empty, only listed binaries are permitted
 - `shell_hook_disabled` (bool, default `false` — env `LEAN_CTX_NO_HOOK`) — Disable shell hook injection
@@ -81,6 +82,9 @@ Controls autonomous background behaviors (preload, dedup, consolidation)
 - `auto_dedup` (bool, default `true`) — Auto-deduplicate repeated reads
 - `auto_preload` (bool, default `true`) — Auto-preload related files on first read
 - `auto_related` (bool, default `true`) — Auto-load graph-related files
+- `cognition_loop_enabled` (bool, default `true` — env `LEAN_CTX_COGNITION_LOOP_ENABLED`) — Enable the background cognition loop (periodic knowledge consolidation)
+- `cognition_loop_interval_secs` (u64, default `3600` — env `LEAN_CTX_COGNITION_LOOP_INTERVAL_SECS`) — Seconds between cognition loop iterations
+- `cognition_loop_max_steps` (u8, default `8` — env `LEAN_CTX_COGNITION_LOOP_MAX_STEPS`) — Maximum steps per cognition loop iteration
 - `consolidate_cooldown_secs` (u64, default `120`) — Minimum seconds between consolidation runs
 - `consolidate_every_calls` (u32, default `25`) — Consolidate knowledge every N tool calls
 - `dedup_threshold` (usize, default `8`) — Number of repeated reads before dedup triggers
