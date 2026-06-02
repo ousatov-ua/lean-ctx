@@ -661,6 +661,26 @@ impl ConfigSchema {
             keys: search,
         });
 
+        let mut embedding = BTreeMap::new();
+        embedding.insert(
+            "model".into(),
+            key_with_env(
+                "string",
+                serde_json::json!("minilm"),
+                "Local ONNX embedding model for ctx_semantic_search. One of: minilm (all-MiniLM-L6-v2, 384d, default), jina-code-v2 (768d, code-optimized), nomic (768d). Switching models re-indexes once on the next search.",
+                "LEAN_CTX_EMBEDDING_MODEL",
+            ),
+        );
+        sections.insert(
+            "embedding".into(),
+            SectionSchema {
+                description:
+                    "Semantic-embedding engine settings (model selection for ctx_semantic_search)"
+                        .into(),
+                keys: embedding,
+            },
+        );
+
         let mut autonomy = BTreeMap::new();
         autonomy.insert(
             "enabled".into(),

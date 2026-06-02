@@ -74,6 +74,17 @@ pub fn cmd_config(args: &[String]) {
                         std::process::exit(1);
                     }
                 }
+                "embedding.model"
+                    if crate::core::embeddings::model_registry::EmbeddingModel::from_str_name(
+                        val,
+                    )
+                    .is_none() =>
+                {
+                    eprintln!(
+                        "Unknown embedding model '{val}'. Available: minilm (default), jina-code-v2, nomic."
+                    );
+                    std::process::exit(1);
+                }
                 "proxy.anthropic_upstream" | "proxy.openai_upstream" | "proxy.gemini_upstream" => {
                     let normalized = normalize_optional_upstream(val);
                     let effective = normalized.as_deref().unwrap_or("");

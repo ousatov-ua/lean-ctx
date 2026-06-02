@@ -2,7 +2,8 @@
 //!
 //! Supports multiple ONNX embedding models with different dimensions,
 //! tokenizers, and download sources. Models are selected via the
-//! `LEAN_CTX_EMBEDDING_MODEL` env var or config file.
+//! `LEAN_CTX_EMBEDDING_MODEL` env var or the `[embedding].model` key in `config.toml`
+//! (env var wins) — see [`resolve_model`].
 
 use std::fmt;
 
@@ -166,14 +167,32 @@ impl ModelConfig {
 }
 
 /// Resolve which embedding model to use.
-/// Priority: env var > config > default.
+///
+/// Priority: `LEAN_CTX_EMBEDDING_MODEL` env var > `[embedding].model` in `config.toml` >
+/// the default model. An unrecognized name is skipped (with a warning) so a typo in one
+/// source never silently swaps the model — which would otherwise force a full re-index.
 pub fn resolve_model() -> EmbeddingModel {
-    if let Ok(val) = std::env::var("LEAN_CTX_EMBEDDING_MODEL") {
-        if let Some(model) = EmbeddingModel::from_str_name(&val) {
+    let env_val = std::env::var("LEAN_CTX_EMBEDDING_MODEL").ok();
+    let config_val = crate::core::config::Config::load().embedding.model;
+    resolve_model_from(env_val.as_deref(), config_val.as_deref())
+}
+
+/// Pure model resolution used by [`resolve_model`]; kept separate so the env-var/config
+/// precedence is unit-testable without touching the process environment or the on-disk
+/// `config.toml`.
+fn resolve_model_from(env_val: Option<&str>, config_val: Option<&str>) -> EmbeddingModel {
+    for (source, raw) in [
+        ("LEAN_CTX_EMBEDDING_MODEL", env_val),
+        ("[embedding].model", config_val),
+    ] {
+        let Some(name) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if let Some(model) = EmbeddingModel::from_str_name(name) {
             return model;
         }
         tracing::warn!(
-            "Unknown LEAN_CTX_EMBEDDING_MODEL={val:?}, falling back to default ({})",
+            "Unknown embedding model {name:?} from {source}; using {} instead",
             EmbeddingModel::DEFAULT
         );
     }
@@ -270,9 +289,51 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_default() {
-        std::env::remove_var("LEAN_CTX_EMBEDDING_MODEL");
-        assert_eq!(resolve_model(), EmbeddingModel::DEFAULT);
+    fn resolve_defaults_when_nothing_set() {
+        assert_eq!(resolve_model_from(None, None), EmbeddingModel::DEFAULT);
+        assert_eq!(
+            resolve_model_from(Some(""), Some("   ")),
+            EmbeddingModel::DEFAULT
+        );
+    }
+
+    #[test]
+    fn config_selects_model_when_env_unset() {
+        assert_eq!(
+            resolve_model_from(None, Some("jina-code-v2")),
+            EmbeddingModel::JinaCodeV2
+        );
+        assert_eq!(
+            resolve_model_from(None, Some("nomic")),
+            EmbeddingModel::NomicEmbedV1_5
+        );
+    }
+
+    #[test]
+    fn env_var_overrides_config() {
+        assert_eq!(
+            resolve_model_from(Some("minilm"), Some("nomic")),
+            EmbeddingModel::AllMiniLmL6V2
+        );
+    }
+
+    #[test]
+    fn unknown_name_falls_through_then_defaults() {
+        // Bad env value → valid config value wins.
+        assert_eq!(
+            resolve_model_from(Some("bogus"), Some("nomic")),
+            EmbeddingModel::NomicEmbedV1_5
+        );
+        // Bad everywhere → default (never silently breaks the index).
+        assert_eq!(
+            resolve_model_from(Some("bogus"), Some("nope")),
+            EmbeddingModel::DEFAULT
+        );
+        // Empty/whitespace in the higher-priority source is skipped, not treated as a match.
+        assert_eq!(
+            resolve_model_from(Some("   "), Some("jina")),
+            EmbeddingModel::JinaCodeV2
+        );
     }
 
     #[test]

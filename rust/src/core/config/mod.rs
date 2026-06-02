@@ -176,6 +176,9 @@ pub struct Config {
     /// Optional LLM enhancement (query expansion, contradiction explanation).
     #[serde(default)]
     pub llm: crate::core::llm_enhance::LlmConfig,
+    /// Semantic-embedding engine settings (which local ONNX model to use).
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
     /// Disable shell hook injection (the _lc() function that wraps CLI commands).
     /// Override via LEAN_CTX_NO_HOOK env var.
     #[serde(default)]
@@ -742,6 +745,21 @@ impl Default for LoopDetectionConfig {
     }
 }
 
+/// Semantic-embedding engine settings.
+///
+/// `model` selects which local ONNX embedding model lean-ctx downloads and uses for
+/// `ctx_semantic_search`. Accepts the same aliases as the `LEAN_CTX_EMBEDDING_MODEL` env
+/// var: `minilm` (all-MiniLM-L6-v2, 384d — the default), `jina-code-v2` (768d,
+/// code-optimized) or `nomic` (768d). When the env var is set it takes precedence; an
+/// unset/`None` value uses the default model. Switching models triggers a one-time
+/// re-index on the next semantic search (vector dimensions follow from the model).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EmbeddingConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -786,6 +804,7 @@ impl Default for Config {
             auto_capture: true,
             search: crate::core::hybrid_search::HybridConfig::default(),
             llm: crate::core::llm_enhance::LlmConfig::default(),
+            embedding: EmbeddingConfig::default(),
             shell_hook_disabled: false,
             shadow_mode: false,
             shell_activation: ShellActivation::default(),

@@ -69,7 +69,7 @@ LeanCTX is a **Lossless Minifier for Human Thought**.
 | **Cost** | Linear (expensive) | Logarithmic (high ROI) |
 | **Context Lifespan** | Burns through window fast | Extends effective session length |
 
-## Where We Are (v3.6.10)
+## Where We Are (v3.7.0)
 
 LeanCTX delivers strong coverage of Dimensions 1 and 3, with foundations for 2 and 4:
 
@@ -95,6 +95,7 @@ LeanCTX delivers strong coverage of Dimensions 1 and 3, with foundations for 2 a
 - **Property Graph** — SQLite-backed code graph with multi-edge BFS (imports, calls, exports, type_ref, tested_by), weighted scoring, incremental git-diff updates
 - **Graph-Aware Reads** — every file read includes scored related files from the Property Graph
 - **Hybrid Search Fusion** — Reciprocal Rank Fusion combines BM25 + semantic embeddings + graph proximity
+- **Configurable Embedding Model** — select the local ONNX model via `[embedding].model` in `config.toml` or the `LEAN_CTX_EMBEDDING_MODEL` env var: all-MiniLM-L6-v2 (384d, default), jina-embeddings-v2-base-code (768d, code-optimized), or nomic-embed-text-v1.5 (768d); switching re-indexes once automatically
 
 ### Dimension 4 — Quality Guardrail (Production-Ready)
 - Compression safety levels per command (verbatim/minimal/standard/aggressive)
@@ -139,6 +140,7 @@ See also: `docs/cognition-interface.md`.
 - **Full Semantic Routing** — Intent-based model tier recommendations (What/How/Do classification)
 - **Output Verification** — Post-processing layer for accuracy guarantees
 - **Adaptive ML Compression** — ML-driven entropy thresholds per language and project
+- **Custom Embedding Models** — built-in model selection ships today (`[embedding].model`); next is loading arbitrary HuggingFace transformer models (custom repo + dimensions) and evaluating static-embedding engines such as model2vec / `potion-code-16M`. Embeddings run on CPU via the pure-Rust `rten` runtime (no GPU execution providers), so GPU/device selection is intentionally out of scope. Tracked in [#328](https://github.com/yvgude/lean-ctx/issues/328).
 - **IDE Extensions** — Context HUD, profile switcher, context issues panel
 - **Context Provider Framework** — Structured providers for Jira, GitHub Issues, CI/CD, logs
 
