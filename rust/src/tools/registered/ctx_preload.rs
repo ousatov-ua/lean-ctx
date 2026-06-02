@@ -55,6 +55,15 @@ impl McpTool for CtxPreloadTool {
             None
         };
 
+        // Never let `handle` fall back to "." (the daemon CWD, which is not the
+        // project): resolve against the dispatch-provided root so graph-relative
+        // preload candidates (e.g. `rust/src/core/foo.rs`) jail against the real
+        // project root in every IDE, even when no explicit `path` was passed.
+        let resolved_path = resolved_path.or_else(|| {
+            let root = ctx.project_root.trim();
+            (!root.is_empty()).then(|| root.to_string())
+        });
+
         let cache = ctx
             .cache
             .as_ref()
