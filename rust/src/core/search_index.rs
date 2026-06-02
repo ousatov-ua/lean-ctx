@@ -186,10 +186,15 @@ impl SearchIndex {
             if !allow_secret_paths && crate::core::io_boundary::is_secret_like(path).is_some() {
                 continue;
             }
-            if let Ok(meta) = std::fs::metadata(path) {
-                if meta.len() > MAX_FILE_SIZE {
-                    continue;
-                }
+            // Only index regular files within the size budget. A FIFO/socket/
+            // device node would block the `read_to_string` below forever (#336),
+            // hanging the background build and starving the fast path. `metadata`
+            // (stat) never opens the file, so it is safe on special files.
+            match std::fs::metadata(path) {
+                Ok(meta) if !meta.file_type().is_file() => continue,
+                Ok(meta) if meta.len() > MAX_FILE_SIZE => continue,
+                Ok(_) => {}
+                Err(_) => continue,
             }
             // Mirrors ctx_search: a file that cannot be read as UTF-8 is never
             // searchable, so excluding it from the index keeps parity.
@@ -576,6 +581,37 @@ mod tests {
         let paths = idx.candidate_paths("handler", Some("rs")).into_paths();
         assert!(paths.iter().all(|p| p.extension().unwrap() == "rs"));
         assert!(paths.iter().any(|p| p.ends_with("a.rs")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn build_skips_named_pipe_without_hanging() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        // #336: the background index build read every file, so a FIFO in the
+        // corpus blocked the build thread forever. It must be skipped while the
+        // regular files are still indexed, and the build must return.
+        let dir = corpus();
+        let fifo = dir.path().join("pipe.fifo");
+        let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(c.as_ptr(), 0o644) },
+            0,
+            "mkfifo failed"
+        );
+
+        let root = dir.path().to_str().unwrap().to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let built = SearchIndex::build(&root, true, false);
+            let _ = tx.send(built.map(|idx| idx.candidate_paths("handler", None).into_paths()));
+        });
+        let paths = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("SearchIndex::build hung on a FIFO (#336 regression)")
+            .expect("index should build");
+        assert!(paths.iter().any(|p| p.ends_with("a.rs")));
+        assert!(!paths.iter().any(|p| p.ends_with("pipe.fifo")));
     }
 
     #[test]

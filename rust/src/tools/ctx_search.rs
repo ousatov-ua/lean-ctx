@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use ignore::WalkBuilder;
 use regex::RegexBuilder;
@@ -13,6 +14,21 @@ use crate::tools::CrpMode;
 pub(crate) const MAX_FILE_SIZE: u64 = 512_000;
 pub(crate) const MAX_WALK_DEPTH: usize = 20;
 const MAX_MATCH_LINE_WIDTH: usize = 150;
+
+/// Wall-clock budget for a single `ctx_search` call. The regular-file guard in
+/// the read loop removes the known infinite block — `read_to_string` on a
+/// FIFO/socket/device (#336) — while this deadline is the backstop for any
+/// *other* pathological case (a gigantic corpus, a stuck network mount): the
+/// tool returns partial results with a hint instead of appearing to hang.
+/// Tunable via `LEAN_CTX_SEARCH_DEADLINE_MS` (`0` disables). Default 10s.
+fn search_deadline() -> Option<Duration> {
+    const DEFAULT_MS: u64 = 10_000;
+    let ms = std::env::var("LEAN_CTX_SEARCH_DEADLINE_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MS);
+    (ms > 0).then(|| Duration::from_millis(ms))
+}
 
 /// Searches files for a regex pattern with compressed output and monorepo scope hints.
 pub fn handle(
@@ -59,6 +75,8 @@ pub fn handle(
     let mut files_skipped_size = 0u32;
     let mut files_skipped_encoding = 0u32;
     let mut files_skipped_boundary = 0u32;
+    let mut files_skipped_special = 0u32;
+    let mut deadline_hit = false;
 
     // Fast path: a warm resident trigram index narrows the candidate files in
     // memory, eliminating the per-call directory walk + full-corpus read. The
@@ -111,13 +129,9 @@ pub fn handle(
                 }
             }
 
-            if let Ok(meta) = std::fs::metadata(path) {
-                if meta.len() > MAX_FILE_SIZE {
-                    files_skipped_size += 1;
-                    continue;
-                }
-            }
-
+            // Size / regular-file filtering happens once in the shared read loop
+            // below, so the walk path and the trigram-index fast path apply the
+            // exact same eligibility rules.
             files.push(path.to_path_buf());
         }
     }
@@ -126,9 +140,38 @@ pub fn handle(
     files.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
 
     let root_str = root.to_string_lossy();
+    let deadline = search_deadline().map(|budget| Instant::now() + budget);
     for path in &files {
         if matches.len() >= max_results {
             break;
+        }
+
+        // Stop gracefully instead of appearing to hang on a pathological corpus
+        // or a stuck read (#336): once the wall-clock budget is spent, return
+        // the partial results gathered so far with a hint to narrow the search.
+        if deadline.is_some_and(|dl| Instant::now() >= dl) {
+            deadline_hit = true;
+            break;
+        }
+
+        // Only ever read regular files within the size budget. A FIFO, socket or
+        // device node would block `read_to_string` forever — the root cause of
+        // #336 — and oversized or unstatable files are skipped. `metadata`
+        // (stat) never opens the file, so it cannot block on a special file.
+        match std::fs::metadata(path) {
+            Ok(meta) if !meta.file_type().is_file() => {
+                files_skipped_special += 1;
+                continue;
+            }
+            Ok(meta) if meta.len() > MAX_FILE_SIZE => {
+                files_skipped_size += 1;
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                files_skipped_encoding += 1;
+                continue;
+            }
         }
 
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -175,6 +218,16 @@ pub fn handle(
             msg.push_str(&format!(
                 " ({files_skipped_boundary} secret-like files skipped by boundary policy)"
             ));
+        }
+        if files_skipped_special > 0 {
+            msg.push_str(&format!(
+                " ({files_skipped_special} special files skipped: not regular files)"
+            ));
+        }
+        if deadline_hit {
+            msg.push_str(
+                " (search stopped at the time budget — refine the pattern or scope with path=)",
+            );
         }
         return (msg, 0);
     }
@@ -224,6 +277,18 @@ pub fn handle(
     if files_skipped_boundary > 0 {
         result.push_str(&format!(
             "\n({files_skipped_boundary} secret-like files skipped by boundary policy)"
+        ));
+    }
+    if files_skipped_special > 0 {
+        result.push_str(&format!(
+            "\n({files_skipped_special} special files skipped: not regular files)"
+        ));
+    }
+    if deadline_hit {
+        result.push_str(&format!(
+            "\n(search stopped after the {}s budget — {files_searched} files scanned; \
+             refine the pattern or scope with path= for full coverage)",
+            search_deadline().map_or(0, |d| d.as_secs())
         ));
     }
 
@@ -490,6 +555,59 @@ mod tests {
         assert!(
             out.contains("secret-like files skipped"),
             "expected boundary skip note, got: {out}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn search_skips_named_pipe_without_hanging() {
+        use std::sync::mpsc;
+        // #336: a named pipe (FIFO) in the search universe used to block
+        // `read_to_string` forever, hanging the whole call with no output. It
+        // must be skipped, the real file still matched, and the call must return.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("real.txt"), "needle_here = 1\n").unwrap();
+        let fifo = dir.path().join("pipe.fifo");
+        let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(c.as_ptr(), 0o644) },
+            0,
+            "mkfifo failed"
+        );
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Fresh temp dir → no warm index yet, so this exercises the walk path.
+            let out = handle("needle_here", &dir_path, None, 10, CrpMode::Off, true, true);
+            let _ = tx.send(out);
+        });
+        let (out, _orig) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("ctx_search hung on a FIFO (#336 regression)");
+
+        assert!(
+            out.contains("real.txt"),
+            "the real file must still match: {out}"
+        );
+        assert!(
+            out.contains("special files skipped"),
+            "the FIFO must be reported as a skipped special file: {out}"
+        );
+    }
+
+    #[test]
+    fn search_deadline_env_override_is_respected() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        std::env::set_var("LEAN_CTX_SEARCH_DEADLINE_MS", "0");
+        assert!(search_deadline().is_none(), "0 must disable the deadline");
+        std::env::set_var("LEAN_CTX_SEARCH_DEADLINE_MS", "250");
+        assert_eq!(search_deadline(), Some(Duration::from_millis(250)));
+        std::env::remove_var("LEAN_CTX_SEARCH_DEADLINE_MS");
+        assert_eq!(
+            search_deadline(),
+            Some(Duration::from_secs(10)),
+            "default budget is 10s"
         );
     }
 }
