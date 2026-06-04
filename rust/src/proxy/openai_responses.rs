@@ -20,7 +20,7 @@ use super::ProxyState;
 ///
 /// Retrieve / cancel / delete / input_items sub-paths
 /// (`/v1/responses/{id}/...`) are routed here as well and pass through untouched:
-/// they carry no `input` array, so [`compress_request_body`] is a no-op for them.
+/// they carry no `input` array, so `compress_request_body` is a no-op for them.
 pub async fn handler(
     State(state): State<ProxyState>,
     req: Request<Body>,
