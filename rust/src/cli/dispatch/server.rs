@@ -50,6 +50,11 @@ pub(super) fn run_mcp_server() -> Result<()> {
         core::logging::init_mcp_logging();
         core::protocol::set_mcp_context(true);
 
+        // Activate the plugin registry once per server process, then announce the
+        // session. `notify` is a no-op unless a plugin listens for the hook.
+        core::plugins::PluginManager::init();
+        core::plugins::PluginManager::notify(core::plugins::executor::HookPoint::OnSessionStart);
+
         tracing::info!(
             "lean-ctx v{} MCP server starting",
             env!("CARGO_PKG_VERSION")

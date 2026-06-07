@@ -69,6 +69,28 @@ impl PluginManager {
             }
         });
     }
+
+    /// True if any enabled plugin declares `hook_name`. A cheap guard so the hot
+    /// path never spawns a hook thread when nothing would run — the default
+    /// (no plugins installed → registry uninitialized → `false`).
+    pub fn has_listener(hook_name: &str) -> bool {
+        Self::with_registry(|reg| any_enabled_listener(reg, hook_name)).unwrap_or(false)
+    }
+
+    /// Fire a hook in the background, but only when a plugin is actually
+    /// listening for it. Call sites should prefer this over
+    /// `fire_hook_background` so they stay zero-cost without plugins.
+    pub fn notify(hook: HookPoint) {
+        if Self::has_listener(hook.hook_name()) {
+            Self::fire_hook_background(hook);
+        }
+    }
+}
+
+fn any_enabled_listener(reg: &PluginRegistry, hook_name: &str) -> bool {
+    reg.enabled_plugins()
+        .iter()
+        .any(|p| p.manifest.hooks.contains_key(hook_name))
 }
 
 pub fn init_plugin_template(name: &str, dir: &std::path::Path) -> std::io::Result<()> {
@@ -148,5 +170,49 @@ mod tests {
     fn fire_hook_with_no_plugins_returns_empty() {
         let results = PluginManager::fire_hook(&HookPoint::OnSessionStart);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn any_enabled_listener_detects_declared_hook() {
+        use registry::PluginRegistry;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("p");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(
+            p.join("plugin.toml"),
+            "[plugin]\nname = \"p\"\nversion = \"1.0.0\"\n\n\
+             [hooks.pre_read]\ncommand = \"echo hi\"\n",
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new(dir.path().to_path_buf());
+        reg.discover();
+
+        assert!(any_enabled_listener(&reg, "pre_read"));
+        assert!(!any_enabled_listener(&reg, "post_compress"));
+    }
+
+    #[test]
+    fn any_enabled_listener_ignores_disabled_plugin() {
+        use registry::PluginRegistry;
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("p");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(
+            p.join("plugin.toml"),
+            "[plugin]\nname = \"p\"\nversion = \"1.0.0\"\n\n\
+             [hooks.pre_read]\ncommand = \"echo hi\"\n",
+        )
+        .unwrap();
+
+        let mut reg = PluginRegistry::new(dir.path().to_path_buf());
+        reg.discover();
+        reg.disable("p").unwrap();
+
+        assert!(!any_enabled_listener(&reg, "pre_read"));
     }
 }

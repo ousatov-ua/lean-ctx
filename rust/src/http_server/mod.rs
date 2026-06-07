@@ -965,6 +965,8 @@ pub async fn serve(cfg: HttpServerConfig) -> Result<()> {
     crate::core::protocol::set_mcp_context(true);
     cfg.validate()?;
 
+    crate::core::plugins::PluginManager::init();
+
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
         .context("invalid host/port")?;
@@ -1015,6 +1017,8 @@ impl axum::serve::Listener for crate::ipc::NamedPipeListener {
 /// Named Pipes on Windows).
 pub async fn serve_ipc(cfg: HttpServerConfig, addr: crate::ipc::DaemonAddr) -> Result<()> {
     cfg.validate()?;
+
+    crate::core::plugins::PluginManager::init();
 
     match addr {
         #[cfg(unix)]
