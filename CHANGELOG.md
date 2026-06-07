@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Agent hooks always use an absolute binary path** (#367): generated hook commands (Codex, Cursor, Claude, Gemini, Antigravity, …) emitted a bare `lean-ctx`, which fails with exit 127 when the host runs the hook under a non-login shell whose `PATH` lacks the install dir. `resolve_binary_path()` now always resolves to the absolute path (matching MCP setup / `doctor`); stale bare-command configs are rewritten on the next `init` / `doctor`.
+- **Proxy forwards the `OpenAI-Project` header** (#366): project-scoped OpenAI keys carry their scope via `OpenAI-Project` (sent by OpenCode and the OpenAI SDK on the Responses API). The proxy's request-header whitelist dropped it, so the upstream rejected the call with `Missing scopes: api.responses.write`. `openai-project` (and `openai-organization`) are now forwarded verbatim.
+- **`gemini` setup installs the Antigravity CLI plugin hooks** (#284): `lean-ctx init --agent gemini` configured the Antigravity CLI **MCP** target but never wrote its **plugin** hooks, so hooks landed only in the legacy `~/.gemini/settings.json` that `agy` ignores. The gemini path now also installs the `agy` plugin (`~/.gemini/config/plugins/lean-ctx`); auto-detect already covers the standalone `antigravity-cli` target.
+- **CEP meter counts cache hits and sessions for long-lived servers** (#361): `cep.sessions` and `total_cache_hits` could stay `0` even with confirmed cache activity — the meter only recorded on an `auto_checkpoint` that a short workload may never reach, and repeated snapshots within one process dropped the cumulative cache-hit/read delta (only the first snapshot's value was kept). CEP is now recorded on the live-stats cadence (so even brief sessions register) and accumulates per-snapshot deltas, so `lean-ctx gain` reflects real cache savings.
+- **Pi: no envelope overhead on tiny reads** (#361): a `ctx_read` of a very small file appended a "Compressed N → N tokens (0%)" footer even when nothing was saved, making the payload larger than the source. The footer is now suppressed when there is no actual saving (compression stats are still recorded for telemetry); cached re-reads and genuinely compressed reads keep their footer.
+- **`ctx_smells` dead-code no longer flags instantiated classes** (#365): added an end-to-end regression test (build graph → scan) confirming imported-and-instantiated Python classes are not reported as dead code while a never-referenced class still is — locking in the symbol-level call/import edges the graph builder creates.
+
 ## [3.7.5] — 2026-06-06
 
 > **The Web & Research release.** lean-ctx reaches beyond the codebase: the new

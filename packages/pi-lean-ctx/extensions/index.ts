@@ -224,6 +224,7 @@ function withFooter(text: string, opts?: {
   limit?: number;
   always?: boolean;
   preferEstimate?: boolean;
+  suppressIfNoSaving?: boolean;
 }) {
   const parsed = parseLeanCtxOutput(text);
   const limited = limitLines(parsed.text, opts?.limit);
@@ -237,6 +238,14 @@ function withFooter(text: string, opts?: {
     stats = clampStats(tokens, tokens);
   }
   if (!stats) return { text: limited.text, stats: undefined, truncated: limited.truncated };
+
+  // On tiny files compression cannot beat the envelope, so a "0%" footer would
+  // be pure overhead — larger payload than the source for no gain (#361). Keep
+  // the computed stats for telemetry (`details.compression`) but drop the
+  // visible footer when nothing was actually saved.
+  if (opts?.suppressIfNoSaving && stats.percentSaved <= 0) {
+    return { text: limited.text, stats, truncated: limited.truncated };
+  }
 
   const footer = formatFooter(stats);
   const base = limited.text.trimEnd();
@@ -530,7 +539,7 @@ export default async function (pi: ExtensionAPI) {
             const bridged = await mcpBridge.callTool("ctx_read", { path: absolutePath, mode }, signal);
             const bridgedText = bridged.content.map((block) => block.text).join("");
             const originalSlice = await readSlice(absolutePath, params.offset, params.limit);
-            const decorated = withFooter(bridgedText, { originalText: originalSlice.text, always: true, preferEstimate: true });
+            const decorated = withFooter(bridgedText, { originalText: originalSlice.text, always: true, preferEstimate: true, suppressIfNoSaving: true });
             return {
               content: [{ type: "text", text: decorated.text }],
               details: { path: absolutePath, lines: originalSlice.lines, source: "lean-ctx-bridge", mode, compression: decorated.stats },
@@ -543,7 +552,7 @@ export default async function (pi: ExtensionAPI) {
         try {
           const output = await execLeanCtx(pi, args);
           const originalSlice = await readSlice(absolutePath, params.offset, params.limit);
-          const decorated = withFooter(output, { originalText: originalSlice.text, always: true, preferEstimate: true });
+          const decorated = withFooter(output, { originalText: originalSlice.text, always: true, preferEstimate: true, suppressIfNoSaving: true });
           return {
             content: [{ type: "text", text: decorated.text }],
             details: { path: absolutePath, lines: originalSlice.lines, source: "lean-ctx", mode, compression: decorated.stats },
@@ -580,7 +589,7 @@ export default async function (pi: ExtensionAPI) {
           );
           const bridgedText = bridged.content.map((block) => block.text).join("");
           const originalText = await readFile(absolutePath, "utf8");
-          const decorated = withFooter(bridgedText, { originalText, always: true, preferEstimate: true });
+          const decorated = withFooter(bridgedText, { originalText, always: true, preferEstimate: true, suppressIfNoSaving: true });
           return {
             content: [{ type: "text", text: decorated.text }],
             details: { path: absolutePath, source: "lean-ctx-bridge", mode, compression: decorated.stats },
@@ -593,7 +602,7 @@ export default async function (pi: ExtensionAPI) {
       const args = ["read", absolutePath, "-m", mode, ...(isExplicitFull ? ["--fresh"] : [])];
       const output = await execLeanCtx(pi, args);
       const originalText = await readFile(absolutePath, "utf8");
-      const decorated = withFooter(output, { originalText, always: true, preferEstimate: true });
+      const decorated = withFooter(output, { originalText, always: true, preferEstimate: true, suppressIfNoSaving: true });
 
       return {
         content: [{ type: "text", text: decorated.text }],

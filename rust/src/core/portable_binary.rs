@@ -117,4 +117,17 @@ mod tests {
             "/usr/local/bin/lean-ctx"
         );
     }
+
+    #[test]
+    fn resolve_portable_binary_is_absolute() {
+        // #367: generated hook commands must use an absolute binary path, never
+        // a bare `lean-ctx`, because agents run hooks under non-login shells
+        // without the install dir on PATH. `which`/`current_exe()` both yield
+        // an absolute path in any normal environment (incl. the test harness).
+        let resolved = resolve_portable_binary();
+        assert!(
+            std::path::Path::new(&resolved).is_absolute(),
+            "resolve_portable_binary must return an absolute path, got: {resolved}"
+        );
+    }
 }
