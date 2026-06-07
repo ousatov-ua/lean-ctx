@@ -214,6 +214,23 @@ pub(crate) fn antigravity_cli_config_dir(home: &std::path::Path) -> std::path::P
 /// * Events are `PreToolUse`/`PostToolUse`/`SessionStart`/`Stop` (NOT the legacy
 ///   Gemini `BeforeTool`/`AfterTool`); the shell tool is `run_command`, the file
 ///   read tool `view_file`.
+/// * **MCP is bundled inside the plugin** (`mcp_config.json` at the plugin root).
+///   `agy` loads it — verified via `agy plugin validate` ("mcpServers: processed")
+///   and a live session surfacing an `McpTool` confirmation. This makes the bundle
+///   a self-contained, spec-"compliant" plugin (#284) and portable via
+///   `agy plugin install`/export. The profile copy
+///   (`~/.gemini/antigravity-cli/mcp_config.json`) is kept for back-compat; `agy`
+///   keys MCP servers by name, so listing lean-ctx in both is harmless.
+/// * **Hook *firing* is gated by `agy` itself, not by file placement.** `agy` only
+///   executes `hooks.json` when its server-side feature flag `enable_json_hooks`
+///   (proto field, applied via `applyFeatureProviderJSONHooksConfig`; experiment
+///   `json-hooks-enabled`) is enabled for the account. A local
+///   `~/.gemini/config/config.json` override does NOT activate it (verified). So
+///   lean-ctx installs the plugin in the exact location/format that
+///   `agy plugin install` itself produces, and the observe hooks light up
+///   automatically once that flag rolls out — there is nothing more lean-ctx can
+///   do host-side. Note: `agy -p` print mode bypasses the hook subsystem entirely
+///   (hooks run in interactive sessions only).
 fn install_antigravity_cli_hooks(home: &std::path::Path) {
     let binary = resolve_binary_path();
     let observe_cmd = format!("{binary} hook observe");
@@ -235,6 +252,16 @@ fn install_antigravity_cli_hooks(home: &std::path::Path) {
     write_file(
         &plugin_dir.join("plugin.json"),
         &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+    );
+
+    // Self-contained, spec-"compliant" bundle: ship the MCP definition inside the
+    // plugin so `agy` exposes the `ctx_*` tools and the plugin stays portable.
+    let mcp_config = serde_json::json!({
+        "mcpServers": { "lean-ctx": { "command": binary } }
+    });
+    write_file(
+        &plugin_dir.join("mcp_config.json"),
+        &serde_json::to_string_pretty(&mcp_config).unwrap_or_default(),
     );
 
     // observe-only: agy ignores PreToolUse input rewriting, so the rewrite /
@@ -370,6 +397,19 @@ mod tests {
         assert!(
             hooks_json.exists(),
             "hooks/hooks.json must exist at {hooks_json:?}"
+        );
+
+        // The plugin is self-contained: MCP lives in the plugin root so `agy`
+        // exposes the ctx_* tools (verified against `agy plugin validate`).
+        let mcp_json = home.join(".gemini/config/plugins/lean-ctx/mcp_config.json");
+        assert!(
+            mcp_json.exists(),
+            "plugin-local mcp_config.json must exist at {mcp_json:?}"
+        );
+        let mcp = read_json(&mcp_json);
+        assert!(
+            mcp["mcpServers"]["lean-ctx"]["command"].is_string(),
+            "plugin mcp_config.json must define the lean-ctx MCP server"
         );
 
         // plugin.json carries the mandatory `name` field.
