@@ -69,6 +69,10 @@ fn default_chunker() -> String {
     "lines".to_string()
 }
 
+fn labels(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_string()).collect()
+}
+
 /// Error parsing a persona spec.
 #[derive(Debug, thiserror::Error)]
 pub enum PersonaError {
@@ -153,19 +157,96 @@ impl Persona {
         }
     }
 
-    /// Built-in presets by name. Extended with non-coding presets in 12.16.
+    /// Built-in presets by name (`sales` is an alias of `lead-gen`).
     #[must_use]
     pub fn builtin(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "coding" => Some(Self::coding()),
+            "research" => Some(Self::research()),
+            "lead-gen" | "lead_gen" | "sales" => Some(Self::lead_gen()),
+            "support" => Some(Self::support()),
+            "data-analysis" | "data_analysis" => Some(Self::data_analysis()),
             _ => None,
         }
     }
 
-    /// Names of the built-in presets.
+    /// Names of the built-in presets (sorted, canonical names only).
     #[must_use]
     pub fn builtin_names() -> Vec<String> {
-        vec!["coding".to_string()]
+        vec![
+            "coding".to_string(),
+            "data-analysis".to_string(),
+            "lead-gen".to_string(),
+            "research".to_string(),
+            "support".to_string(),
+        ]
+    }
+
+    /// `research`: reading the web/docs and synthesizing cited findings.
+    #[must_use]
+    pub fn research() -> Self {
+        Persona {
+            name: "research".to_string(),
+            description: "Web/document research with cited synthesis.".to_string(),
+            tool_profile: ToolProfile::Standard,
+            default_read_mode: "map".to_string(),
+            compressor: "whitespace".to_string(),
+            chunker: "paragraph".to_string(),
+            intent_taxonomy: labels(&["explore", "summarize", "compare", "cite", "synthesize"]),
+            sensitivity_floor: SensitivityLevel::Public,
+        }
+    }
+
+    /// `lead-gen` (alias `sales`): prospecting + enriching sales leads.
+    #[must_use]
+    pub fn lead_gen() -> Self {
+        Persona {
+            name: "lead-gen".to_string(),
+            description: "Outbound sales lead research + enrichment.".to_string(),
+            tool_profile: ToolProfile::Custom(labels(&[
+                "ctx_read",
+                "ctx_search",
+                "ctx_url_read",
+                "ctx_knowledge",
+                "ctx_semantic_search",
+                "ctx_session",
+            ])),
+            default_read_mode: "map".to_string(),
+            compressor: "whitespace".to_string(),
+            chunker: "paragraph".to_string(),
+            intent_taxonomy: labels(&["prospect", "qualify", "enrich", "outreach"]),
+            sensitivity_floor: SensitivityLevel::Confidential,
+        }
+    }
+
+    /// `support`: customer-support triage and resolution.
+    #[must_use]
+    pub fn support() -> Self {
+        Persona {
+            name: "support".to_string(),
+            description: "Customer-support triage, diagnosis, resolution.".to_string(),
+            tool_profile: ToolProfile::Standard,
+            default_read_mode: "auto".to_string(),
+            compressor: "whitespace".to_string(),
+            chunker: "paragraph".to_string(),
+            intent_taxonomy: labels(&["triage", "diagnose", "resolve", "escalate", "document"]),
+            sensitivity_floor: SensitivityLevel::Internal,
+        }
+    }
+
+    /// `data-analysis`: structured-data ingestion and reporting.
+    #[must_use]
+    pub fn data_analysis() -> Self {
+        Persona {
+            name: "data-analysis".to_string(),
+            description: "Structured-data ingestion, analysis, reporting.".to_string(),
+            tool_profile: ToolProfile::Standard,
+            default_read_mode: "map".to_string(),
+            compressor: "identity".to_string(),
+            chunker: "lines".to_string(),
+            intent_taxonomy: labels(&["ingest", "clean", "analyze", "visualize", "report"]),
+            sensitivity_floor: SensitivityLevel::Internal,
+        }
     }
 
     /// Resolve the active persona for this config.
@@ -313,6 +394,42 @@ intent_taxonomy = ["prospect", "qualify", "enrich"]
         // A custom persona genuinely changes the tool surface.
         assert!(persona.tool_profile.is_tool_enabled("ctx_url_read"));
         assert!(!persona.tool_profile.is_tool_enabled("ctx_refactor"));
+    }
+
+    #[test]
+    fn builtin_presets_are_shipped_and_resolvable() {
+        let names = Persona::builtin_names();
+        for expected in ["coding", "research", "lead-gen", "support", "data-analysis"] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing preset {expected}"
+            );
+            assert!(
+                Persona::builtin(expected).is_some(),
+                "unresolvable preset {expected}"
+            );
+        }
+        // `sales` is an alias of lead-gen.
+        assert_eq!(Persona::builtin("sales").unwrap().name, "lead-gen");
+    }
+
+    #[test]
+    fn intent_taxonomy_varies_by_persona() {
+        let coding = Persona::coding().intent_taxonomy;
+        let research = Persona::research().intent_taxonomy;
+        let lead = Persona::lead_gen().intent_taxonomy;
+        assert_ne!(coding, research);
+        assert_ne!(coding, lead);
+        assert!(research.contains(&"synthesize".to_string()));
+        assert!(lead.contains(&"prospect".to_string()));
+    }
+
+    #[test]
+    fn presets_change_tool_surface() {
+        // lead-gen exposes web research tools, not refactoring tools.
+        let lead = Persona::lead_gen();
+        assert!(lead.tool_profile.is_tool_enabled("ctx_url_read"));
+        assert!(!lead.tool_profile.is_tool_enabled("ctx_refactor"));
     }
 
     #[test]

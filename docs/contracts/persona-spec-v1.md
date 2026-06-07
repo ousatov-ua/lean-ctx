@@ -21,6 +21,20 @@ persona, instead of forking behavior.
 | `intent_taxonomy` | string[] | `[]` | Task labels meaningful for the domain (coding default = the `TaskType` set). |
 | `sensitivity_floor` | string | `"public"` | Minimum sensitivity classification: `public`, `internal`, `confidential`, `secret`. |
 
+## Built-in presets (EPIC 12.16)
+
+| Preset | Tool surface | Read mode | Intent taxonomy | Sensitivity floor |
+|--------|--------------|-----------|-----------------|-------------------|
+| `coding` (default) | `power` | `auto` | the `TaskType` set | `public` |
+| `research` | `standard` | `map` | explore, summarize, compare, cite, synthesize | `public` |
+| `lead-gen` (alias `sales`) | custom (read/search/url/knowledge/semantic) | `map` | prospect, qualify, enrich, outreach | `confidential` |
+| `support` | `standard` | `auto` | triage, diagnose, resolve, escalate, document | `internal` |
+| `data-analysis` | `standard` | `map` | ingest, clean, analyze, visualize, report | `internal` |
+
+Non-coding personas also append a domain-specific terse output block (vocabulary
++ intent list) to the agent prompt. The `coding` persona leaves the prompt
+unchanged (no regression).
+
 ## Selection
 
 Resolution order (best-effort; unknown names fall back to `coding`):

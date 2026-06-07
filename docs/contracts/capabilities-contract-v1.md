@@ -44,7 +44,7 @@ contract_version, server, plane, transports, presets, read_modes, tools, feature
   "server": { "name": "lean-ctx", "version": "3.7.1", "persona": "coding" },
   "plane": "personal",
   "transports": ["stdio-mcp", "http-mcp", "rest", "sse"],
-  "presets": ["coding"],
+  "presets": ["coding", "data-analysis", "lead-gen", "research", "support"],
   "read_modes": { "count": 10, "modes": ["auto", "full", "map", "signatures", "diff", "aggressive", "entropy", "task", "reference", "lines:N-M"] },
   "tools": { "total": 42, "names": ["ctx_read", "ctx_search", "..."] },
   "features": {
