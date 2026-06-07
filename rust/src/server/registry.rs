@@ -125,6 +125,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(
         registered::ctx_discover_tools::CtxDiscoverToolsTool,
     ));
+    registry.register(Box::new(registered::ctx_tools::CtxToolsTool));
     registry.register(Box::new(registered::ctx_review::CtxReviewTool));
     registry.register(Box::new(registered::ctx_provider::CtxProviderTool));
     registry.register(Box::new(registered::ctx_impact::CtxImpactTool));

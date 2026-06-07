@@ -76,10 +76,10 @@ pub fn categorize_tool(name: &str) -> ToolCategory {
         "ctx_benchmark" | "ctx_verify" | "ctx_analyze" | "ctx_profile" | "ctx_proof"
         | "ctx_review" => ToolCategory::Debug,
 
-        // Provider + URL/Git readers are Core: gateways to external context
-        // (GitHub issues, Jira, Postgres, web pages, YouTube, remote git repos) —
-        // always available.
-        "ctx_provider" | "ctx_url_read" | "ctx_git_read" => ToolCategory::Core,
+        // Provider + URL/Git readers + the MCP gateway are Core: gateways to
+        // external context (GitHub issues, Jira, Postgres, web pages, YouTube,
+        // remote git repos, downstream MCP servers) — always available.
+        "ctx_provider" | "ctx_url_read" | "ctx_git_read" | "ctx_tools" => ToolCategory::Core,
 
         // Memory: on-demand semantic tools
         "ctx_semantic_search" | "ctx_artifacts" => ToolCategory::Memory,

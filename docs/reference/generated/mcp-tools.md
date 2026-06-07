@@ -4,7 +4,7 @@
 
 Source of truth: `rust/src/server/registry.rs` and the tool definitions it registers.
 
-lean-ctx registers **71 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
+lean-ctx registers **72 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
 
 ## `ctx_agent`
 
@@ -418,6 +418,14 @@ Parameters: `file`, `kind`, `name`*
 Multi-agent task orchestration. Actions: create|update|list|get|cancel|message|info.
 
 Parameters: `action`*, `description`, `message`, `state`, `task_id`, `to_agent`
+
+## `ctx_tools`
+
+Gateway to downstream MCP servers — unlimited external tools at ~constant context cost.
+actions: find (query → top-N relevant tools as ChoiceCards) | call (proxy a `server::tool`) | list (servers+counts) | refresh.
+Use find to discover, then call the chosen `server::tool`. Off by default ([gateway] config).
+
+Parameters: `action`, `arguments`, `query`, `tool`
 
 ## `ctx_tree`
 

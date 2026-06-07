@@ -1,4 +1,4 @@
-# Appendix — MCP Tool Map (all 71 tools)
+# Appendix — MCP Tool Map (all 72 tools)
 
 Every tool lean-ctx registers via `rust/src/server/registry.rs`. Your AI editor
 calls these instead of its native file/search tools. The **Profile** column
@@ -14,7 +14,7 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 |---------|-------|--------------|
 | **minimal** | 6 | Lowest context overhead; the absolute essentials |
 | **standard** | 22 | Balanced default for most coding workflows |
-| **power** | 71 | Everything (default for existing installs) |
+| **power** | 72 | Everything (default for existing installs) |
 
 - **minimal (6):** `ctx_read`, `ctx_shell`, `shell`, `ctx_search`, `ctx_tree`, `ctx_session`
 - **standard (+16):** + `ctx_semantic_search`, `ctx_knowledge`, `ctx_overview`,
@@ -107,6 +107,7 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 | Tool | Purpose | Key actions | Profile |
 |------|---------|-------------|---------|
 | `ctx_provider` | External context providers (GitHub, GitLab, Jira, Postgres, MCP bridges) | discover\|list\|status\|refresh\|configure\|query\|gitlab_issues\|gitlab_mrs | P |
+| `ctx_tools` | MCP Tool-Catalog Gateway — route/proxy unlimited downstream MCP servers at constant context cost | find\|call\|list\|refresh | P |
 | `ctx_plugins` | Plugin management | list\|enable\|disable\|info\|hooks | P |
 | `ctx_rules` | Cross-agent rules governance (ContextOps) | sync\|diff\|lint\|status\|init | P |
 | `ctx_overview` | Task-relevant project map — ideal at session start | `task`, `path` | S |
@@ -135,9 +136,9 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 
 ## Notes
 
-1. `power` enables all 71 tools; `ToolProfile::is_tool_enabled()` returns `true`
+1. `power` enables all 72 tools; `ToolProfile::is_tool_enabled()` returns `true`
    for everything under power.
 2. `ctx_load_tools` controls *dynamic* categories (`arch`, `debug`, `memory`,
    `metrics`, `session`) independently of the static profile filter.
 3. Lazy clients use `ctx_call` + `ctx_discover_tools` + `ctx_load_tools` to reach
-   tools not in their active profile without listing all 69 upfront.
+   tools not in their active profile without listing all 72 upfront.

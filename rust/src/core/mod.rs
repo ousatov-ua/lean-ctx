@@ -311,6 +311,7 @@ pub mod feedback;
 pub mod filters;
 pub mod free_energy_budget;
 pub mod gain;
+pub mod gateway;
 pub mod git;
 pub mod git_cache;
 pub mod gotcha_tracker;
