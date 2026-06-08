@@ -344,9 +344,16 @@ async fn savings_summary_scope_gated_and_aggregated() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["schema_version"], 2);
     assert_eq!(v["member_count"], 2);
     assert_eq!(v["totals"]["net_saved_tokens"], 6000); // 4200 + 1800
+    assert_eq!(v["totals"]["total_events"], 2); // 1 + 1 (latest per signer)
     assert_eq!(v["by_member"][0]["net_saved_tokens"], 4200); // sorted desc
     assert_eq!(v["by_model"][0]["model"], "claude-opus");
     assert_eq!(v["by_model"][0]["saved_tokens"], 6000);
+    // Tool breakdown is now surfaced (previously unused in the response).
+    assert_eq!(v["by_tool"][0]["tool"], "ctx_read");
+    assert_eq!(v["by_tool"][0]["saved_tokens"], 6000);
+    // The cumulative daily series is present (geometry is unit-tested separately).
+    assert!(v["series"].is_array());
 }
