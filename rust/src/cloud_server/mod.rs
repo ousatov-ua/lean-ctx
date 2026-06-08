@@ -1,4 +1,5 @@
 mod auth;
+mod billing_edge;
 mod buddy;
 mod cep;
 mod commands;
@@ -115,6 +116,12 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/leaderboard", get(wrapped::get_leaderboard_page))
         .route("/api/global-stats", get(global_stats::get_global_stats))
         .route("/api/cloud/models", get(models::get_models))
+        .route(
+            // Edge to the private commercial plane: resolves the caller's plan +
+            // additive entitlements. Free (gates nothing) when billing is unset.
+            "/api/account/entitlements",
+            get(billing_edge::get_account_entitlements),
+        )
         .with_state(state)
         .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024));
