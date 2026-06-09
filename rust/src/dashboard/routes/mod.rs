@@ -7,6 +7,7 @@ pub mod helpers;
 mod knowledge;
 mod memory;
 mod risk;
+mod roi;
 mod stats;
 mod system;
 mod tools;
@@ -32,6 +33,7 @@ fn match_component_path(path: &str) -> Option<String> {
         "/static/components/cockpit-remaining.js" => super::COCKPIT_COMPONENT_REMAINING_JS,
         "/static/components/cockpit-commander.js" => super::COCKPIT_COMPONENT_COMMANDER_JS,
         "/static/components/cockpit-palette.js" => super::COCKPIT_COMPONENT_PALETTE_JS,
+        "/static/components/cockpit-roi.js" => super::COCKPIT_COMPONENT_ROI_JS,
         _ => return None,
     };
     Some(content.to_string())
@@ -142,6 +144,7 @@ pub fn route_response(
     stats::handle(path, query_str, method, body)
         .or_else(|| context::handle(path, query_str, method, body))
         .or_else(|| risk::handle(path, query_str, method, body))
+        .or_else(|| roi::handle(path, query_str, method, body))
         .or_else(|| knowledge::handle(path, query_str, method, body))
         .or_else(|| memory::handle(path, query_str, method, body))
         .or_else(|| graph::handle(path, query_str, method, body))

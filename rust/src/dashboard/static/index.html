@@ -164,6 +164,7 @@
 <script type="module" src="/static/components/cockpit-remaining.js"></script>
 <script type="module" src="/static/components/cockpit-commander.js"></script>
 <script type="module" src="/static/components/cockpit-palette.js"></script>
+<script type="module" src="/static/components/cockpit-roi.js"></script>
 </head>
 <body class="cockpit-shell-styles">
 <div class="support-bar" id="supportBar" role="region" aria-label="Support lean-ctx">
@@ -288,6 +289,9 @@
     </section>
     <section id="view-compression" class="view">
       <cockpit-compression id="compressionView"></cockpit-compression>
+    </section>
+    <section id="view-roi" class="view">
+      <cockpit-roi id="roiView"></cockpit-roi>
     </section>
     <section id="view-agents" class="view">
       <cockpit-agents id="agentsView"></cockpit-agents>
@@ -506,7 +510,7 @@ function bootCockpit() {
 
   // Simple ⇄ Advanced navigation mode (persisted; drives cockpit-nav).
   var NAV_MODE_KEY = 'lctx_nav_mode';
-  var SIMPLE_VIEWS = { overview: 1, learning: 1, compression: 1, live: 1 };
+  var SIMPLE_VIEWS = { overview: 1, roi: 1, learning: 1, compression: 1, live: 1 };
   function getNavMode() {
     try { return localStorage.getItem(NAV_MODE_KEY) === 'pro' ? 'pro' : 'simple'; } catch (e) { return 'simple'; }
   }

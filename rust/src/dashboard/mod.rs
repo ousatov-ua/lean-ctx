@@ -31,6 +31,7 @@ const COCKPIT_COMPONENT_HEALTH_JS: &str = include_str!("static/components/cockpi
 const COCKPIT_COMPONENT_REMAINING_JS: &str = include_str!("static/components/cockpit-remaining.js");
 const COCKPIT_COMPONENT_COMMANDER_JS: &str = include_str!("static/components/cockpit-commander.js");
 const COCKPIT_COMPONENT_PALETTE_JS: &str = include_str!("static/components/cockpit-palette.js");
+const COCKPIT_COMPONENT_ROI_JS: &str = include_str!("static/components/cockpit-roi.js");
 
 // Vendored third-party libraries — embedded so the dashboard works fully offline
 // (no external CDN). Served as text via the standard route pipeline.

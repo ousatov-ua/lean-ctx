@@ -10,6 +10,7 @@ const ROUTE_ALIASES = {
 /** @type {string[]} */
 const KNOWN_ROUTES = [
   'overview',
+  'roi',
   'commander',
   'context',
   'live',
@@ -31,6 +32,7 @@ const KNOWN_ROUTES = [
 
 const ROUTE_LABELS = {
   overview: 'Home',
+  roi: 'ROI & Plan',
   commander: 'Context Health',
   context: 'Context Manager',
   live: 'Live Activity',
@@ -53,6 +55,7 @@ const ROUTE_LABELS = {
 // One-line, plain-language explanation shown as a hint banner under the top bar.
 const ROUTE_DESCRIPTIONS = {
   overview: 'Your savings at a glance.',
+  roi: 'Verified savings, your plan and entitlements.',
   commander: 'Context-window pressure and what to trim.',
   context: 'Everything currently loaded into the model context.',
   live: 'What lean-ctx is doing right now.',
@@ -170,6 +173,7 @@ function makeViewLoader(elementId) {
 function initRouter() {
   var viewElementMap = {
     overview: 'overviewView',
+    roi: 'roiView',
     commander: 'commanderView',
     context: 'contextView',
     live: 'liveView',

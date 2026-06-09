@@ -20,6 +20,7 @@ const NAV_ICONS = {
   health: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
   architecture: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><line x1="9" y1="9" x2="9" y2="9.01"/><line x1="9" y1="12" x2="9" y2="12.01"/><line x1="9" y1="15" x2="9" y2="15.01"/></svg>',
   explorer: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-7l-2-3H5a2 2 0 00-2 2z"/></svg>',
+  roi: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>',
 };
 
 const NAV_MODE_KEY = 'lctx_nav_mode';
@@ -41,6 +42,7 @@ const COCKPIT_NAV_SECTIONS = [
     tier: 'simple',
     items: [
       { id: 'overview', label: 'Home', desc: 'Your savings at a glance.' },
+      { id: 'roi', label: 'ROI & Plan', desc: 'Verified savings, your plan and entitlements.' },
       { id: 'learning', label: 'Trends', desc: 'How your savings and efficiency change over time.' },
       { id: 'compression', label: 'Savings', desc: 'Which files and read modes saved the most tokens.' },
       { id: 'live', label: 'Live Activity', desc: 'What lean-ctx is doing right now.' },
