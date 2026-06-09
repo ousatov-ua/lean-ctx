@@ -49,6 +49,11 @@ path = "src/bin/gen_docs.rs"
 required-features = ["dev-tools"]
 
 [[example]]
+name = "locomo_bench"
+path = "src/bin/locomo_bench.rs"
+required-features = ["dev-tools"]
+
+[[example]]
 name = "seed_observatory"
 path = "src/bin/seed_observatory.rs"
 required-features = ["dev-tools"]

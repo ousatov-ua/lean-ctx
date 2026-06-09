@@ -80,6 +80,27 @@ impl Scorer for QaScorer {
     }
 }
 
+/// SQuAD token-overlap F1 between a prediction and a single gold answer.
+/// Reusable building block for other harnesses (e.g. the LoCoMo memory bench, #291).
+pub fn qa_f1(pred: &str, gold: &str) -> f64 {
+    let p = normalize(pred);
+    let g = normalize(gold);
+    let pt: Vec<&str> = p.split_whitespace().collect();
+    let gt: Vec<&str> = g.split_whitespace().collect();
+    token_f1(&pt, &gt)
+}
+
+/// SQuAD exact match between a prediction and a gold answer (after normalization).
+pub fn qa_exact_match(pred: &str, gold: &str) -> bool {
+    normalize(pred) == normalize(gold)
+}
+
+/// True iff the normalized gold answer is contained in the normalized prediction.
+pub fn qa_contains(pred: &str, gold: &str) -> bool {
+    let g = normalize(gold);
+    !g.is_empty() && normalize(pred).contains(&g)
+}
+
 /// SQuAD normalization: lowercase, drop punctuation, drop articles, collapse whitespace.
 fn normalize(s: &str) -> String {
     let lowered = s.to_lowercase();

@@ -353,6 +353,7 @@ pub mod launchd;
 pub mod limits;
 pub mod llm_enhance;
 pub mod llm_feedback;
+pub mod locomo;
 pub mod logging;
 pub mod mcp_manifest;
 pub mod mdl_selector;
