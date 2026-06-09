@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rmcp::model::Tool;
 
@@ -7,8 +8,14 @@ use super::tool_trait::McpTool;
 /// Central registry mapping tool names to their trait-based handlers.
 /// Every tool is trait-based and resolved here; the earlier
 /// match-cascade dispatch has been fully retired.
+///
+/// Handlers are stored behind `Arc` (not `Box`) so the dispatch layer can hand
+/// an owned, `'static` handle to `tokio::task::spawn_blocking`. That lets a
+/// blocking handler run on the dedicated blocking pool under a watchdog
+/// deadline instead of pinning a scarce core worker via `block_in_place`
+/// (#271 — a hung handler must never swallow the JSON-RPC response).
 pub struct ToolRegistry {
-    tools: HashMap<&'static str, Box<dyn McpTool>>,
+    tools: HashMap<&'static str, Arc<dyn McpTool>>,
 }
 
 impl ToolRegistry {
@@ -19,11 +26,21 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Box<dyn McpTool>) {
-        self.tools.insert(tool.name(), tool);
+        let name = tool.name();
+        self.tools.insert(name, Arc::from(tool));
     }
 
     pub fn get(&self, name: &str) -> Option<&dyn McpTool> {
-        self.tools.get(name).map(AsRef::as_ref)
+        self.tools.get(name).map(|t| &**t)
+    }
+
+    /// Clone an owned, `'static` handle to a registered tool.
+    ///
+    /// Unlike [`get`](Self::get), the returned `Arc` can be moved into
+    /// `spawn_blocking`, so the dispatch layer can execute the (synchronous)
+    /// handler off the async core workers under a watchdog (#271).
+    pub fn get_arc(&self, name: &str) -> Option<Arc<dyn McpTool>> {
+        self.tools.get(name).cloned()
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -214,5 +231,34 @@ fn register_plugin_tools(registry: &mut ToolRegistry) {
         registry.register(Box::new(
             crate::tools::registered::plugin_tool::PluginTool::from_spec(spec),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_arc_returns_owned_handle_for_known_tool() {
+        let registry = build_registry();
+        let arc = registry.get_arc("ctx_tree");
+        assert!(arc.is_some(), "ctx_tree must be registered");
+        assert_eq!(arc.unwrap().name(), "ctx_tree");
+    }
+
+    #[test]
+    fn get_arc_is_none_for_unknown_tool() {
+        let registry = build_registry();
+        assert!(registry.get_arc("ctx_does_not_exist_xyz").is_none());
+    }
+
+    #[test]
+    fn get_and_get_arc_agree_for_core_tool() {
+        let registry = build_registry();
+        assert_eq!(
+            registry.get("ctx_read").is_some(),
+            registry.get_arc("ctx_read").is_some(),
+            "get and get_arc must agree on tool presence"
+        );
     }
 }

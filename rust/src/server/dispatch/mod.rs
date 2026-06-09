@@ -1,7 +1,11 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use rmcp::ErrorData;
 use serde_json::Value;
 
 use crate::server::helpers::get_str;
+use crate::server::tool_trait::{McpTool, ToolContext, ToolOutput};
 use crate::tools::LeanCtxServer;
 
 impl LeanCtxServer {
@@ -137,7 +141,7 @@ impl LeanCtxServer {
         args: Option<&serde_json::Map<String, Value>>,
         minimal: bool,
     ) -> Result<(String, usize), ErrorData> {
-        if let Some(tool) = self.registry.as_ref().and_then(|r| r.get(name)) {
+        if let Some(tool) = self.registry.as_ref().and_then(|r| r.get_arc(name)) {
             let empty = serde_json::Map::new();
             let args_map = args.unwrap_or(&empty);
             let project_root = {
@@ -225,7 +229,15 @@ impl LeanCtxServer {
                 bm25_cache: Some(self.bm25_cache.clone()),
                 progress_sender: Some(self.progress_sender.clone()),
             };
-            let output = tokio::task::block_in_place(|| tool.handle(args_map, &ctx))?;
+            // Run the (synchronous) handler on the dedicated blocking pool under
+            // a watchdog deadline (#271). `block_in_place` would pin one of the
+            // few core workers and — being synchronous — cannot be interrupted
+            // by `tokio::time::timeout` from the same task, so a hung handler
+            // would silently swallow the JSON-RPC response and the MCP client
+            // would crash with "Cannot read properties of undefined (reading
+            // 'invoke')". `spawn_blocking` keeps the core workers free and lets
+            // the watchdog always return a response.
+            let output = self.run_tool_handler(name, tool, args_map, ctx).await?;
 
             if output.changed {
                 if let Some(peer) = self.peer.read().await.as_ref() {
@@ -361,9 +373,127 @@ impl LeanCtxServer {
             None,
         ))
     }
+
+    /// Execute a (synchronous) tool handler on the blocking pool under a
+    /// watchdog deadline (#271).
+    ///
+    /// The handler is `Send + 'static` (it owns an `Arc<dyn McpTool>`, a cloned
+    /// arg map and the `ToolContext`), so it runs via `spawn_blocking` on the
+    /// dedicated blocking-thread pool. That keeps the few core async workers free
+    /// to keep driving the stdio JSON-RPC loop, and — crucially — lets the
+    /// watchdog `timeout` actually fire (a synchronous `block_in_place` on the
+    /// same task can never be timed out, because the task's own timer cannot be
+    /// polled while it blocks).
+    async fn run_tool_handler(
+        &self,
+        name: &str,
+        tool: Arc<dyn McpTool>,
+        args_map: &serde_json::Map<String, Value>,
+        ctx: ToolContext,
+    ) -> Result<ToolOutput, ErrorData> {
+        let args_owned = args_map.clone();
+        let join = tokio::task::spawn_blocking(move || tool.handle(&args_owned, &ctx));
+        Self::watchdog_join(name, join, Self::handler_watchdog(name)).await
+    }
+
+    /// Await a blocking handler's join handle, enforcing an optional watchdog.
+    ///
+    /// On timeout the join handle is abandoned (the blocking-pool thread keeps
+    /// running but never touches the response path again) and a clean error is
+    /// returned, so the MCP client always receives a JSON-RPC reply. A handler
+    /// panic is isolated on the blocking pool and surfaced as an error too — the
+    /// server process stays alive either way.
+    async fn watchdog_join(
+        name: &str,
+        join: tokio::task::JoinHandle<Result<ToolOutput, ErrorData>>,
+        watchdog: Option<Duration>,
+    ) -> Result<ToolOutput, ErrorData> {
+        let Some(limit) = watchdog else {
+            return Self::unwrap_join(name, join.await);
+        };
+        match tokio::time::timeout(limit, join).await {
+            Ok(joined) => Self::unwrap_join(name, joined),
+            Err(_elapsed) => {
+                crate::core::io_health::record_freeze();
+                tracing::error!(
+                    tool = name,
+                    timeout_secs = limit.as_secs(),
+                    "tool watchdog fired — abandoning blocking handler to keep the MCP server responsive (#271)"
+                );
+                Err(ErrorData::internal_error(
+                    format!(
+                        "tool '{name}' exceeded its {}s watchdog and was abandoned. \
+                         The MCP server is still running — retry or narrow the request.",
+                        limit.as_secs()
+                    ),
+                    None,
+                ))
+            }
+        }
+    }
+
+    /// Collapse a `spawn_blocking` join result into the handler result.
+    /// A `JoinError` (handler panic) becomes a clean error instead of crashing
+    /// the request task.
+    fn unwrap_join(
+        name: &str,
+        joined: Result<Result<ToolOutput, ErrorData>, tokio::task::JoinError>,
+    ) -> Result<ToolOutput, ErrorData> {
+        match joined {
+            Ok(inner) => inner,
+            Err(join_err) => {
+                tracing::error!(
+                    tool = name,
+                    is_panic = join_err.is_panic(),
+                    "tool handler did not complete (panic isolated on the blocking pool)"
+                );
+                Err(ErrorData::internal_error(
+                    format!(
+                        "tool '{name}' failed unexpectedly. The MCP server is still running \
+                         — retry or use a different approach."
+                    ),
+                    None,
+                ))
+            }
+        }
+    }
+
+    /// Watchdog deadline for a single tool handler, or `None` to disable it.
+    ///
+    /// `ctx_shell` / `ctx_execute` run arbitrary user commands (builds, long
+    /// test suites) and already enforce their own command timeouts, so a generic
+    /// watchdog would wrongly abort a legitimate long-running command. Every
+    /// other tool is bounded so a hang can never swallow the JSON-RPC response.
+    /// Tunable via `LEAN_CTX_TOOL_TIMEOUT_SECS` (`0` disables the watchdog).
+    fn handler_watchdog(name: &str) -> Option<Duration> {
+        if super::is_shell_tool_name(name) {
+            return None;
+        }
+        watchdog_from_secs(read_watchdog_secs())
+    }
+}
+
+/// Read the configured watchdog budget in seconds (defaults to
+/// [`DEFAULT_TOOL_TIMEOUT_SECS`]). Kept separate from the policy so the pure
+/// `secs -> Option<Duration>` mapping stays trivially testable.
+fn read_watchdog_secs() -> u64 {
+    std::env::var("LEAN_CTX_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_TOOL_TIMEOUT_SECS)
+}
+
+/// Map a watchdog budget in seconds to a duration; `0` disables the watchdog.
+fn watchdog_from_secs(secs: u64) -> Option<Duration> {
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 const REFERENCE_THRESHOLD: usize = 4000;
+
+/// Default per-tool watchdog budget (#271). Long enough that no legitimate
+/// read/search/graph call ever hits it, short enough that a hang degrades to a
+/// clean error instead of a dropped request.
+const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 120;
 
 const PATH_LIKE_KEYS: &[&str] = &[
     "path",
@@ -414,6 +544,88 @@ mod tests {
         assert!(
             PATH_LIKE_KEYS.len() >= 3,
             "PATH_LIKE_KEYS must have at least the 3 primary keys"
+        );
+    }
+
+    #[test]
+    fn watchdog_disabled_for_long_running_shell_tools() {
+        assert!(
+            LeanCtxServer::handler_watchdog("ctx_shell").is_none(),
+            "ctx_shell runs arbitrary user commands and must not be watchdog-bounded"
+        );
+        assert!(
+            LeanCtxServer::handler_watchdog("ctx_execute").is_none(),
+            "ctx_execute must not be watchdog-bounded"
+        );
+    }
+
+    #[test]
+    fn watchdog_from_secs_zero_disables() {
+        assert!(watchdog_from_secs(0).is_none());
+    }
+
+    #[test]
+    fn watchdog_from_secs_positive_maps_to_duration() {
+        assert_eq!(watchdog_from_secs(5).unwrap().as_secs(), 5);
+        assert_eq!(
+            watchdog_from_secs(DEFAULT_TOOL_TIMEOUT_SECS)
+                .unwrap()
+                .as_secs(),
+            120
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watchdog_returns_error_on_hung_handler() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // A hung handler must surface as a clean error (not a dropped request),
+        // which is the core #271 guarantee. The stop flag lets the simulated
+        // hang exit promptly after the assertion so the runtime shuts down fast.
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop_in = stop.clone();
+        let join = tokio::task::spawn_blocking(move || {
+            for _ in 0..400 {
+                if stop_in.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(ToolOutput::simple("late".to_string()))
+        });
+        let start = std::time::Instant::now();
+        let result =
+            LeanCtxServer::watchdog_join("mock", join, Some(Duration::from_millis(200))).await;
+        let elapsed = start.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        assert!(result.is_err(), "hung handler must surface as an error");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "watchdog must fire promptly, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watchdog_passes_through_fast_handler() {
+        let join = tokio::task::spawn_blocking(|| Ok(ToolOutput::simple("ok".to_string())));
+        let result = LeanCtxServer::watchdog_join("mock", join, Some(Duration::from_secs(5))).await;
+        assert_eq!(result.unwrap().text, "ok");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watchdog_none_awaits_handler_to_completion() {
+        let join = tokio::task::spawn_blocking(|| Ok(ToolOutput::simple("ok".to_string())));
+        let result = LeanCtxServer::watchdog_join("ctx_shell", join, None).await;
+        assert_eq!(result.unwrap().text, "ok");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handler_panic_becomes_error_not_crash() {
+        let join: tokio::task::JoinHandle<Result<ToolOutput, ErrorData>> =
+            tokio::task::spawn_blocking(|| panic!("simulated handler panic"));
+        let result = LeanCtxServer::watchdog_join("mock", join, Some(Duration::from_secs(5))).await;
+        assert!(
+            result.is_err(),
+            "a handler panic must surface as an error; the server process survives"
         );
     }
 }
