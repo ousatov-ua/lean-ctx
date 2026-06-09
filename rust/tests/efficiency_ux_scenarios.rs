@@ -772,7 +772,7 @@ mod integration_workflow {
         let (result, _) = lean_ctx::tools::ctx_search::handle(
             "handler_",
             dir.path().to_str().unwrap(),
-            Some("rs"),
+            Some("*.rs"),
             50,
             CrpMode::Off,
             false,
