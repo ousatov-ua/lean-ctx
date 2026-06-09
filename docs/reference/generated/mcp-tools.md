@@ -276,7 +276,7 @@ Parameters: `action`*, `apply`, `author`, `base`, `depth`, `description`, `diff`
 
 Save or resume portable context packages — self-contained JSON bundles with session state, summaries, and knowledge. Use to hand off context between agents, persist session snapshots for later, or onboard a new agent into a previous session's context. Actions: save (export current session), resume (import from a package file), list (show saved packages), info (inspect a package without importing).
 
-Parameters: `action`*, `description`, `path`
+Parameters: `action`, `description`, `path`
 
 ## `ctx_plan`
 
