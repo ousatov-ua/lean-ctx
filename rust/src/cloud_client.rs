@@ -762,7 +762,7 @@ pub fn pull_knowledge() -> Result<Vec<serde_json::Value>, String> {
 mod tests {
     use super::*;
     use crate::core::billing::Plan;
-    use serial_test::serial;
+    use crate::core::data_dir::test_env_lock;
 
     #[test]
     fn grace_window_boundaries_are_inclusive_and_skew_safe() {
@@ -788,9 +788,9 @@ mod tests {
         assert_eq!(back.verified_at, 42);
     }
 
-    #[serial]
     #[test]
     fn cached_resolve_grants_within_grace_then_expires_to_free() {
+        let _env = test_env_lock();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
 
@@ -813,9 +813,9 @@ mod tests {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
 
-    #[serial]
     #[test]
     fn no_cache_resolves_to_free_none() {
+        let _env = test_env_lock();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
         let eff = resolve_effective_plan_cached();
@@ -824,9 +824,9 @@ mod tests {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
 
-    #[serial]
     #[test]
     fn legacy_plan_txt_is_migrated_but_treated_as_stale() {
+        let _env = test_env_lock();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
         // Only the legacy flat file exists (no timestamp) → past grace until refresh.
