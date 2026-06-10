@@ -40,9 +40,15 @@ pub fn vscode_settings_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "linux")]
     {
         if let Some(home) = dirs::home_dir() {
-            let p = home.join(".config/Code/User/settings.json");
-            if p.parent().is_some_and(std::path::Path::exists) {
-                return Some(p);
+            let paths = [
+                home.join(".config/Code/User/settings.json"),
+                home.join(".config/Code - Insiders/User/settings.json"),
+                home.join(".vscode-server/data/User/settings.json"),
+            ];
+            for p in paths {
+                if p.parent().is_some_and(std::path::Path::exists) {
+                    return Some(p);
+                }
             }
         }
     }

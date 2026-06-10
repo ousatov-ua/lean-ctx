@@ -119,6 +119,10 @@ impl McpTool for CtxEditTool {
             // Heavy disk I/O — no global cache lock held here.
             let (output, effect) = crate::tools::ctx_edit::run_io(&edit_params, &last_mode);
 
+            // Quality loop (#494): feed success/old_string-miss back into
+            // per-(ext × mode) stats and the one-shot read escalation.
+            crate::tools::ctx_edit::record_outcome(&edit_params, &last_mode, &output, &effect);
+
             // Apply the deferred cache mutation under a brief exclusive lock.
             if !matches!(effect, crate::tools::ctx_edit::CacheEffect::None) {
                 match rt.block_on(tokio::time::timeout(

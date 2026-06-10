@@ -445,6 +445,22 @@ fn detect_extension_installed(home: &Path, extension_id: &str) -> bool {
         {
             return true;
         }
+        if home
+            .join(format!(
+                ".config/Code - Insiders/User/globalStorage/{extension_id}"
+            ))
+            .exists()
+        {
+            return true;
+        }
+        if home
+            .join(format!(
+                ".vscode-server/data/User/globalStorage/{extension_id}"
+            ))
+            .exists()
+        {
+            return true;
+        }
     }
     #[cfg(target_os = "windows")]
     {
@@ -488,9 +504,15 @@ pub fn detect_vscode_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
         if let Some(home) = dirs::home_dir() {
-            let vscode = home.join(".config/Code/User/settings.json");
-            if vscode.exists() {
-                return vscode;
+            let paths = [
+                home.join(".config/Code/User/settings.json"),
+                home.join(".config/Code - Insiders/User/settings.json"),
+                home.join(".vscode-server/data/User/settings.json"),
+            ];
+            for vscode in paths {
+                if vscode.exists() {
+                    return vscode;
+                }
             }
         }
     }

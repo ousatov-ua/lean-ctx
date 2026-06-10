@@ -120,15 +120,25 @@ pub fn roo_mcp_path() -> PathBuf {
 }
 
 /// Resolves the correct VS Code-family base directory on Linux.
-/// Checks VSCodium, Code - OSS, and Code (in that order) — returns the first
-/// existing path, falling back to the standard `Code` path for fresh installs.
+/// Checks VSCodium, Code - OSS, Code, Code - Insiders, then the dev-container
+/// server dir (in that order) — returns the first existing path, falling back
+/// to the standard `Code` path for fresh installs. Most-specific first: a
+/// VSCodium user with a leftover `~/.config/Code` (one accidental Code launch
+/// is enough) must keep resolving to VSCodium. Dev containers use
+/// `.vscode-server/data` instead of `.config`, so we check both.
 #[cfg(target_os = "linux")]
 fn resolve_vscode_global_storage(home: &Path, suffix: &str) -> PathBuf {
-    const CANDIDATES: &[&str] = &["VSCodium", "Code - OSS", "Code"];
+    const CANDIDATES: &[&str] = &[
+        ".config/VSCodium",
+        ".config/Code - OSS",
+        ".config/Code",
+        ".config/Code - Insiders",
+        ".vscode-server/data",
+    ];
     for base in CANDIDATES {
-        let path = home.join(".config").join(base).join(suffix);
+        let path = home.join(base);
         if path.exists() {
-            return path;
+            return path.join(suffix);
         }
     }
     home.join(".config/Code").join(suffix)
@@ -211,6 +221,17 @@ pub fn augment_vscode_mcp_path(home: &Path) -> PathBuf {
     }
     #[cfg(target_os = "linux")]
     {
+        for path in [
+            ".config/Code/User",
+            ".config/Code - Insiders/User",
+            ".vscode-server/data/User",
+        ] {
+            let full_path = home.join(path).join(TAIL);
+            if full_path.exists() {
+                return full_path;
+            }
+        }
+        // Fall back to primary path if none exist
         return home.join(".config/Code/User").join(TAIL);
     }
     #[cfg(target_os = "windows")]

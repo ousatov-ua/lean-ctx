@@ -112,6 +112,7 @@ pub(super) fn run_mcp_server() -> Result<()> {
         core::heatmap::flush();
         core::path_mode_memory::flush();
         core::auto_mode_resolver::flush_sources();
+        core::edit_quality::flush();
         core::mode_predictor::ModePredictor::flush();
         core::feedback::FeedbackStore::flush();
 
@@ -189,6 +190,7 @@ fn spawn_parent_watchdog() {
                         core::heatmap::flush();
                         core::path_mode_memory::flush();
                         core::auto_mode_resolver::flush_sources();
+                        core::edit_quality::flush();
                         std::process::exit(0);
                     }
                 }

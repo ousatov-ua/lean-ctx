@@ -100,6 +100,23 @@ pub struct ResolvedMode {
 /// Single entry point for auto-mode resolution.
 /// Merges Pipeline A (select_mode_with_task) and Pipeline B (resolve_auto_mode).
 pub fn resolve(ctx: &AutoModeContext) -> ResolvedMode {
+    // Quality loop (#494), signal 1: an edit on this file just failed after a
+    // compressed read — the agent needs the real body now, one-shot.
+    if crate::core::edit_quality::take_pending_escalation(ctx.path) {
+        return resolved("full", "edit_fail_escalation");
+    }
+
+    let r = resolve_inner(ctx);
+
+    // Quality loop (#494), signal 2: this mode keeps producing edit failures
+    // for this file type — compression here is a proven net loss, use full.
+    if r.mode != "full" && crate::core::edit_quality::is_risky_mode(ctx.path, &r.mode) {
+        return resolved("full", "edit_quality_penalty");
+    }
+    r
+}
+
+fn resolve_inner(ctx: &AutoModeContext) -> ResolvedMode {
     if crate::tools::ctx_read::is_instruction_file(ctx.path) {
         return resolved("full", "instruction_file");
     }

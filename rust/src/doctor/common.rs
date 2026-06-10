@@ -325,10 +325,22 @@ pub(super) fn mcp_config_locations(home: &std::path::Path) -> Vec<McpLocation> {
     }
     #[cfg(target_os = "linux")]
     {
-        let vscode_mcp = home.join(".config/Code/User/mcp.json");
+        let user_dirs = [
+            home.join(".config/Code/User"),
+            home.join(".config/Code - Insiders/User"),
+            home.join(".vscode-server/data/User"),
+        ];
+        let user_dir = user_dirs
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .unwrap_or_else(|| user_dirs[0].clone());
+        let vscode_mcp = user_dir.join("mcp.json");
+        let display = vscode_mcp.strip_prefix(home).unwrap_or(&vscode_mcp);
+        let display_str = format!("~/{}", display.display());
         locations.push(McpLocation {
             name: "VS Code",
-            display: "~/.config/Code/User/mcp.json".into(),
+            display: display_str,
             path: vscode_mcp,
         });
     }

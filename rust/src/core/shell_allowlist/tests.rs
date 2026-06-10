@@ -127,6 +127,12 @@ fn redirect_2to1_not_treated_as_command() {
     let list = allow(&["pnpm", "echo"]);
     assert!(check_all_segments("pnpm run compile 2>&1", &list).is_ok());
     assert!(check_all_segments("pnpm run build 2>&1 && echo done", &list).is_ok());
+    // #384: exact reporter repros (3.6.26 predates the #334 fix) — pinned
+    // through the full entry point, not just the segment splitter.
+    assert!(check_all_segments("echo test 2>&1", &list).is_ok());
+    assert!(check_all_segments("echo test 1>&2", &list).is_ok());
+    assert_eq!(split_on_operators("echo test 2>&1").len(), 1);
+    assert_eq!(split_on_operators("echo test 1>&2").len(), 1);
 }
 
 #[test]

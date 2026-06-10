@@ -80,6 +80,12 @@ fn detect_vscode_installed(_home: &std::path::Path) -> bool {
     if check_dir(_home.join(".config/Code/User")) {
         return true;
     }
+    if check_dir(_home.join(".config/Code - Insiders/User")) {
+        return true;
+    }
+    if check_dir(_home.join(".vscode-server/data/User")) {
+        return true;
+    }
     #[cfg(target_os = "windows")]
     if let Ok(appdata) = std::env::var("APPDATA") {
         if check_dir(PathBuf::from(&appdata).join("Code/User")) {
@@ -117,6 +123,22 @@ fn detect_extension_installed(_home: &std::path::Path, extension_id: &str) -> bo
     {
         if _home
             .join(format!(".config/Code/User/globalStorage/{extension_id}"))
+            .exists()
+        {
+            return true;
+        }
+        if _home
+            .join(format!(
+                ".config/Code - Insiders/User/globalStorage/{extension_id}"
+            ))
+            .exists()
+        {
+            return true;
+        }
+        if _home
+            .join(format!(
+                ".vscode-server/data/User/globalStorage/{extension_id}"
+            ))
             .exists()
         {
             return true;

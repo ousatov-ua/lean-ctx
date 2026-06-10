@@ -208,6 +208,10 @@ pub fn contract_docs() -> Vec<ContractDoc> {
         doc("email-digest", "email-digest-v1.md", 1, Experimental),
         doc("org-audit-log", "org-audit-log-v1.md", 1, Experimental),
         doc("org-sso-oidc", "org-sso-oidc-v1.md", 1, Experimental),
+        // Quality loop (GL #494): edit-failure feedback into mode selection.
+        doc("quality-loop", "quality-loop-v1.md", 1, Experimental),
+        // Hosted ctxpkg registry (GL #406): fresh server surface.
+        doc("ctxpkg-registry", "ctxpkg-registry-v1.md", 1, Experimental),
         doc(
             "team-invite-links",
             "team-invite-links-v1.md",
