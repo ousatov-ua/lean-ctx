@@ -500,8 +500,14 @@ fn init_augment_installs_lean_ctx_mcp_into_dot_augment_settings() {
                     home.join(".config/Code - Insiders/User"),
                     home.join(".vscode-server/data/User"),
                 ];
-                let user_dir = user_dirs.iter().find(|p| p.exists()).cloned().unwrap_or_else(|| user_dirs[0].clone());
-                user_dir.join("globalStorage/augment.vscode-augment/augment-global-state/mcpServers.json")
+                let user_dir = user_dirs
+                    .iter()
+                    .find(|p| p.exists())
+                    .cloned()
+                    .unwrap_or_else(|| user_dirs[0].clone());
+                user_dir.join(
+                    "globalStorage/augment.vscode-augment/augment-global-state/mcpServers.json",
+                )
             }
             #[cfg(target_os = "macos")]
             {

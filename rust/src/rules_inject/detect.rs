@@ -128,13 +128,17 @@ fn detect_extension_installed(_home: &std::path::Path, extension_id: &str) -> bo
             return true;
         }
         if _home
-            .join(format!(".config/Code - Insiders/User/globalStorage/{extension_id}"))
+            .join(format!(
+                ".config/Code - Insiders/User/globalStorage/{extension_id}"
+            ))
             .exists()
         {
             return true;
         }
         if _home
-            .join(format!(".vscode-server/data/User/globalStorage/{extension_id}"))
+            .join(format!(
+                ".vscode-server/data/User/globalStorage/{extension_id}"
+            ))
             .exists()
         {
             return true;

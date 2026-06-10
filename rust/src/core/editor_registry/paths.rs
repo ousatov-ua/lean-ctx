@@ -130,7 +130,7 @@ fn resolve_vscode_global_storage(home: &Path, suffix: &str) -> PathBuf {
         ".config/Code - Insiders",
         ".config/Code - OSS",
         ".config/VSCodium",
-        ".vscode-server/data"
+        ".vscode-server/data",
     ];
     for base in CANDIDATES {
         let path = home.join(base);

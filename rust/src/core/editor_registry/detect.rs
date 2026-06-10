@@ -446,13 +446,17 @@ fn detect_extension_installed(home: &Path, extension_id: &str) -> bool {
             return true;
         }
         if home
-            .join(format!(".config/Code - Insiders/User/globalStorage/{extension_id}"))
+            .join(format!(
+                ".config/Code - Insiders/User/globalStorage/{extension_id}"
+            ))
             .exists()
         {
             return true;
         }
         if home
-            .join(format!(".vscode-server/data/User/globalStorage/{extension_id}"))
+            .join(format!(
+                ".vscode-server/data/User/globalStorage/{extension_id}"
+            ))
             .exists()
         {
             return true;
