@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from .client import LeanCtxClient
 from .conformance import (
+    COVERED_ROUTES,
+    SUPPORTED_HTTP_CONTRACT_VERSIONS,
     ConformanceCheck,
     ConformanceScorecard,
     run_conformance,
@@ -32,5 +34,7 @@ __all__ = [
     "run_conformance",
     "ConformanceCheck",
     "ConformanceScorecard",
+    "COVERED_ROUTES",
+    "SUPPORTED_HTTP_CONTRACT_VERSIONS",
     "__version__",
 ]

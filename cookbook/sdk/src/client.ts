@@ -2,9 +2,9 @@ import { LeanCtxHttpError } from "./errors.js";
 import { toolResultToText } from "./toolText.js";
 import type {
   CapabilitiesV1,
+  ContextEventV1,
   JsonObject,
   JsonValue,
-  ContextEventV1,
   ListToolsResponse,
   ToolArguments,
   ToolCallResponse,
@@ -142,6 +142,94 @@ export class LeanCtxClient {
   ): Promise<string> {
     const result = await this.callToolResult(name, args, ctx);
     return toolResultToText(result);
+  }
+
+  /** Materialized workspace/channel summary (`GET /v1/context/summary`). */
+  async contextSummary(params?: {
+    workspaceId?: string;
+    channelId?: string;
+    limit?: number;
+  }): Promise<JsonObject> {
+    const q = new URLSearchParams();
+    const ws = params?.workspaceId?.trim() || this.workspaceId;
+    const ch = params?.channelId?.trim() || this.channelId;
+    if (ws) q.set("workspaceId", ws);
+    if (ch) q.set("channelId", ch);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    const suffix = q.toString() ? `?${q}` : "";
+    const v = await this.getJson(`/v1/context/summary${suffix}`);
+    if (!isJsonObject(v)) {
+      throw new Error(
+        "LeanCtxClient.contextSummary: unexpected response shape"
+      );
+    }
+    return v;
+  }
+
+  /** Full-text search over event payloads (`GET /v1/events/search`). */
+  async searchEvents(
+    query: string,
+    params?: { workspaceId?: string; channelId?: string; limit?: number }
+  ): Promise<JsonObject> {
+    if (!query) {
+      throw new Error("LeanCtxClient.searchEvents: query is required");
+    }
+    const q = new URLSearchParams({ q: query });
+    const ws = params?.workspaceId?.trim() || this.workspaceId;
+    const ch = params?.channelId?.trim() || this.channelId;
+    if (ws) q.set("workspaceId", ws);
+    if (ch) q.set("channelId", ch);
+    if (params?.limit !== undefined) q.set("limit", String(params.limit));
+    const v = await this.getJson(`/v1/events/search?${q}`);
+    if (!isJsonObject(v)) {
+      throw new Error("LeanCtxClient.searchEvents: unexpected response shape");
+    }
+    return v;
+  }
+
+  /** Causal lineage chain for an event (`GET /v1/events/lineage`). */
+  async eventLineage(
+    eventId: number,
+    params?: { depth?: number; workspaceId?: string }
+  ): Promise<JsonObject> {
+    const q = new URLSearchParams({ id: String(eventId) });
+    if (params?.depth !== undefined) q.set("depth", String(params.depth));
+    const ws = params?.workspaceId?.trim() || this.workspaceId;
+    if (ws) q.set("workspaceId", ws);
+    const v = await this.getJson(`/v1/events/lineage?${q}`);
+    if (!isJsonObject(v)) {
+      throw new Error("LeanCtxClient.eventLineage: unexpected response shape");
+    }
+    return v;
+  }
+
+  /** JSON metrics snapshot (`GET /v1/metrics`). */
+  async metrics(): Promise<JsonObject> {
+    const v = await this.getJson("/v1/metrics");
+    if (!isJsonObject(v)) {
+      throw new Error("LeanCtxClient.metrics: unexpected response shape");
+    }
+    return v;
+  }
+
+  /**
+   * Open `GET /v1/events` and return its `Content-Type` header.
+   *
+   * Resolves as soon as response headers arrive (the body is cancelled, never
+   * read), so it cannot block on an idle stream. Used by the conformance kit
+   * to prove the SSE endpoint exists and speaks `text/event-stream`.
+   */
+  async eventsProbe(): Promise<string> {
+    const res = await this.fetchImpl(`${this.baseUrl}/v1/events?limit=1`, {
+      method: "GET",
+      headers: this.authHeaders({ accept: "text/event-stream" }),
+    });
+    if (!res.ok) {
+      throw await this.toHttpError(res, "GET", "/v1/events");
+    }
+    const contentType = res.headers.get("content-type") ?? "";
+    await res.body?.cancel().catch(() => undefined);
+    return contentType;
   }
 
   async *subscribeEvents(params?: {
@@ -282,7 +370,8 @@ function parseSseChunk(
     if (trimmed.startsWith(":")) continue; // comment
     if (trimmed.startsWith("id:")) out.id = trimmed.slice(3).trim();
     else if (trimmed.startsWith("event:")) out.event = trimmed.slice(6).trim();
-    else if (trimmed.startsWith("data:")) dataLines.push(trimmed.slice(5).trimStart());
+    else if (trimmed.startsWith("data:"))
+      dataLines.push(trimmed.slice(5).trimStart());
   }
   if (dataLines.length) out.data = dataLines.join("\n");
   return out;

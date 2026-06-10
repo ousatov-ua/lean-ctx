@@ -31,10 +31,23 @@
 //!
 //! ## What it covers
 //!
+//! The **entire** public `/v1` surface (verified by [`run_conformance`] and
+//! the `sdk-conformance` CI job, GL #395):
+//!
 //! - `GET /health`, `GET /v1/manifest`, `GET /v1/capabilities`,
 //!   `GET /v1/openapi.json`
 //! - `GET /v1/tools` (paginated) and `POST /v1/tools/call`
 //! - `GET /v1/events` as a blocking [`EventStream`] iterator (SSE)
+//! - `GET /v1/context/summary`, `GET /v1/events/search`,
+//!   `GET /v1/events/lineage`, `GET /v1/metrics`
+//!
+//! ## SemVer coupling
+//!
+//! This crate's major version follows the engine's `http_mcp` contract major
+//! ([`SUPPORTED_HTTP_CONTRACT_VERSIONS`]). The conformance kit's
+//! `engine_compat` check fails when a server speaks a contract this release
+//! does not support; `route_coverage` fails when the server adds a `/v1`
+//! route this client does not cover.
 //!
 //! All open-ended documents (`manifest`, `capabilities`, `openapi.json`) are
 //! returned as [`serde_json::Value`], so adding server keys never breaks a
@@ -67,12 +80,17 @@
 #![forbid(unsafe_code)]
 
 mod client;
+mod conformance;
 mod error;
 mod events;
 mod tool_text;
 mod types;
 
 pub use client::{EventQuery, LeanCtxClient, LeanCtxClientBuilder};
+pub use conformance::{
+    run_conformance, ConformanceCheck, ConformanceScorecard, COVERED_ROUTES,
+    SUPPORTED_HTTP_CONTRACT_VERSIONS,
+};
 pub use error::{HttpError, LeanCtxError, Result};
 pub use events::EventStream;
 pub use tool_text::tool_result_to_text;

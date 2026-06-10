@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **SDK conformance matrix** (GL #395): all three first-party SDKs (`leanctx`
+  on PyPI, `@leanctx/sdk` on npm, `lean-ctx-client` on crates.io) now cover the
+  **entire** public `/v1` surface — added `context_summary`, `search_events`,
+  `event_lineage` and `metrics` to every client. The shared conformance kit
+  grows from 4 to 14 lockstep checks, including two drift gates:
+  `route_coverage` (a server route without an SDK method fails within one CI
+  run) and `engine_compat` (SDK declares its supported `http_mcp` contract
+  versions). New CI job `sdk-conformance` runs all three kits against a real
+  `lean-ctx serve` build via `scripts/sdk-conformance.sh` and publishes
+  `docs/reference/sdk-conformance-matrix.md` (current state: 3/3 SDKs,
+  14/14 checks PASS). SDK majors follow the engine contract major.
 - **Contract freeze & SemVer/deprecation policy** (GL #394): all 29 contract
   docs are now classified `frozen` / `stable` / `experimental` in a stability
   matrix (CONTRACTS.md, SSOT `core/contracts.rs::contract_docs()`). Two new CI

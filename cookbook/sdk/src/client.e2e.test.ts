@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -37,7 +37,10 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForHealthy(baseUrl: string, timeoutMs: number): Promise<void> {
+async function waitForHealthy(
+  baseUrl: string,
+  timeoutMs: number
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
@@ -48,7 +51,9 @@ async function waitForHealthy(baseUrl: string, timeoutMs: number): Promise<void>
     }
     await sleep(50);
   }
-  throw new Error(`lean-ctx server did not become healthy within ${timeoutMs}ms`);
+  throw new Error(
+    `lean-ctx server did not become healthy within ${timeoutMs}ms`
+  );
 }
 
 function startLeanCtxServer(opts: {
@@ -96,67 +101,62 @@ function startLeanCtxServer(opts: {
 }
 
 describe("LeanCtxClient E2E (real server)", () => {
-  it(
-    "calls health/manifest/tools/call and surfaces typed error codes",
-    async () => {
-      const repoRoot = repoRootFromHere();
-      const binPath =
-        process.env.LEAN_CTX_BIN?.trim() ||
-        path.join(repoRoot, "rust/target/debug/lean-ctx");
+  it("calls health/manifest/tools/call and surfaces typed error codes", async () => {
+    const repoRoot = repoRootFromHere();
+    const binPath =
+      process.env.LEAN_CTX_BIN?.trim() ||
+      path.join(repoRoot, "rust/target/debug/lean-ctx");
 
-      if (!fs.existsSync(binPath)) {
-        console.warn(
-          `Skipping E2E: lean-ctx binary not found at ${binPath}. Build with: (cd rust && cargo build --all-features)`
-        );
-        return;
-      }
+    if (!fs.existsSync(binPath)) {
+      console.warn(
+        `Skipping E2E: lean-ctx binary not found at ${binPath}. Build with: (cd rust && cargo build --all-features)`
+      );
+      return;
+    }
 
-      const port = await findFreePort();
-      const { proc, baseUrl, stop } = startLeanCtxServer({
-        binPath,
-        port,
-        projectRoot: repoRoot,
-        authToken: "test-token",
-      });
+    const port = await findFreePort();
+    const { proc, baseUrl, stop } = startLeanCtxServer({
+      binPath,
+      port,
+      projectRoot: repoRoot,
+      authToken: "test-token",
+    });
+
+    try {
+      await waitForHealthy(baseUrl, 10_000);
+
+      const unauth = new LeanCtxClient({ baseUrl });
+      const ok = await unauth.health();
+      expect(ok).toContain("ok");
 
       try {
-        await waitForHealthy(baseUrl, 10_000);
-
-        const unauth = new LeanCtxClient({ baseUrl });
-        const ok = await unauth.health();
-        expect(ok).toContain("ok");
-
-        try {
-          await unauth.manifest();
-          throw new Error("expected unauthorized manifest request to throw");
-        } catch (e) {
-          expect(e).toBeInstanceOf(LeanCtxHttpError);
-          const err = e as LeanCtxHttpError;
-          expect(err.status).toBe(401);
-          expect(err.errorCode).toBe("unauthorized");
-        }
-
-        const c = new LeanCtxClient({ baseUrl, bearerToken: "test-token" });
-        const manifest = await c.manifest();
-        expect(manifest).toBeTruthy();
-
-        const tools = await c.listTools({ offset: 0, limit: 10 });
-        expect(Array.isArray(tools.tools)).toBe(true);
-        expect(typeof tools.total).toBe("number");
-        expect(tools.total).toBeGreaterThan(0);
-
-        const text = await c.callToolText("ctx_read", {
-          path: "docs/contracts/http-mcp-contract-v1.md",
-          mode: "lines:1-10",
-        });
-        expect(text).toContain("HTTP-MCP Contract v1");
-      } finally {
-        await stop();
-        proc.stdout?.destroy();
-        proc.stderr?.destroy();
+        await unauth.manifest();
+        throw new Error("expected unauthorized manifest request to throw");
+      } catch (e) {
+        expect(e).toBeInstanceOf(LeanCtxHttpError);
+        const err = e as LeanCtxHttpError;
+        expect(err.status).toBe(401);
+        expect(err.errorCode).toBe("unauthorized");
       }
-    },
-    60_000
-  );
-});
 
+      const c = new LeanCtxClient({ baseUrl, bearerToken: "test-token" });
+      const manifest = await c.manifest();
+      expect(manifest).toBeTruthy();
+
+      const tools = await c.listTools({ offset: 0, limit: 10 });
+      expect(Array.isArray(tools.tools)).toBe(true);
+      expect(typeof tools.total).toBe("number");
+      expect(tools.total).toBeGreaterThan(0);
+
+      const text = await c.callToolText("ctx_read", {
+        path: "docs/contracts/http-mcp-contract-v1.md",
+        mode: "lines:1-10",
+      });
+      expect(text).toContain("HTTP-MCP Contract v1");
+    } finally {
+      await stop();
+      proc.stdout?.destroy();
+      proc.stderr?.destroy();
+    }
+  }, 60_000);
+});

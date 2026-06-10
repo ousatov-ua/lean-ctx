@@ -31,7 +31,8 @@ describe("LeanCtxClient", () => {
   });
 
   it("includes workspaceId/channelId in tool calls and headers", async () => {
-    const calls: Array<{ url: string; init?: RequestInit; body?: unknown }> = [];
+    const calls: Array<{ url: string; init?: RequestInit; body?: unknown }> =
+      [];
     const fetchImpl: typeof fetch = async (url, init) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ url: String(url), init, body });
@@ -53,7 +54,9 @@ describe("LeanCtxClient", () => {
     expect(calls[0]?.url).toBe("http://127.0.0.1:8080/v1/tools/call");
     expect((calls[0]?.body as any)?.workspaceId).toBe("ws1");
     expect((calls[0]?.body as any)?.channelId).toBe("ch1");
-    expect((calls[0]?.init?.headers as any)?.["x-leanctx-workspace"]).toBe("ws1");
+    expect((calls[0]?.init?.headers as any)?.["x-leanctx-workspace"]).toBe(
+      "ws1"
+    );
   });
 
   it("subscribes to /v1/events and parses SSE events", async () => {
@@ -89,7 +92,9 @@ describe("LeanCtxClient", () => {
       workspaceId: "ws1",
       channelId: "ch1",
     });
-    const it = c.subscribeEvents({ since: 5, limit: 1 })[Symbol.asyncIterator]();
+    const it = c
+      .subscribeEvents({ since: 5, limit: 1 })
+      [Symbol.asyncIterator]();
     const first = await it.next();
     expect(first.done).toBe(false);
     expect(first.value.kind).toBe("tool_call_recorded");

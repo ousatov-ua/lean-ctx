@@ -106,6 +106,69 @@ class LeanCtxClient:
         """Call a tool and flatten its result into text."""
         return tool_result_to_text(self.call_tool(name, arguments, **ctx))
 
+    # -- context views -------------------------------------------------------
+
+    def context_summary(
+        self,
+        *,
+        workspace_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Materialized workspace/channel summary (``GET /v1/context/summary``)."""
+        query: Dict[str, str] = {}
+        ws = (workspace_id or "").strip() or self._workspace_id
+        ch = (channel_id or "").strip() or self._channel_id
+        if ws:
+            query["workspaceId"] = ws
+        if ch:
+            query["channelId"] = ch
+        if limit is not None:
+            query["limit"] = str(limit)
+        return self._get_json("/v1/context/summary", query)
+
+    def search_events(
+        self,
+        q: str,
+        *,
+        workspace_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Full-text search over event payloads (``GET /v1/events/search``)."""
+        if not q:
+            raise LeanCtxConfigError("search query is required")
+        query: Dict[str, str] = {"q": q}
+        ws = (workspace_id or "").strip() or self._workspace_id
+        ch = (channel_id or "").strip() or self._channel_id
+        if ws:
+            query["workspaceId"] = ws
+        if ch:
+            query["channelId"] = ch
+        if limit is not None:
+            query["limit"] = str(limit)
+        return self._get_json("/v1/events/search", query)
+
+    def event_lineage(
+        self,
+        event_id: int,
+        *,
+        depth: Optional[int] = None,
+        workspace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Causal lineage chain for an event (``GET /v1/events/lineage``)."""
+        query: Dict[str, str] = {"id": str(event_id)}
+        if depth is not None:
+            query["depth"] = str(depth)
+        ws = (workspace_id or "").strip() or self._workspace_id
+        if ws:
+            query["workspaceId"] = ws
+        return self._get_json("/v1/events/lineage", query)
+
+    def metrics(self) -> Dict[str, Any]:
+        """JSON metrics snapshot (``GET /v1/metrics``)."""
+        return self._get_json("/v1/metrics")
+
     # -- events (SSE) ------------------------------------------------------
 
     def subscribe_events(
@@ -154,6 +217,25 @@ class LeanCtxClient:
                         continue
                     if isinstance(event, dict):
                         yield event
+
+    def events_probe(self) -> str:
+        """Open ``GET /v1/events`` and return its ``Content-Type`` header.
+
+        Returns as soon as response headers arrive (the body is never read),
+        so it cannot block on an idle stream. Used by the conformance kit to
+        prove the SSE endpoint exists and speaks ``text/event-stream``.
+        """
+        req = self._build_request(
+            "GET", "/v1/events", {"limit": "1"}, accept="text/event-stream"
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=self._timeout)
+        except urllib.error.HTTPError as exc:
+            raise self._http_error_from(exc, "GET", "/v1/events") from exc
+        except urllib.error.URLError as exc:
+            raise LeanCtxTransportError(str(exc.reason)) from exc
+        with resp:
+            return resp.headers.get("content-type", "") or ""
 
     # -- internals ---------------------------------------------------------
 

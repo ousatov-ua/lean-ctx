@@ -37,9 +37,11 @@ export interface CapabilitiesV1 {
   features: JsonObject;
   extensions: JsonObject;
   contracts: JsonObject;
+  /** Stability per contract doc: id → frozen|stable|experimental (GL #394). */
+  contract_status?: Record<string, string>;
 }
 
-export type ConsistencyLevel = 'local' | 'eventual' | 'strong';
+export type ConsistencyLevel = "local" | "eventual" | "strong";
 
 export interface ContextEventV1 {
   id: number;

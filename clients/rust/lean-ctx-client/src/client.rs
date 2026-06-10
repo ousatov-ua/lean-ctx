@@ -220,6 +220,120 @@ impl LeanCtxClient {
         }
     }
 
+    /// `GET /v1/context/summary` — materialized workspace/channel summary.
+    ///
+    /// # Errors
+    /// [`LeanCtxError`] on transport failure, non-2xx status, or decode failure.
+    pub fn context_summary(
+        &self,
+        workspace_id: Option<&str>,
+        channel_id: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Value> {
+        let mut q = Vec::new();
+        let ws = workspace_id
+            .map(str::to_string)
+            .or_else(|| self.workspace_id.clone());
+        let ch = channel_id
+            .map(str::to_string)
+            .or_else(|| self.channel_id.clone());
+        if let Some(w) = ws {
+            q.push(("workspaceId".to_string(), w));
+        }
+        if let Some(c) = ch {
+            q.push(("channelId".to_string(), c));
+        }
+        if let Some(l) = limit {
+            q.push(("limit".to_string(), l.to_string()));
+        }
+        self.get_json(&format!("/v1/context/summary{}", encode_query(&q)))
+    }
+
+    /// `GET /v1/events/search` — full-text search over event payloads.
+    ///
+    /// # Errors
+    /// [`LeanCtxError::Config`] when `query` is empty; otherwise
+    /// [`LeanCtxError`] on transport failure, non-2xx status, or decode failure.
+    pub fn search_events(
+        &self,
+        query: &str,
+        workspace_id: Option<&str>,
+        channel_id: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Value> {
+        if query.is_empty() {
+            return Err(LeanCtxError::Config("search query is required".to_string()));
+        }
+        let mut q = vec![("q".to_string(), query.to_string())];
+        let ws = workspace_id
+            .map(str::to_string)
+            .or_else(|| self.workspace_id.clone());
+        let ch = channel_id
+            .map(str::to_string)
+            .or_else(|| self.channel_id.clone());
+        if let Some(w) = ws {
+            q.push(("workspaceId".to_string(), w));
+        }
+        if let Some(c) = ch {
+            q.push(("channelId".to_string(), c));
+        }
+        if let Some(l) = limit {
+            q.push(("limit".to_string(), l.to_string()));
+        }
+        self.get_json(&format!("/v1/events/search{}", encode_query(&q)))
+    }
+
+    /// `GET /v1/events/lineage` — causal lineage chain for an event.
+    ///
+    /// # Errors
+    /// [`LeanCtxError`] on transport failure, non-2xx status, or decode failure.
+    pub fn event_lineage(
+        &self,
+        event_id: i64,
+        depth: Option<u64>,
+        workspace_id: Option<&str>,
+    ) -> Result<Value> {
+        let mut q = vec![("id".to_string(), event_id.to_string())];
+        if let Some(d) = depth {
+            q.push(("depth".to_string(), d.to_string()));
+        }
+        let ws = workspace_id
+            .map(str::to_string)
+            .or_else(|| self.workspace_id.clone());
+        if let Some(w) = ws {
+            q.push(("workspaceId".to_string(), w));
+        }
+        self.get_json(&format!("/v1/events/lineage{}", encode_query(&q)))
+    }
+
+    /// `GET /v1/metrics` — JSON metrics snapshot.
+    ///
+    /// # Errors
+    /// [`LeanCtxError`] on transport failure, non-2xx status, or decode failure.
+    pub fn metrics(&self) -> Result<Value> {
+        self.get_json("/v1/metrics")
+    }
+
+    /// Open `GET /v1/events` and return its `Content-Type` header.
+    ///
+    /// Returns as soon as response headers arrive (the body is never read),
+    /// so it cannot block on an idle stream. Used by the conformance kit to
+    /// prove the SSE endpoint exists and speaks `text/event-stream`.
+    ///
+    /// # Errors
+    /// [`LeanCtxError`] on transport failure or non-2xx status.
+    pub fn events_probe(&self) -> Result<String> {
+        let url = self.url("/v1/events?limit=1");
+        let req = self.with_auth(
+            self.agent.get(&url).set("Accept", "text/event-stream"),
+            None,
+        );
+        match req.call() {
+            Ok(resp) => Ok(resp.content_type().to_string()),
+            Err(e) => Err(self.map_err("GET", url, e)),
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
