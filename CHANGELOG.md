@@ -18,6 +18,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   timestamps are local wall-clock and are now interpreted as such).
 
 ### Added
+- **Device overview** (GL #387): every authenticated Personal-Cloud push now
+  carries an `X-Device-Label` header (the machine's hostname), tracked
+  server-side as fire-and-forget display metadata — never auth, quota, or
+  billing input. `/account/cloud` lists each machine with last sync, last
+  surface and push count, plus a per-row Forget control
+  (`GET/DELETE /api/account/devices`). Contract:
+  `docs/contracts/device-overview-v1.md`.
 - **Supporters wall + dashboard badge** (GL #393): the public supporters wall
   is live end-to-end — Stripe checkout fields (display name, message, opt-in)
   are captured idempotently by the billing webhook, clamped to 60/140 chars,

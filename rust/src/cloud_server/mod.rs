@@ -7,6 +7,7 @@ mod commands;
 mod config;
 mod contribute;
 mod db;
+mod devices;
 mod digest;
 mod feedback;
 mod gain;
@@ -165,6 +166,14 @@ pub async fn run() -> anyhow::Result<()> {
         // privacy-preserving footprint of what the account has synced. Drives
         // the dashboard-vs-upsell split on /account/cloud for every plan.
         .route("/api/account/cloud", get(account_cloud::get_account_cloud))
+        // Device overview (GL #387): list machines that synced (from the
+        // X-Device-Label header on pushes) + forget a stale row. Display
+        // metadata only — no auth or quota semantics attached to a device.
+        .route("/api/account/devices", get(devices::list_devices))
+        .route(
+            "/api/account/devices/{label}",
+            delete(devices::forget_device),
+        )
         // Hosted Team server dashboard: proxy status + token management to the
         // private plane on behalf of the logged-in owner. 503 when billing is
         // unset; 404 (from the plane) until a Team subscription provisions one.

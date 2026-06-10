@@ -148,6 +148,14 @@ fn now_unix() -> i64 {
         .as_secs() as i64
 }
 
+/// This machine's display label for the device overview (GL #387): the
+/// hostname, attached as `X-Device-Label` to every sync push. Display
+/// metadata only — the server treats it as an opaque, sanitized string and
+/// silently skips tracking when it is empty.
+fn device_label() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
+}
+
 fn auth_bearer_token() -> Result<String, String> {
     let mut creds = load_credentials().ok_or("Not logged in. Run: lean-ctx login")?;
 
@@ -357,6 +365,7 @@ pub fn sync_stats(stats: &[serde_json::Value]) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(&body).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Sync failed: {e}"))?;
 
@@ -450,6 +459,7 @@ pub fn push_knowledge(entries: &[serde_json::Value]) -> Result<String, String> {
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/octet-stream")
         .header("X-Entry-Count", &entries.len().to_string())
+        .header("X-Device-Label", &device_label())
         .send(blob.as_slice())
         .map_err(|e| format!("Push failed: {e}"))?;
 
@@ -709,6 +719,7 @@ pub fn push_commands(entries: &[serde_json::Value]) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(&body).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -730,6 +741,7 @@ pub fn push_cep(entries: &[serde_json::Value]) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(&body).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -751,6 +763,7 @@ pub fn push_gain(entries: &[serde_json::Value]) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(&body).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -779,6 +792,7 @@ pub fn push_gotchas(entries: &[serde_json::Value]) -> Result<String, String> {
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/octet-stream")
         .header("X-Entry-Count", &entries.len().to_string())
+        .header("X-Device-Label", &device_label())
         .send(blob.as_slice())
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -811,6 +825,7 @@ pub fn push_buddy(data: &serde_json::Value) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(data).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -828,6 +843,7 @@ pub fn push_feedback(entries: &[serde_json::Value]) -> Result<String, String> {
     let resp = ureq::post(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/json")
+        .header("X-Device-Label", &device_label())
         .send(&serde_json::to_vec(entries).map_err(|e| format!("JSON error: {e}"))?)
         .map_err(|e| format!("Push failed: {e}"))?;
     let resp_body = resp
@@ -952,6 +968,7 @@ pub fn push_index_bundle(project_root: &std::path::Path) -> Result<(String, u64)
     let resp = ureq::put(&url)
         .header("Authorization", &format!("Bearer {bearer}"))
         .header("Content-Type", "application/octet-stream")
+        .header("X-Device-Label", &device_label())
         .send(blob.as_slice())
         .map_err(|e| match e {
             ureq::Error::StatusCode(402) => {

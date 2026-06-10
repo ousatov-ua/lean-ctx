@@ -100,6 +100,7 @@ pub(super) async fn put_bundle(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _email) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "index");
     if !valid_project_hash(&project_hash) {
         return Err((StatusCode::BAD_REQUEST, "invalid project hash".into()));
     }

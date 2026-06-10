@@ -56,6 +56,7 @@ pub(super) async fn post_knowledge(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, email) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "knowledge");
 
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)

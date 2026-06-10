@@ -60,6 +60,7 @@ pub(super) async fn post_gotchas(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "gotchas");
 
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)

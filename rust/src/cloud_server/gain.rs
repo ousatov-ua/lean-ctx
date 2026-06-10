@@ -51,6 +51,7 @@ pub(super) async fn post_gain(
     Json(body): Json<GainEnvelope>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "gain");
     let client = state.pool.get().await.map_err(internal_error)?;
 
     let mut synced = 0i64;

@@ -33,6 +33,7 @@ pub(super) async fn post_feedback(
     Json(body): Json<Vec<FeedbackEntry>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "feedback");
     let client = state.pool.get().await.map_err(internal_error)?;
 
     let mut count = 0u32;

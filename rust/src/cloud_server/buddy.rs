@@ -12,6 +12,7 @@ pub(super) async fn post_buddy(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "buddy");
     let client = state.pool.get().await.map_err(internal_error)?;
 
     let name = body["name"].as_str().map(std::string::ToString::to_string);

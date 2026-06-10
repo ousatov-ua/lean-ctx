@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS digest_log (
   PRIMARY KEY (user_id, kind, period_key)
 );
 
+-- Device overview (GL #387): one row per (user, device label), upserted as a
+-- side effect of every authenticated sync push that carries X-Device-Label.
+-- Pure display metadata — labels are client-chosen hostnames, never identity.
+CREATE TABLE IF NOT EXISTS devices (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_label TEXT NOT NULL,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_surface TEXT,
+  sync_count BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, device_label)
+);
+
 CREATE TABLE IF NOT EXISTS email_verifications (
   token_sha256 TEXT PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

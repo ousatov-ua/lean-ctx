@@ -75,6 +75,7 @@ pub(super) async fn post_stats(
     Json(env): Json<StatsEnvelope>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _email) = auth_user(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "stats");
     for entry in env.stats {
         upsert_daily(&state, user_id, entry).await?;
     }

@@ -43,6 +43,7 @@ pub(super) async fn post_commands(
     Json(body): Json<CommandsEnvelope>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let (user_id, _) = require_cloud_sync(&state, &headers).await?;
+    super::devices::track(&state, user_id, &headers, "commands");
     let client = state.pool.get().await.map_err(internal_error)?;
 
     for cmd in &body.commands {
