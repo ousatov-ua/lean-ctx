@@ -43,12 +43,6 @@ function ckgLangFromPath(path) {
   return CKG_EXT_LANG[path.slice(dot + 1).toLowerCase()] || '';
 }
 
-var CKG_TABS = [
-  { id: 'deps', label: 'Dependencies' },
-  { id: 'callgraph', label: 'Call Graph' },
-  { id: 'symbols', label: 'Symbols' },
-];
-
 function ckgApi() {
   return window.LctxApi && window.LctxApi.apiFetch ? window.LctxApi.apiFetch : null;
 }
@@ -236,9 +230,6 @@ class CockpitGraph extends HTMLElement {
   /* ---- chrome ---- */
 
   render() {
-    var F = ckgFmt();
-    var esc = F.esc || function (s) { return String(s); };
-
     if (this._loading) {
       this.innerHTML =
         '<div class="card"><div class="loading-state">Loading graph data\u2026</div></div>';
@@ -258,25 +249,9 @@ class CockpitGraph extends HTMLElement {
       return;
     }
 
-    var body = '<div class="mode-tabs" id="ckg-tabs">';
-    for (var i = 0; i < CKG_TABS.length; i++) {
-      var t = CKG_TABS[i];
-      body +=
-        '<div class="mode-tab' + (t.id === this._tab ? ' active' : '') +
-        '" data-ckg-tab="' + t.id + '">' + esc(t.label) + '</div>';
-    }
-    body += '</div><div id="ckg-content"></div>';
-    this.innerHTML = body;
-    this._bindTabs();
-  }
-
-  _bindTabs() {
-    var self = this;
-    this.querySelectorAll('[data-ckg-tab]').forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        self.setTab(tab.getAttribute('data-ckg-tab'));
-      });
-    });
+    // Since GL #487 the Project Map area tab strip owns deps/callgraph/symbols
+    // navigation — no second in-component tab bar.
+    this.innerHTML = '<div id="ckg-content"></div>';
   }
 
   _renderActiveTab() {

@@ -1545,3 +1545,71 @@ tr:hover td{background:var(--surface-2)}
 .tour-nav button:hover:not(:disabled){background:var(--green);color:var(--bg);border-color:var(--green)}
 .tour-nav button:disabled{opacity:.4;cursor:default}
 .tour-highlight{outline:2px solid var(--green);outline-offset:2px;border-radius:4px;transition:outline .3s}
+
+/* ---- #487 area tab strip (one page per job area, views as tabs) ---- */
+cockpit-area-tabs{display:block}
+cockpit-area-tabs[hidden]{display:none}
+.area-tabs{
+  display:flex;gap:2px;margin:0 0 14px;border-bottom:1px solid var(--border);
+  overflow-x:auto;scrollbar-width:none;
+}
+.area-tabs::-webkit-scrollbar{display:none}
+.area-tab{
+  padding:8px 14px;font-size:12px;font-weight:500;color:var(--muted);
+  text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap;
+  transition:color .15s,border-color .15s;
+}
+.area-tab:hover{color:var(--text)}
+.area-tab.active{color:var(--green);border-bottom-color:var(--green)}
+.area-tab:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(52,211,153,0.25) inset;border-radius:4px 4px 0 0}
+
+/* Area nav entries carry the job promise as a second line */
+.nav-item-area .nav-label{display:flex;flex-direction:column;line-height:1.25;overflow:hidden}
+.nav-label-job{
+  font-size:9px;font-weight:400;color:var(--muted);opacity:.7;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.nav-item-area.active .nav-label-job{color:var(--green);opacity:.65}
+
+/* ---- #487 Protection / Risk & Policies ---- */
+.prot-kpis{display:flex;flex-wrap:wrap;gap:10px}
+.prot-kpi{
+  flex:1 1 140px;min-width:120px;padding:10px 14px;border:1px solid var(--border);
+  border-radius:var(--rs);background:var(--surface-2);
+}
+.prot-kpi-v{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--text-bright)}
+.prot-kpi-l{font-size:10px;color:var(--muted);margin-top:2px}
+.prot-kpi.ok .prot-kpi-v{color:var(--green)}
+.prot-kpi.warn .prot-kpi-v{color:var(--yellow)}
+.prot-warning{
+  padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--yellow);
+  border-radius:var(--rs);margin-bottom:8px;
+}
+.prot-warning.sev-high{border-left-color:var(--red)}
+.prot-warning-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.prot-warning-head code{font-size:11px;color:var(--text-bright)}
+.prot-warning-msg{font-size:12px;color:var(--text);margin-top:5px}
+.prot-warning-fix{font-size:11px;color:var(--muted);margin-top:3px;font-style:italic}
+.prot-owasp-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px;
+}
+.prot-owasp-card{
+  padding:12px 14px;border:1px solid var(--border);border-radius:var(--rs);
+  background:var(--surface-2);display:flex;flex-direction:column;gap:6px;
+}
+.prot-owasp-head{display:flex;justify-content:space-between;align-items:center}
+.prot-owasp-id{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.05em}
+.prot-coverage{
+  font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
+}
+.prot-coverage.ok{color:var(--green);background:var(--green-dim)}
+.prot-coverage.warn{color:var(--yellow);background:var(--yellow-dim)}
+.prot-coverage.dim{color:var(--muted);background:var(--surface)}
+.prot-owasp-title{font-size:13px;font-weight:600;color:var(--text-bright)}
+.prot-owasp-risk{font-size:11px;color:var(--muted);line-height:1.5}
+.prot-mitigations{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+.prot-mitigation{
+  font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:10px;
+  border:1px solid var(--border);color:var(--text);cursor:help;
+}
+.prot-mitigation:hover{border-color:var(--green);color:var(--green)}

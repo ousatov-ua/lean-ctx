@@ -218,6 +218,8 @@
 <script type="module" src="/static/components/cockpit-commander.js"></script>
 <script type="module" src="/static/components/cockpit-palette.js"></script>
 <script type="module" src="/static/components/cockpit-roi.js"></script>
+<script type="module" src="/static/components/cockpit-area-tabs.js"></script>
+<script type="module" src="/static/components/cockpit-protection.js"></script>
 </head>
 <body class="cockpit-shell-styles">
 <div class="support-bar" id="supportBar" role="region" aria-label="Support lean-ctx">
@@ -333,6 +335,8 @@
       </div>
     </div>
 
+    <cockpit-area-tabs id="areaTabs" hidden></cockpit-area-tabs>
+
     <div class="view-hint" id="viewHint" hidden>
       <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><line x1="8" y1="7.2" x2="8" y2="11.5"/><circle cx="8" cy="4.7" r="0.6" fill="currentColor"/></svg>
       <span id="viewHintText"></span>
@@ -392,6 +396,9 @@
     <section id="view-health" class="view">
       <cockpit-health id="healthView"></cockpit-health>
     </section>
+    <section id="view-protection" class="view">
+      <cockpit-protection id="protectionView"></cockpit-protection>
+    </section>
     </div>
   </main>
 </div>
@@ -405,7 +412,7 @@
     <span class="sb-sep">·</span>
     <span id="sbVersion">v---</span>
   </div>
-  <div class="sb-c" title="Estimated tokens saved all-time — same figure as the Home hero.">
+  <div class="sb-c" title="Your receipt: estimated tokens saved all-time — same figure as the Home hero. The strictly verified, Ed25519-signed count lives in Proof → ROI & Plan.">
     <span>Tokens saved</span>
     <span class="sb-strong" id="sbTokensSaved">—</span>
   </div>
@@ -422,11 +429,12 @@
   <div class="onboard-card" role="dialog" aria-modal="true" aria-labelledby="onboardTitle">
     <div class="onboard-logo"><span>&lt;|&gt;</span> Lean<b>CTX</b></div>
     <h2 class="onboard-title" id="onboardTitle">Welcome to your cockpit</h2>
-    <p class="onboard-sub">lean-ctx does four jobs for your AI agents — and this is what it has saved you so far:</p>
+    <p class="onboard-sub">lean-ctx does four jobs for your AI agents — token savings are the receipt:</p>
     <div class="onboard-stats" id="onboardStats"></div>
     <ul class="onboard-points">
-      <li><b>Home</b> shows your savings — that's all most people need.</li>
-      <li><b>Context</b> decides what agents read, <b>Memory</b> remembers what they learn, <b>Proof</b> signs what you save, the <b>Project Map</b> shows what lean-ctx understands — flip <b>Simple → Advanced</b> to see them.</li>
+      <li><b>Home</b> shows your receipt — that's all most people need.</li>
+      <li><b>Context</b> decides what agents read, <b>Memory</b> remembers what they learn, <b>Protection</b> guards what they touch, <b>Proof</b> signs what you save — flip <b>Simple → Advanced</b> for one tabbed page per job.</li>
+      <li>The <b>Project Map</b> shows what lean-ctx understands about your codebase.</li>
       <li>Hover any <span class="onboard-i">i</span> for a plain-language explanation.</li>
     </ul>
     <button type="button" class="onboard-btn" id="onboardBtn">Got it — show me</button>
@@ -565,8 +573,10 @@ function bootCockpit() {
   document.addEventListener('lctx:view', function (e) {
     var label = e.detail && e.detail.label;
     var desc = e.detail && e.detail.desc;
+    var areaLabel = e.detail && e.detail.areaLabel;
     var el = document.getElementById('breadcrumbCurrent');
-    if (el && label) el.textContent = label;
+    // Inside an area page the breadcrumb shows "Area / Tab" (GL #487).
+    if (el && label) el.textContent = areaLabel ? areaLabel + ' / ' + label : label;
     var hint = document.getElementById('viewHint');
     var hintText = document.getElementById('viewHintText');
     if (hint && hintText) {

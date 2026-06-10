@@ -72,6 +72,13 @@ pub(super) fn handle(
             let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string());
             Some(("200 OK", "application/json", json))
         }
+        // Protection area (GL #487): the OWASP agentic-risk alignment that
+        // `lean-ctx audit` prints, as JSON for the dashboard guards view.
+        "/api/owasp" => {
+            let mappings = crate::core::owasp_alignment::alignment();
+            let json = serde_json::to_string(&mappings).unwrap_or_else(|_| "[]".to_string());
+            Some(("200 OK", "application/json", json))
+        }
         "/api/slos" => {
             let snap = crate::core::slo::evaluate_quiet();
             let history = crate::core::slo::violation_history(100);

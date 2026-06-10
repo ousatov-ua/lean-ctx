@@ -33,12 +33,13 @@ function getNavMode() {
   }
 }
 
-// Four-Jobs navigation (GL #470/#486, mirrors website v3.2): LeanCTX decides
-// what agents read, remembers what they learn, guards what they touch and
-// proves what they save. Simple mode is the 5-second answer (Home only);
-// Advanced groups every deep view under the job it serves.
-// `job` is the plain-language promise rendered as the group subtitle; `desc`
-// powers nav tooltips, the per-view hint banner and onboarding copy.
+// Four-Jobs navigation (GL #470/#486/#487, mirrors website v3.2): LeanCTX
+// decides what agents read, remembers what they learn, guards what they touch
+// and proves what they save. Simple mode is the 5-second answer (Home only);
+// Advanced shows one entry per job area — each area is a tabbed page (#487),
+// so the sidebar carries 6 destinations instead of 17.
+// `job` is the plain-language promise rendered as the subtitle; `desc` powers
+// nav tooltips, the per-view hint banner and onboarding copy.
 const COCKPIT_NAV_SECTIONS = [
   {
     label: 'Home',
@@ -51,6 +52,7 @@ const COCKPIT_NAV_SECTIONS = [
     label: 'Context',
     job: 'decides what your agents read',
     tier: 'pro',
+    area: 'context',
     items: [
       { id: 'commander', label: 'Context Triage', desc: 'Context-window pressure and what to trim — your to-do list.' },
       { id: 'context', label: 'Context Contents', desc: 'Everything currently loaded into the model context.' },
@@ -62,6 +64,7 @@ const COCKPIT_NAV_SECTIONS = [
     label: 'Memory',
     job: 'remembers what your agents learn',
     tier: 'pro',
+    area: 'memory',
     items: [
       { id: 'knowledge', label: 'Knowledge', desc: 'Facts lean-ctx has learned about your project.' },
       { id: 'memory', label: 'Episodes', desc: 'Saved episodes, procedures and bug memory.' },
@@ -70,9 +73,20 @@ const COCKPIT_NAV_SECTIONS = [
     ],
   },
   {
+    label: 'Protection',
+    job: 'guards what your agents touch',
+    tier: 'pro',
+    area: 'protection',
+    items: [
+      { id: 'health', label: 'Guards', desc: 'Reliability, verification, anomalies and gotcha guards.' },
+      { id: 'protection', label: 'Risk & Policies', desc: 'Context risk warnings and the OWASP agentic-risk coverage map.' },
+    ],
+  },
+  {
     label: 'Proof',
     job: 'proves what you save',
     tier: 'pro',
+    area: 'proof',
     items: [
       { id: 'roi', label: 'ROI & Plan', desc: 'Signed, verifiable savings plus your plan and entitlements.' },
       { id: 'learning', label: 'Trends', desc: 'How your savings and efficiency change over time.' },
@@ -82,6 +96,7 @@ const COCKPIT_NAV_SECTIONS = [
     label: 'Project Map',
     job: 'understands your codebase',
     tier: 'pro',
+    area: 'map',
     items: [
       { id: 'deps', label: 'Dependencies', desc: 'How your modules depend on each other.' },
       { id: 'callgraph', label: 'Call Graph', desc: 'Which functions call which.' },
@@ -104,6 +119,14 @@ const COCKPIT_VIEW_META = COCKPIT_NAV_SECTIONS.reduce(function (acc, section) {
   });
   return acc;
 }, {});
+
+const AREA_ICONS = {
+  context: NAV_ICONS.context,
+  memory: NAV_ICONS.memory,
+  protection: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  proof: NAV_ICONS.roi,
+  map: NAV_ICONS.deps,
+};
 
 class CockpitNav extends HTMLElement {
   connectedCallback() {
@@ -143,51 +166,69 @@ class CockpitNav extends HTMLElement {
     this._renderNav();
   }
 
+  // One nav entry per job area (GL #487); the tabs inside each area page take
+  // over the role the per-view entries used to play.
   _renderNav() {
     const active = this._activeId;
+    const activeArea = this._areaOf(active);
     const mode = getNavMode();
     var html = '';
     var shown = 0;
     for (var si = 0; si < COCKPIT_NAV_SECTIONS.length; si++) {
       var section = COCKPIT_NAV_SECTIONS[si];
       if (mode === 'simple' && section.tier === 'pro') continue;
-      if (shown > 0) html += '<div class="nav-divider"></div>';
-      // Section labels only add value once several groups are visible (pro).
-      // The job subtitle ties each group to the four-jobs story.
-      if (section.label && mode === 'pro') {
-        var jobTip = (section.job || '').replace(/"/g, '&quot;');
-        html +=
-          '<div class="nav-section-label"' +
-          (jobTip ? ' title="' + jobTip + '"' : '') + '>' + section.label +
-          (section.job
-            ? '<span class="nav-section-job">' + section.job + '</span>'
-            : '') +
-          '</div>';
-      }
+      if (shown > 0 && !section.area) html += '<div class="nav-divider"></div>';
       html += '<div class="nav-section">';
-      for (var ii = 0; ii < section.items.length; ii++) {
-        var v = section.items[ii];
-        var isActive = v.id === active;
-        var tip = (v.desc ? v.label + ' — ' + v.desc : v.label).replace(/"/g, '&quot;');
+      if (section.area) {
+        var isActiveArea = section.area === activeArea;
+        var tabNames = section.items.map(function (it) { return it.label; }).join(' · ');
+        var areaTip = (section.label + ' — ' + (section.job || '') + '. Tabs: ' + tabNames)
+          .replace(/"/g, '&quot;');
         html +=
-          '<div class="nav-item' +
-          (isActive ? ' active' : '') +
-          '" role="menuitem" data-view="' +
-          v.id +
-          '" tabindex="0" title="' +
-          tip +
-          '">' +
-          '<span class="nav-icon">' + (NAV_ICONS[v.id] || '') + '</span>' +
-          '<span class="nav-label">' +
-          v.label +
+          '<div class="nav-item nav-item-area' +
+          (isActiveArea ? ' active' : '') +
+          '" role="menuitem" data-area="' + section.area +
+          '" data-view="' + section.items[0].id +
+          '" tabindex="0" title="' + areaTip + '">' +
+          '<span class="nav-icon">' + (AREA_ICONS[section.area] || '') + '</span>' +
+          '<span class="nav-label">' + section.label +
+          (section.job ? '<span class="nav-label-job">' + section.job + '</span>' : '') +
           '</span>' +
           '</div>';
+      } else {
+        for (var ii = 0; ii < section.items.length; ii++) {
+          var v = section.items[ii];
+          var isActive = v.id === active;
+          var tip = (v.desc ? v.label + ' — ' + v.desc : v.label).replace(/"/g, '&quot;');
+          html +=
+            '<div class="nav-item' +
+            (isActive ? ' active' : '') +
+            '" role="menuitem" data-view="' +
+            v.id +
+            '" tabindex="0" title="' +
+            tip +
+            '">' +
+            '<span class="nav-icon">' + (NAV_ICONS[v.id] || '') + '</span>' +
+            '<span class="nav-label">' +
+            v.label +
+            '</span>' +
+            '</div>';
+        }
       }
       html += '</div>';
       shown += 1;
     }
     this._nav.innerHTML = html;
     this._bindItems();
+  }
+
+  /** Area id a view belongs to, or null (Home). */
+  _areaOf(viewId) {
+    var router = window.LctxRouter;
+    if (router && router.VIEW_TO_AREA && router.VIEW_TO_AREA[viewId]) {
+      return router.VIEW_TO_AREA[viewId].areaId;
+    }
+    return null;
   }
 
   _emitNavigate(viewId) {
@@ -203,8 +244,12 @@ class CockpitNav extends HTMLElement {
   _bindItems() {
     const self = this;
     this._nav.querySelectorAll('.nav-item').forEach(function (item) {
+      // Area entries navigate via `area:` (router restores the last used tab);
+      // the prefix avoids the view-id collisions (`context`, `memory`, …).
+      var areaId = item.getAttribute('data-area');
+      var target = areaId ? 'area:' + areaId : item.getAttribute('data-view');
       item.addEventListener('click', function () {
-        self._emitNavigate(item.getAttribute('data-view'));
+        self._emitNavigate(target);
       });
       item.addEventListener('keydown', function (e) {
         const items = [...self._nav.querySelectorAll('.nav-item')];
@@ -217,7 +262,7 @@ class CockpitNav extends HTMLElement {
           items[idx - 1].focus();
         } else if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          self._emitNavigate(item.getAttribute('data-view'));
+          self._emitNavigate(target);
         }
       });
     });
@@ -227,8 +272,11 @@ class CockpitNav extends HTMLElement {
     const id = viewId || 'overview';
     this._activeId = id;
     if (!this._nav) return;
+    const area = this._areaOf(id);
     this._nav.querySelectorAll('.nav-item').forEach(function (el) {
-      const on = el.getAttribute('data-view') === id;
+      const on = el.hasAttribute('data-area')
+        ? el.getAttribute('data-area') === area
+        : el.getAttribute('data-view') === id && !area;
       el.classList.toggle('active', on);
     });
   }

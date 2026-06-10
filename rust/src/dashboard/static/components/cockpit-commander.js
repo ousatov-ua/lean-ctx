@@ -110,7 +110,7 @@ class CockpitCommander extends HTMLElement {
     h += this._renderPressureTable();
     // Sibling view: Triage says what to do, Contents shows what is loaded.
     h += '<p class="hs" style="margin-top:4px;color:var(--muted)">Want the full inventory? ' +
-      '<a href="#context" style="color:var(--accent)">Context Contents \u2192</a></p>';
+      '<a href="#context/contents" style="color:var(--accent)">Context Contents \u2192</a></p>';
     this.innerHTML = h;
     this._bind();
   }

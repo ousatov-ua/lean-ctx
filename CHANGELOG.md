@@ -25,6 +25,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **C2 — Managed** (Basic 96%, Hardened 80%, Audited 50%), with declared
   gaps incl. no independent redaction verification and no one-step egress
   inventory — graded down where claims couldn't be hard-verified.
+- **Dashboard: one tabbed page per job area** (GL #487, Redesign P2): the
+  sidebar now carries six destinations — Home plus one entry per four-jobs
+  area (Context, Memory, Protection, Proof, Project Map) — and each area is a
+  single page whose views are tabs with canonical `#area/tab` deep links
+  (`#context/triage`, `#proof/roi`, …). Every pre-#487 hash (`#live`,
+  `#health`, `#graph`, …) still resolves and is rewritten to its canonical
+  form; the last-used tab per area is remembered. New Protection area: the
+  Guards tab hosts the existing reliability view, the new Risk & Policies tab
+  shows live session-risk warnings (`/api/context-risk`) and the OWASP
+  agentic-risk coverage map served by the new `/api/owasp` endpoint (same data
+  as `lean-ctx audit`). The in-component Project-Map tab bar was removed in
+  favour of the area strip.
+- **Dashboard: four-jobs language pass** (GL #488, Redesign P3): onboarding
+  modal tells the four-jobs story (decides · remembers · guards · proves)
+  with token savings framed as the receipt, includes Protection, and the
+  status bar links the estimated figure to the signed ledger in Proof.
 - **Agent-task benchmark v1 harness** (GL #493): outcome evidence instead of
   token arithmetic — does lean-ctx change task success rate and cost per
   solved task? `bench/agent-task/` runs two identical Claude-Code-headless

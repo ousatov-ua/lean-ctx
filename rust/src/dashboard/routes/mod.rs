@@ -34,6 +34,8 @@ fn match_component_path(path: &str) -> Option<String> {
         "/static/components/cockpit-commander.js" => super::COCKPIT_COMPONENT_COMMANDER_JS,
         "/static/components/cockpit-palette.js" => super::COCKPIT_COMPONENT_PALETTE_JS,
         "/static/components/cockpit-roi.js" => super::COCKPIT_COMPONENT_ROI_JS,
+        "/static/components/cockpit-area-tabs.js" => super::COCKPIT_COMPONENT_AREA_TABS_JS,
+        "/static/components/cockpit-protection.js" => super::COCKPIT_COMPONENT_PROTECTION_JS,
         _ => return None,
     };
     Some(content.to_string())
