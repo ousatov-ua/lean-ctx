@@ -137,6 +137,35 @@ followed, hard links count once, and reports are cached for 60 s per process.
   `metering.rs::from_usage` parses (the dedicated report above stays
   `camelCase`); both carry the same measured numbers.
 
+### `GET /v1/savings/member/{signer}` (per-member drilldown, GL #389)
+
+`signer` is the truncated public key from `by_member[].signer` in
+`/v1/savings/summary`. Audit-scoped like the summary (same sensitivity class).
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-06-10T08:00:00Z",
+  "signer": "aaaaaaaaaaaaaaaa",
+  "agent_id": "dev-laptop",
+  "last_reported": "2026-06-08T00:00:00Z",
+  "totals": { "saved_tokens": 4200, "net_saved_tokens": 4200, "saved_usd": 0.042, "total_events": 7 },
+  "by_model": [{ "model": "claude-opus", "saved_tokens": 4200, "saved_usd": 0.042 }],
+  "by_tool": [{ "tool": "ctx_read", "saved_tokens": 4200 }],
+  "series": [{ "date": "2026-06-08", "net_saved_tokens": 4200, "saved_usd": 0.042, "total_events": 7 }],
+  "window_days": 90
+}
+```
+
+- `totals`/`by_model`/`by_tool` come from the member's **latest** signed batch;
+  the `series` replays the member's full snapshot history (carry-forward, same
+  geometry as the team series — member-only, so the last point equals `totals`).
+- `400 invalid_signer` for ids outside `[A-Za-z0-9_-]{1,64}` (the id derives a
+  store filename — validated before any filesystem access); `404 unknown_member`
+  when the signer never reported a batch.
+- Control plane: `GET /api/billing/team/{user_id}/savings/member/{signer}` →
+  edge: `GET /api/account/team/savings/member/{signer}` (dashboard drilldown).
+
 ## Meter Events (Stripe Billing Meters API)
 
 Usage is pushed via the Stripe Billing Meters API (`POST /v1/billing/meter_events`),

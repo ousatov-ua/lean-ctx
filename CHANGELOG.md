@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Per-member savings drilldown** (GL #389): new audit-scoped team-server
+  endpoint `GET /v1/savings/member/{signer}` — one member's latest totals,
+  model/tool breakdowns and a member-only 90-day cumulative series (carry-
+  forward replay of that signer's snapshot history). Signer ids are validated
+  against `[A-Za-z0-9_-]{1,64}` before any filesystem access; unknown signers
+  are a clean 404. Proxied through the control plane
+  (`/api/billing/team/{id}/savings/member/{signer}`) and the account edge
+  (`/api/account/team/savings/member/{signer}`); the team dashboard's member
+  rows are now clickable and open an inline drilldown panel (own series chart,
+  top models, top tools). Contract: `docs/contracts/billing-plane-v2.md`.
 - **model2vec static-embedding support** (GL #452): the embedding engine now
   drives EmbeddingBag-topology ONNX graphs (model2vec exports like
   `hf:minishlab/potion-base-8M`) next to classic transformers. Topology is

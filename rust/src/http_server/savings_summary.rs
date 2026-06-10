@@ -22,7 +22,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{Path as AxumPath, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use chrono::{Days, NaiveDate, Utc};
 use serde::Serialize;
 
@@ -116,12 +121,147 @@ struct DayPoint {
     total_events: u64,
 }
 
+/// Per-member drilldown (GL #389) — one signer's full picture: latest totals,
+/// model/tool breakdowns from the latest batch, and a 90-day cumulative series
+/// replayed from that signer's snapshot history alone.
+#[derive(Debug, Serialize)]
+pub struct MemberDrilldown {
+    pub schema_version: u32,
+    pub generated_at: String,
+    /// Truncated signer public key — matches `by_member[].signer` in the summary.
+    pub signer: String,
+    pub agent_id: String,
+    /// `created_at` of the member's most recent batch (RFC 3339).
+    pub last_reported: String,
+    pub totals: SavingsTotals,
+    /// This member's model breakdown (latest batch, top rows).
+    pub by_model: Vec<ModelRow>,
+    /// This member's tool breakdown (latest batch, top rows).
+    pub by_tool: Vec<ToolRow>,
+    /// Trailing-window cumulative daily series for this member only.
+    pub series: Vec<SeriesPoint>,
+    pub window_days: u32,
+}
+
 pub async fn v1_savings_summary(State(state): State<TeamAppState>) -> impl IntoResponse {
     let dir = state.team.savings_store_dir.lock().await.clone();
     let summary = tokio::task::spawn_blocking(move || aggregate(&dir))
         .await
         .unwrap_or_default();
     (StatusCode::OK, Json(summary))
+}
+
+/// `GET /v1/savings/member/{signer}` — drilldown for one member (GL #389).
+/// `signer` is the truncated public key from `by_member[].signer`. Audit-scoped
+/// like the summary (same sensitivity class). 404 when the signer has never
+/// reported; 400 when the id can't be a signer prefix (defense-in-depth: the
+/// id is also used to derive a store filename).
+pub async fn v1_savings_member(
+    State(state): State<TeamAppState>,
+    AxumPath(signer): AxumPath<String>,
+) -> axum::response::Response {
+    if !is_valid_signer_prefix(&signer) {
+        return super::json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_signer",
+            "signer must be 1-64 chars of [A-Za-z0-9_-]",
+        );
+    }
+    let dir = state.team.savings_store_dir.lock().await.clone();
+    let drill = tokio::task::spawn_blocking(move || member_drilldown(&dir, &signer))
+        .await
+        .ok()
+        .flatten();
+    match drill {
+        Some(d) => (StatusCode::OK, Json(d)).into_response(),
+        None => super::json_error(
+            StatusCode::NOT_FOUND,
+            "unknown_member",
+            "no savings batches reported for this signer",
+        ),
+    }
+}
+
+/// Signer ids are truncated Ed25519 public keys (hex or base64url) — anything
+/// outside `[A-Za-z0-9_-]{1,64}` is rejected before touching the filesystem.
+fn is_valid_signer_prefix(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Build the drilldown for one signer from its JSONL snapshot history.
+/// Returns `None` when the signer file doesn't exist or holds no parseable batch.
+pub(super) fn member_drilldown(dir: &Path, signer: &str) -> Option<MemberDrilldown> {
+    // Ingest stores files under the *truncated* signer key, so the id from
+    // `by_member[].signer` maps 1:1 onto a filename.
+    let truncated: String = signer.chars().take(16).collect();
+    let path = dir.join(format!("savings_{truncated}.jsonl"));
+
+    let batches = read_all_batches(&path);
+    let latest = batches.last()?;
+
+    let mut by_model: Vec<ModelRow> = latest
+        .totals
+        .by_model
+        .iter()
+        .map(|(model, tokens, usd)| ModelRow {
+            model: model.clone(),
+            saved_tokens: *tokens,
+            saved_usd: round_usd(*usd),
+        })
+        .collect();
+    by_model.sort_by_key(|r| std::cmp::Reverse(r.saved_tokens));
+    by_model.truncate(MAX_BREAKDOWN_ROWS);
+
+    let mut by_tool: Vec<ToolRow> = latest
+        .totals
+        .by_tool
+        .iter()
+        .map(|(tool, tokens)| ToolRow {
+            tool: tool.clone(),
+            saved_tokens: *tokens,
+        })
+        .collect();
+    by_tool.sort_by_key(|r| std::cmp::Reverse(r.saved_tokens));
+    by_tool.truncate(MAX_BREAKDOWN_ROWS);
+
+    let mut points: Vec<DayPoint> = batches
+        .iter()
+        .filter_map(|b| {
+            parse_date(&b.created_at).map(|date| DayPoint {
+                date,
+                net_saved_tokens: b.totals.net_saved_tokens,
+                saved_usd: b.totals.saved_usd,
+                total_events: b.totals.total_events as u64,
+            })
+        })
+        .collect();
+    points.sort_by_key(|p| p.date);
+    let series = build_series(
+        std::slice::from_ref(&points),
+        Utc::now().date_naive(),
+        SERIES_WINDOW_DAYS,
+    );
+
+    Some(MemberDrilldown {
+        schema_version: 1,
+        generated_at: Utc::now().to_rfc3339(),
+        signer: truncated,
+        agent_id: latest.agent_id.clone(),
+        last_reported: latest.created_at.clone(),
+        totals: SavingsTotals {
+            saved_tokens: latest.totals.saved_tokens,
+            net_saved_tokens: latest.totals.net_saved_tokens,
+            saved_usd: round_usd(latest.totals.saved_usd),
+            total_events: latest.totals.total_events as u64,
+        },
+        by_model,
+        by_tool,
+        series,
+        window_days: SERIES_WINDOW_DAYS,
+    })
 }
 
 /// Aggregate the savings store: latest batch per signer (totals/breakdowns) plus
@@ -516,5 +656,67 @@ mod tests {
     fn series_is_empty_without_points() {
         let series = build_series(&[Vec::new(), Vec::new()], day("2026-06-03"), 30);
         assert!(series.is_empty());
+    }
+
+    #[test]
+    fn member_drilldown_returns_latest_breakdowns_and_own_series() {
+        let dir = temp_dir("drill");
+        // Two snapshots: drilldown totals/breakdowns must come from the LATEST,
+        // the series from the full history (1000 → 3000).
+        write_lines(
+            &dir,
+            "savings_aaaaaaaaaaaaaaaa.jsonl",
+            &[
+                batch("aaaaaaaaaaaaaaaa", 1000, 0.01, "2026-06-01T00:00:00Z"),
+                batch("aaaaaaaaaaaaaaaa", 3000, 0.03, "2026-06-03T00:00:00Z"),
+            ],
+        );
+        // A second signer must NOT leak into A's drilldown.
+        write_lines(
+            &dir,
+            "savings_bbbbbbbbbbbbbbbb.jsonl",
+            &[batch(
+                "bbbbbbbbbbbbbbbb",
+                9999,
+                0.99,
+                "2026-06-02T00:00:00Z",
+            )],
+        );
+
+        let d = member_drilldown(&dir, "aaaaaaaaaaaaaaaa").expect("drilldown");
+        assert_eq!(d.signer, "aaaaaaaaaaaaaaaa");
+        assert_eq!(d.agent_id, "agent-aaaaaaaaaaaaaaaa");
+        assert_eq!(d.totals.net_saved_tokens, 3000);
+        assert_eq!(d.last_reported, "2026-06-03T00:00:00Z");
+        assert_eq!(d.by_model.len(), 1);
+        assert_eq!(d.by_model[0].model, "claude-opus");
+        assert_eq!(d.by_model[0].saved_tokens, 3000);
+        assert_eq!(d.by_tool[0].tool, "ctx_read");
+        assert_eq!(d.window_days, SERIES_WINDOW_DAYS);
+        // Series is member-only: its last value equals the member's latest
+        // snapshot, not the team total (which would include signer B).
+        let last = d.series.last().expect("series");
+        assert_eq!(last.net_saved_tokens, 3000);
+        assert_eq!(last.total_events, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn member_drilldown_unknown_signer_is_none() {
+        let dir = temp_dir("drillmissing");
+        assert!(member_drilldown(&dir, "cccccccccccccccc").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signer_prefix_validation_rejects_path_chars() {
+        assert!(is_valid_signer_prefix("aaaaaaaaaaaaaaaa"));
+        assert!(is_valid_signer_prefix("AbC123_-"));
+        assert!(!is_valid_signer_prefix(""));
+        assert!(!is_valid_signer_prefix("../../etc/passwd"));
+        assert!(!is_valid_signer_prefix("a/b"));
+        assert!(!is_valid_signer_prefix("a.b"));
+        assert!(!is_valid_signer_prefix(&"a".repeat(65)));
     }
 }

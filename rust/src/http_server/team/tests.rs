@@ -125,6 +125,10 @@ async fn build_app(cfg: TeamServerConfig) -> Router {
             "/v1/savings/summary",
             get(super::super::savings_summary::v1_savings_summary),
         )
+        .route(
+            "/v1/savings/member/{signer}",
+            get(super::super::savings_summary::v1_savings_member),
+        )
         .route("/v1/storage", get(super::super::team_billing::v1_storage))
         .route("/v1/usage", get(super::super::team_billing::v1_usage))
         .layer(middleware::from_fn_with_state(
@@ -373,6 +377,113 @@ async fn savings_summary_scope_gated_and_aggregated() {
     assert_eq!(v["by_tool"][0]["saved_tokens"], 6000);
     // The cumulative daily series is present (geometry is unit-tested separately).
     assert!(v["series"].is_array());
+}
+
+/// End-to-end proof of the member drilldown (GL #389) through the real auth
+/// middleware: audit-gated like the summary, 404 for unknown signers, 400 for
+/// ids that could never be a signer (path-traversal defense), and the member
+/// payload carries its own series + breakdowns.
+#[tokio::test]
+async fn savings_member_drilldown_scope_gated() {
+    use crate::core::savings_ledger::signed_batch::BatchTotals;
+    use crate::core::savings_ledger::SignedSavingsBatchV1;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_savings(&tmp);
+
+    let savings_dir = tmp.path().join("savings");
+    std::fs::create_dir_all(&savings_dir).unwrap();
+    let batch = SignedSavingsBatchV1 {
+        schema_version: 1,
+        kind: "lean-ctx.savings-batch".into(),
+        created_at: "2026-06-08T00:00:00Z".into(),
+        lean_ctx_version: "test".into(),
+        agent_id: "agent-a".into(),
+        period: "all".into(),
+        first_entry_hash: "genesis".into(),
+        last_entry_hash: "head".into(),
+        chain_valid: true,
+        totals: BatchTotals {
+            total_events: 7,
+            saved_tokens: 4200,
+            net_saved_tokens: 4200,
+            saved_usd: 0.042,
+            bounce_tokens: 0,
+            bounce_events: 0,
+            tokenizers: vec!["o200k_base".into()],
+            by_model: vec![("claude-opus".into(), 4200, 0.042)],
+            by_tool: vec![("ctx_read".into(), 4200)],
+        },
+        signer_public_key: Some("aaaaaaaaaaaaaaaa".into()),
+        signature: Some("sig".into()),
+    };
+    std::fs::write(
+        savings_dir.join("savings_aaaaaaaaaaaaaaaa.jsonl"),
+        serde_json::to_string(&batch).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let app = build_app(cfg).await;
+
+    // Non-audit token → 403.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/savings/member/aaaaaaaaaaaaaaaa")
+        .header("Host", "localhost")
+        .header("Authorization", "Bearer member-secret")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // Audit token + known signer → 200 with member-scoped payload.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/savings/member/aaaaaaaaaaaaaaaa")
+        .header("Host", "localhost")
+        .header("Authorization", "Bearer owner-secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["signer"], "aaaaaaaaaaaaaaaa");
+    assert_eq!(v["agent_id"], "agent-a");
+    assert_eq!(v["totals"]["net_saved_tokens"], 4200);
+    assert_eq!(v["totals"]["total_events"], 7);
+    assert_eq!(v["by_model"][0]["model"], "claude-opus");
+    assert_eq!(v["by_tool"][0]["tool"], "ctx_read");
+    assert!(v["series"].is_array());
+    assert_eq!(v["window_days"], 90);
+
+    // Unknown signer → 404.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/savings/member/ffffffffffffffff")
+        .header("Host", "localhost")
+        .header("Authorization", "Bearer owner-secret")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Path-traversal shaped id → 400 before touching the filesystem.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/savings/member/..%2F..%2Fetc%2Fpasswd")
+        .header("Host", "localhost")
+        .header("Authorization", "Bearer owner-secret")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
 }
 
 /// End-to-end proof of the billing-plane surface (GL #463) through the real

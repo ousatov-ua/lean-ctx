@@ -795,6 +795,7 @@ async fn team_auth_middleware(
         "/v1/savings/summary" => Some("savings_summary"),
         "/v1/storage" => Some("storage"),
         "/v1/usage" => Some("usage"),
+        p if p.starts_with("/v1/savings/member/") => Some("savings_member"),
         _ => None,
     };
     if let Some(action) = audit_gated {
@@ -1424,6 +1425,10 @@ pub async fn serve_team(cfg: TeamServerConfig) -> Result<()> {
         .route(
             "/v1/savings/summary",
             get(super::savings_summary::v1_savings_summary),
+        )
+        .route(
+            "/v1/savings/member/{signer}",
+            get(super::savings_summary::v1_savings_member),
         )
         .route("/v1/storage", get(super::team_billing::v1_storage))
         .route("/v1/usage", get(super::team_billing::v1_usage))

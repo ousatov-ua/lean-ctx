@@ -353,6 +353,36 @@ pub(super) async fn get_account_team_savings(
     finish(status, json)
 }
 
+/// `GET /api/account/team/savings/member/{signer}` — per-member drilldown
+/// (GL #389): the signer's own 90-day cumulative series plus model/tool
+/// breakdowns. 404 when the signer never reported a batch. The signer id is
+/// the truncated public key from `summary.by_member[].signer` (URL-safe by
+/// construction; anything else is rejected upstream).
+pub(super) async fn get_account_team_savings_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(signer): axum::extract::Path<String>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (user_id, _email) = auth_user(&state, &headers).await?;
+    // Tight allowlist before the id is embedded in an upstream URL.
+    if signer.is_empty()
+        || signer.len() > 64
+        || !signer
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err((StatusCode::BAD_REQUEST, "invalid signer id".into()));
+    }
+    let (status, json) = billing_forward(
+        &state.cfg,
+        "GET",
+        format!("/api/billing/team/{user_id}/savings/member/{signer}"),
+        None,
+    )
+    .await?;
+    finish(status, json)
+}
+
 /// `POST /api/account/team/owner-token` — (re)issue the owner token, returned
 /// exactly once. Rotates any prior owner credential and redeploys the server.
 pub(super) async fn post_account_team_owner_token(
