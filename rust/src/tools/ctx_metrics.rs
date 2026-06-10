@@ -296,6 +296,34 @@ pub fn handle(cache: &SessionCache, tool_calls: &[ToolCallRecord], crp_mode: Crp
         out.push(format!("  Auto-mode sources: {line}"));
     }
 
+    // Quality loop (#494): edit-failure rates per (ext × read-mode), risky
+    // pairs currently penalized to full, and served read escalations.
+    let eq = crate::core::edit_quality::metrics_snapshot();
+    let eq_pairs = eq["pairs"].as_array().cloned().unwrap_or_default();
+    let escalations = eq["escalations_served"].as_u64().unwrap_or(0);
+    if !eq_pairs.is_empty() || escalations > 0 {
+        out.push("\nEdit quality (compression-correlated):".to_string());
+        for p in eq_pairs.iter().take(5) {
+            let risky = if p["risky"].as_bool().unwrap_or(false) {
+                "  [risky -> full]"
+            } else {
+                ""
+            };
+            out.push(format!(
+                "  {}: {} fail / {} ok ({:.0}%){}",
+                p["pair"].as_str().unwrap_or("?"),
+                p["fails"].as_u64().unwrap_or(0),
+                p["successes"].as_u64().unwrap_or(0),
+                p["fail_rate"].as_f64().unwrap_or(0.0) * 100.0,
+                risky
+            ));
+        }
+        out.push(format!(
+            "  Read escalations served after edit-fails: {escalations} (pending: {})",
+            eq["pending_escalations"].as_u64().unwrap_or(0)
+        ));
+    }
+
     out.join("\n")
 }
 

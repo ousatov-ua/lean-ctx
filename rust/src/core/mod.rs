@@ -341,6 +341,7 @@ pub mod hnsw;
 pub mod home;
 pub mod homeostasis;
 
+pub mod edit_quality;
 pub mod graph_cache;
 pub mod ide_permissions;
 pub mod import_resolver;

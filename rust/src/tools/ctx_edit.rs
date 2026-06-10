@@ -393,8 +393,29 @@ pub fn handle(cache: &mut SessionCache, params: &EditParams) -> String {
         .map(|e| e.last_mode.clone())
         .unwrap_or_default();
     let (text, effect) = run_io(params, &last_mode);
+    record_outcome(params, &last_mode, &text, &effect);
     apply_cache_effect(cache, &params.path, effect);
     text
+}
+
+/// Quality loop (#494): classify the edit result and feed it into
+/// [`crate::core::edit_quality`]. Only two outcomes carry a compression
+/// signal: a clean replacement (success) and an `old_string` miss
+/// (failure — the body the agent quoted wasn't what's on disk). Parameter
+/// mistakes (empty/identical strings, preimage mismatch, missing file) and
+/// already-applied edits say nothing about the read mode and are skipped.
+pub fn record_outcome(params: &EditParams, last_mode: &str, text: &str, effect: &CacheEffect) {
+    if params.create {
+        return;
+    }
+    let success = matches!(effect, CacheEffect::Invalidate);
+    let not_found_failure = matches!(effect, CacheEffect::StoreFull(_))
+        || (matches!(effect, CacheEffect::None)
+            && text.starts_with("ERROR: old_string not found")
+            && !text.contains("already"));
+    if success || not_found_failure {
+        crate::core::edit_quality::record_edit_outcome(&params.path, last_mode, success);
+    }
 }
 
 /// Applies a deferred [`CacheEffect`] to the session cache.

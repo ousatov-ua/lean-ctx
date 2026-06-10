@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Quality loop v1 — edit failures teach mode selection** (GL #494):
+  `ctx_edit` outcomes are now correlated with the last read mode of the
+  file. An `old_string` miss after a compressed read (a) escalates the
+  next auto read of that file to `full` (one-shot, 1 h TTL) and (b) feeds
+  a per-(extension × mode) failure rate; pairs crossing the documented
+  risky threshold (≥2 fails and ≥25 % fail rate, hysteresis exit <15 %)
+  resolve to `full` until they recover. New resolver sources
+  `edit_fail_escalation` / `edit_quality_penalty`, persisted in
+  `~/.lean-ctx/edit_quality.json` (bounded, 30 d decay), surfaced in
+  `ctx_metrics` under "Edit quality". Contract:
+  `docs/contracts/quality-loop-v1.md`. Golden test:
+  `rust/tests/quality_loop_golden.rs`.
 - **ctxpkg hosted registry — client side** (GL #406): `lean-ctx pack
   publish` is real — preflight (parse, ed25519 signature, scoped-name
   check) then `PUT` to the registry at ctxpkg.com with a `ctxp_…` token
