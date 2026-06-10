@@ -166,3 +166,101 @@ impl CtxMultiReadTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::RwLock;
+
+    use crate::core::cache::SessionCache;
+    use crate::core::session::SessionState;
+    use crate::tools::CrpMode;
+
+    fn ctx_with(
+        cache: Arc<RwLock<SessionCache>>,
+        session: Arc<RwLock<SessionState>>,
+        project_root: &str,
+    ) -> ToolContext {
+        ToolContext {
+            project_root: project_root.to_string(),
+            minimal: false,
+            resolved_paths: std::collections::HashMap::new(),
+            crp_mode: CrpMode::Off,
+            cache: Some(cache),
+            session: Some(session),
+            tool_calls: None,
+            agent_id: None,
+            workflow: None,
+            ledger: None,
+            client_name: None,
+            pipeline_stats: None,
+            call_count: None,
+            autonomy: None,
+            pressure_snapshot: None,
+            path_errors: std::collections::HashMap::new(),
+            bm25_cache: None,
+            progress_sender: None,
+        }
+    }
+
+    /// Regression for #271 (crash vector 11): under concurrent load,
+    /// `ctx_multi_read` must not hang. The handler runs inside the dispatch
+    /// layer's `block_in_place`, so it must acquire its session/cache locks
+    /// via `Handle::block_on` WITHOUT nesting another `block_in_place` —
+    /// nesting consumes extra blocking-pool threads and, under load, exhausts
+    /// the pool, hanging the call (no JSON-RPC response → client "invoke"
+    /// error).
+    ///
+    /// With only 2 worker threads and 8 concurrent batch reads, a nested
+    /// `block_in_place` regression would deadlock the pool and trip the 20s
+    /// timeout below.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_multi_read_does_not_hang() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut paths = Vec::new();
+        for i in 0..6 {
+            let p = dir.path().join(format!("file_{i}.rs"));
+            std::fs::write(&p, format!("fn f{i}() {{ let _ = {i}; }}\n")).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+        let root = dir.path().to_string_lossy().to_string();
+
+        let cache: Arc<RwLock<SessionCache>> = Arc::new(RwLock::new(SessionCache::new()));
+        let session = {
+            let mut s = SessionState::new();
+            s.project_root = Some(root.clone());
+            Arc::new(RwLock::new(s))
+        };
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cache = cache.clone();
+            let session = session.clone();
+            let paths = paths.clone();
+            let root = root.clone();
+            handles.push(tokio::spawn(async move {
+                let ctx = ctx_with(cache, session, &root);
+                let args = json!({ "paths": paths, "mode": "full" })
+                    .as_object()
+                    .unwrap()
+                    .clone();
+                tokio::task::block_in_place(|| CtxMultiReadTool.handle(&args, &ctx))
+            }));
+        }
+
+        for h in handles {
+            let joined = tokio::time::timeout(Duration::from_secs(20), h)
+                .await
+                .expect("ctx_multi_read hung (>20s) — nested block_in_place regression?")
+                .expect("spawned task panicked");
+            let out = joined.expect("ctx_multi_read returned an error");
+            assert!(
+                out.text.contains("Read 6 files"),
+                "unexpected output: {}",
+                out.text
+            );
+        }
+    }
+}
