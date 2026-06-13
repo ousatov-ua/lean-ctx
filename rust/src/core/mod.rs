@@ -387,6 +387,7 @@ pub mod owasp_alignment;
 pub mod path_locks;
 pub mod path_mode_memory;
 pub mod path_resolve;
+pub mod paths;
 pub mod pathutil;
 pub mod persona;
 pub mod pipeline;

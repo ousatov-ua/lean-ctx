@@ -29,19 +29,30 @@ pub fn lean_ctx_data_dir() -> Result<PathBuf, String> {
     // lands in a per-process temp dir and physically cannot touch real data.
     #[cfg(test)]
     {
-        static TEST_SANDBOX: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-        let dir = TEST_SANDBOX.get_or_init(|| {
-            let d = std::env::temp_dir().join(format!("lean-ctx-testdata-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&d);
-            d
-        });
-        Ok(dir.clone())
+        Ok(test_sandbox_dir())
     }
 
     #[cfg(not(test))]
     {
         resolve_home_data_dir()
     }
+}
+
+/// Per-process temp sandbox used as the default data dir under `#[cfg(test)]`,
+/// so any store write from a test fixture lands in a throwaway dir instead of
+/// the developer's real `~/.lean-ctx` (GL #512). Tests that need an *empty*,
+/// private dir should use [`isolated_data_dir`] instead (the shared sandbox is
+/// not empty: parallel tests write into it).
+#[cfg(test)]
+pub(crate) fn test_sandbox_dir() -> PathBuf {
+    static TEST_SANDBOX: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TEST_SANDBOX
+        .get_or_init(|| {
+            let d = std::env::temp_dir().join(format!("lean-ctx-testdata-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&d);
+            d
+        })
+        .clone()
 }
 
 /// Home-based resolution (legacy `~/.lean-ctx` vs XDG). Split out so the
@@ -76,7 +87,7 @@ fn resolve_home_data_dir() -> Result<PathBuf, String> {
     Ok(xdg_dir)
 }
 
-fn has_data_files(dir: &std::path::Path) -> bool {
+pub(crate) fn has_data_files(dir: &std::path::Path) -> bool {
     DATA_MARKERS.iter().any(|f| dir.join(f).exists())
 }
 
@@ -135,7 +146,7 @@ pub fn migrate_if_split() -> Option<u64> {
 }
 
 #[cfg(unix)]
-fn ensure_dir_permissions(path: &std::path::Path) {
+pub(crate) fn ensure_dir_permissions(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     if path.is_dir() {
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
@@ -143,7 +154,7 @@ fn ensure_dir_permissions(path: &std::path::Path) {
 }
 
 #[cfg(not(unix))]
-fn ensure_dir_permissions(_path: &std::path::Path) {}
+pub(crate) fn ensure_dir_permissions(_path: &std::path::Path) {}
 
 pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::{Mutex, OnceLock};
@@ -174,12 +185,24 @@ impl IsolatedDataDir {
     }
 }
 
+/// Category env vars pointed at the isolated temp dir so all four XDG
+/// categories (config/data/state/cache) collapse onto it in tests (GH #408).
+#[cfg(test)]
+const ISOLATED_ENV_VARS: &[&str] = &[
+    "LEAN_CTX_DATA_DIR",
+    "LEAN_CTX_CONFIG_DIR",
+    "LEAN_CTX_STATE_DIR",
+    "LEAN_CTX_CACHE_DIR",
+];
+
 #[cfg(test)]
 impl Drop for IsolatedDataDir {
     fn drop(&mut self) {
         // Struct Drop runs before field drops, so the env is restored while
         // the lock is still held.
-        std::env::remove_var("LEAN_CTX_DATA_DIR");
+        for var in ISOLATED_ENV_VARS {
+            std::env::remove_var(var);
+        }
     }
 }
 
@@ -187,7 +210,9 @@ impl Drop for IsolatedDataDir {
 pub fn isolated_data_dir() -> IsolatedDataDir {
     let guard = test_env_lock();
     let tmp = tempfile::tempdir().expect("tempdir for isolated data dir");
-    std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
+    for var in ISOLATED_ENV_VARS {
+        std::env::set_var(var, tmp.path());
+    }
     IsolatedDataDir { tmp, _guard: guard }
 }
 
