@@ -178,11 +178,12 @@ mod double_compression_guard {
         // Reads already produce mode-aware, structure-preserving output, so the
         // generic terse layer must never re-compress them. The guard skips the
         // whole read family unconditionally (a verbatim `full`/`lines:` read has
-        // 0 savings yet must still be protected from dictionary-mangling).
+        // 0 savings yet must still be protected from dictionary-mangling). The
+        // read-family + verbatim-mode decision lives in `is_verbatim_read`.
         let body = crate::skip_terse_body(&src);
         assert!(
-            body.contains("is_read_family"),
-            "skip_terse must skip the read family to avoid re-compressing reads"
+            body.contains("is_verbatim_read"),
+            "skip_terse must skip verbatim reads (read family) to avoid re-compressing them"
         );
 
         // The double-counting guard for already-saving tools moved to the
