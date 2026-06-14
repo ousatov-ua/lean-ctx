@@ -2531,6 +2531,10 @@ mod tests {
         assert!(err2.starts_with("INVALID_TARGET"), "got: {err2}");
     }
 
+    // Jail rejection only happens when the jail is compiled in. `--all-features`
+    // pulls in `no-jail` (jail disabled), so skip there like every other jail
+    // assertion (see e.g. server::multi_path tests).
+    #[cfg(not(feature = "no-jail"))]
     #[test]
     fn resolve_move_target_path_is_jailed() {
         let dir = tempfile::tempdir().unwrap();
@@ -2674,6 +2678,8 @@ mod tests {
         assert_eq!(be2.applied_with_force.get(), Some(true));
     }
 
+    // See above: jail rejection requires the jail compiled in (skipped under no-jail).
+    #[cfg(not(feature = "no-jail"))]
     #[test]
     fn move_apply_rejects_out_of_jail_changed_path() {
         let dir = tempfile::tempdir().unwrap();
