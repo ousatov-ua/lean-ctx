@@ -275,7 +275,7 @@ impl LeanCtxServer {
         timestamp: &str,
     ) {
         const MAX_LOG_LINES: usize = 50;
-        if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+        if let Ok(dir) = crate::core::paths::state_dir() {
             let log_path = dir.join("tool-calls.log");
             let mode_str = mode.unwrap_or("-");
             let slow = if duration_ms > 5000 { " **SLOW**" } else { "" };
@@ -400,7 +400,7 @@ impl LeanCtxServer {
             "updated_at": chrono::Local::now().to_rfc3339(),
         });
 
-        if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+        if let Ok(dir) = crate::core::paths::state_dir() {
             let _ = std::fs::write(dir.join("mcp-live.json"), live.to_string());
         }
     }

@@ -58,7 +58,7 @@ fn mask_sensitive_data(input: &str) -> String {
 }
 
 pub fn save_tee(command: &str, output: &str) -> Option<String> {
-    let tee_dir = dirs::home_dir()?.join(".lean-ctx").join("tee");
+    let tee_dir = crate::core::paths::state_dir().ok()?.join("tee");
     std::fs::create_dir_all(&tee_dir).ok()?;
 
     cleanup_old_tee_logs(&tee_dir);

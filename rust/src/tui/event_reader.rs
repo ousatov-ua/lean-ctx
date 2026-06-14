@@ -9,7 +9,7 @@ pub(super) struct EventTail {
 
 impl EventTail {
     pub(super) fn new() -> Self {
-        let base = crate::core::data_dir::lean_ctx_data_dir()
+        let base = crate::core::paths::state_dir()
             .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".lean-ctx"));
         let path = base.join("events.jsonl");
         let offset = std::fs::metadata(&path).map_or(0, |m| m.len());

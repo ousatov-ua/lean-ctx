@@ -604,7 +604,7 @@ pub fn cmd_cache(args: &[String]) {
             println!("  Hits:      {hits}");
             println!("  Hit Rate:  {rate}%");
 
-            if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+            if let Ok(dir) = crate::core::paths::state_dir() {
                 let live_path = dir.join("mcp-live.json");
                 if let Ok(content) = std::fs::read_to_string(&live_path) {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {

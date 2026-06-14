@@ -191,9 +191,8 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
             crate::cli::wrapped_publish::maybe_auto_publish(&period);
         }
     } else if rest.iter().any(|a| a == "--pipeline") {
-        let stats_path = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".lean-ctx")
+        let stats_path = crate::core::paths::state_dir()
+            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".lean-ctx"))
             .join("pipeline_stats.json");
         if let Ok(data) = std::fs::read_to_string(&stats_path) {
             if let Ok(stats) = serde_json::from_str::<core::pipeline::PipelineStats>(&data) {

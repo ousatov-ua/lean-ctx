@@ -3,10 +3,8 @@ use std::path::PathBuf;
 
 use chrono::{Local, Utc};
 
-use super::data_dir::lean_ctx_data_dir;
-
 fn journal_path() -> PathBuf {
-    lean_ctx_data_dir()
+    crate::core::paths::state_dir()
         .unwrap_or_else(|_| PathBuf::from(".lean-ctx"))
         .join("journal.md")
 }
@@ -96,14 +94,14 @@ mod tests {
 
     #[test]
     fn journal_log_creates_file() {
-        let _lock = crate::core::data_dir::test_env_lock();
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("LEAN_CTX_DATA_DIR", dir.path().as_os_str());
+        // `journal.md` is STATE (GH #408); isolated_data_dir collapses all four
+        // category dirs onto one temp dir so the write/read pair stays valid.
+        let iso = crate::core::data_dir::isolated_data_dir();
         std::env::set_var("LEAN_CTX_JOURNAL", "1");
 
         log("test", "hello world");
 
-        let path = dir.path().join("journal.md");
+        let path = iso.path().join("journal.md");
         assert!(path.exists(), "journal.md should be created");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("[test] hello world"));
@@ -114,9 +112,7 @@ mod tests {
 
     #[test]
     fn read_journal_tail() {
-        let _lock = crate::core::data_dir::test_env_lock();
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("LEAN_CTX_DATA_DIR", dir.path().as_os_str());
+        let _iso = crate::core::data_dir::isolated_data_dir();
         std::env::set_var("LEAN_CTX_JOURNAL", "1");
 
         for i in 0..5 {

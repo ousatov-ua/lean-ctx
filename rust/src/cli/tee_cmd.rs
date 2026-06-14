@@ -1,9 +1,10 @@
 pub fn cmd_tee(args: &[String]) {
-    let tee_dir = if let Some(h) = dirs::home_dir() {
-        h.join(".lean-ctx").join("tee")
-    } else {
-        eprintln!("Cannot determine home directory");
-        std::process::exit(1);
+    let tee_dir = match crate::core::paths::state_dir() {
+        Ok(d) => d.join("tee"),
+        Err(e) => {
+            eprintln!("Cannot determine state directory: {e}");
+            std::process::exit(1);
+        }
     };
 
     let action = args.first().map_or("list", std::string::String::as_str);

@@ -9,7 +9,7 @@ use super::context_field::{
 const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 
 fn ledger_path(agent_id: &str) -> Result<std::path::PathBuf, String> {
-    let dir = crate::core::data_dir::lean_ctx_data_dir()?;
+    let dir = crate::core::paths::state_dir()?;
     if agent_id == "default" {
         Ok(dir.join("context_ledger.json"))
     } else {

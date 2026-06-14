@@ -331,9 +331,9 @@ impl PipelineStats {
             .sum()
     }
 
-    /// Persists pipeline stats to `~/.lean-ctx/pipeline_stats.json`.
+    /// Persists pipeline stats to the state dir's `pipeline_stats.json`.
     pub fn save(&self) {
-        if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+        if let Ok(dir) = crate::core::paths::state_dir() {
             let path = dir.join("pipeline_stats.json");
             if let Ok(json) = serde_json::to_string(self) {
                 let _ = std::fs::write(path, json);
@@ -343,7 +343,7 @@ impl PipelineStats {
 
     /// Loads pipeline stats from disk, returning defaults if absent.
     pub fn load() -> Self {
-        crate::core::data_dir::lean_ctx_data_dir()
+        crate::core::paths::state_dir()
             .ok()
             .map(|d| d.join("pipeline_stats.json"))
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -379,6 +379,34 @@ impl Default for Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// GH #408 (XDG-3): `pipeline_stats.json` is runtime STATE and must persist
+    /// to `state_dir()`, never the data dir. With distinct category overrides the
+    /// file MUST land under STATE and be absent from DATA — this is the only kind
+    /// of test that catches a write/read category mismatch, since the shared test
+    /// sandbox collapses all categories onto one dir.
+    #[test]
+    fn pipeline_stats_persist_to_state_dir_not_data_dir() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let state = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        std::env::set_var("LEAN_CTX_STATE_DIR", state.path());
+        std::env::set_var("LEAN_CTX_DATA_DIR", data.path());
+
+        PipelineStats::default().save();
+
+        let in_state = state.path().join("pipeline_stats.json").exists();
+        let in_data = data.path().join("pipeline_stats.json").exists();
+
+        std::env::remove_var("LEAN_CTX_STATE_DIR");
+        std::env::remove_var("LEAN_CTX_DATA_DIR");
+
+        assert!(in_state, "pipeline_stats.json must be written to state_dir");
+        assert!(
+            !in_data,
+            "pipeline_stats.json must NOT land in the data dir"
+        );
+    }
 
     struct PassthroughLayer {
         kind: LayerKind,

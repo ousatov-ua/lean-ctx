@@ -4,7 +4,7 @@ const LOG_FILENAME: &str = "slow-commands.log";
 const MAX_LOG_ENTRIES: usize = 500;
 
 fn slow_log_path() -> Option<PathBuf> {
-    crate::core::data_dir::lean_ctx_data_dir()
+    crate::core::paths::state_dir()
         .ok()
         .map(|d| d.join(LOG_FILENAME))
 }

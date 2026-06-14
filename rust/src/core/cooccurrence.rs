@@ -200,7 +200,7 @@ impl CoAccessGraph {
 fn store_path(project_root: &str) -> Option<PathBuf> {
     let normalized = crate::core::graph_index::normalize_project_root(project_root);
     let hash = crate::core::project_hash::hash_project_root(&normalized);
-    crate::core::data_dir::lean_ctx_data_dir()
+    crate::core::paths::state_dir()
         .ok()
         .map(|d| d.join("cooccurrence").join(format!("{hash}.json")))
 }

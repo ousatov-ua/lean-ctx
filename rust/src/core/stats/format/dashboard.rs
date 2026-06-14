@@ -207,9 +207,12 @@ fn gain_dashboard(t: &Theme, tick: Option<u64>, with_footer: bool) -> String {
             Ok(p) => p.display().to_string(),
             Err(_) => "~/.config/lean-ctx".into(),
         };
-        let mcp_hint = if let Ok(live) =
-            std::fs::read_to_string(std::path::Path::new(&data_dir).join("mcp-live.json"))
-        {
+        // `mcp-live.json` is STATE (GH #408); read it from the state dir.
+        let mcp_live = crate::core::paths::state_dir().map_or_else(
+            |_| std::path::Path::new(&data_dir).join("mcp-live.json"),
+            |d| d.join("mcp-live.json"),
+        );
+        let mcp_hint = if let Ok(live) = std::fs::read_to_string(&mcp_live) {
             if live.contains("\"total_calls\"") {
                 format!(
                     "\n{dim}MCP calls are tracked in mcp-live.json but stats.json is empty.{rst}\

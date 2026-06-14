@@ -260,7 +260,7 @@ fn generate_token() -> String {
 }
 
 fn save_token(token: &str) {
-    if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+    if let Ok(dir) = crate::core::paths::state_dir() {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("dashboard.token");
         #[cfg(unix)]
@@ -286,7 +286,7 @@ fn save_token(token: &str) {
 }
 
 fn load_saved_token() -> Option<String> {
-    let dir = crate::core::data_dir::lean_ctx_data_dir().ok()?;
+    let dir = crate::core::paths::state_dir().ok()?;
     let path = dir.join("dashboard.token");
     std::fs::read_to_string(path)
         .ok()
