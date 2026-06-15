@@ -219,8 +219,8 @@ Tool mapping (MANDATORY):
 • Edit/StrReplace -> native (lean-ctx=READ only). If Edit needs Read and Read is unavailable, use ctx_edit.
 • Write, Delete, Glob -> normal. NEVER loop on Edit failures — use ctx_edit.
 
-ctx_read modes: full|map|signatures|diff|task|reference|aggressive|entropy|lines:N-M
-Auto-selects mode. Re-reads ~13 tok. File refs F1,F2.. persist.
+ctx_read modes: auto(default)|full|map|signatures|diff|task|reference|aggressive|entropy|lines:N-M
+Omit mode → auto-selects optimal. full only right before editing. Re-reads ~13 tok. File refs F1,F2.. persist.
 
 Workflow: Orient(ctx_overview) → Locate(ctx_search) → Read(ctx_read) → Edit(ctx_edit/native) → Verify(ctx_read diff + ctx_shell test) → Record(ctx_knowledge).
 

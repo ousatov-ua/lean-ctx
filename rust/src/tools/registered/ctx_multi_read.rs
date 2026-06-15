@@ -28,7 +28,8 @@ impl McpTool for CtxMultiReadTool {
                     },
                     "mode": {
                         "type": "string",
-                        "description": "Compression mode (default: full). Same modes as ctx_read (auto, full, raw, map, signatures, diff, aggressive, entropy, task, reference, lines:N-M). Use 'raw' for zero-overhead output."
+                        "default": "auto",
+                        "description": "Compression mode (default: auto — optimal per file, like ctx_read). Same modes as ctx_read (auto, full, raw, map, signatures, diff, aggressive, entropy, task, reference, lines:N-M). Use 'full' only when batch-editing; 'raw' for zero-overhead output."
                     },
                     "fresh": {
                         "type": "boolean",
@@ -118,14 +119,15 @@ impl CtxMultiReadTool {
             ));
         }
 
+        // Default to the profile's read mode (auto) and let ctx_read resolve the
+        // optimal mode per file. Previously this forced auto→full, which is exactly
+        // the "everything comes back as full" complaint (#421): batch reads must
+        // honour auto like single ctx_read does.
         let mode = get_str(args, "mode").unwrap_or_else(|| {
-            let p = crate::core::profiles::active_profile();
-            let dm = p.read.default_mode_effective();
-            if dm == "auto" {
-                "full".to_string()
-            } else {
-                dm.to_string()
-            }
+            crate::core::profiles::active_profile()
+                .read
+                .default_mode_effective()
+                .to_string()
         });
         let fresh = get_bool(args, "fresh").unwrap_or(false);
 

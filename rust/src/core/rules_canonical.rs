@@ -22,7 +22,7 @@ pub fn dedicated_rules(mode: Mode) -> String {
 
     format!(
         r#"# lean-ctx — Context Engineering Layer
-<!-- lean-ctx-rules-v11 -->
+<!-- lean-ctx-rules-v12 -->
 
 CRITICAL: ALWAYS use lean-ctx tools instead of native equivalents. This is NOT optional.
 
@@ -33,7 +33,7 @@ CRITICAL: ALWAYS use lean-ctx tools instead of native equivalents. This is NOT o
 ## Workflow: Orient → Locate → Read → Edit → Verify → Record
 1. Orient: ctx_overview(task) or ctx_compose(task, path)
 2. Locate: ctx_search(pattern, path) or ctx_semantic_search(query)
-3. Read: ctx_read(path, mode) — full before edits, signatures for context
+3. Read: ctx_read(path, mode) — omit mode for auto; full only right before edits
 4. Edit: ctx_edit(path, old_string, new_string) or native Edit
 5. Verify: ctx_read(path, "diff") + ctx_shell("test command")
 6. Record: ctx_knowledge(action="remember", content="...")
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn dedicated_rules_have_markers() {
         let rules = dedicated_rules(Mode::Hybrid);
-        assert!(rules.contains("lean-ctx-rules-v11"));
+        assert!(rules.contains("lean-ctx-rules-v12"));
         assert!(rules.contains("<!-- /lean-ctx -->"));
     }
 

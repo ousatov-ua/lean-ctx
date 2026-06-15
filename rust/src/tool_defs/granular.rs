@@ -24,12 +24,12 @@ pub fn unified_tool_defs() -> Vec<Tool> {
     vec![
         tool_def(
             "ctx_read",
-            "Read file (replaces native Read). Cached, re-reads ~13 tok. Modes: full|map|signatures|diff|aggressive|entropy|task|reference|lines:N-M. fresh=true re-reads.",
+            "Read file (replaces native Read). Cached, re-reads ~13 tok. Omit mode to auto-select (recommended); full only right before editing. Modes: auto(default)|full|map|signatures|diff|aggressive|entropy|task|reference|lines:N-M. fresh=true re-reads.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "File path" },
-                    "mode": { "type": "string" },
+                    "mode": { "type": "string", "default": "auto" },
                     "start_line": { "type": "integer" },
                     "fresh": { "type": "boolean" }
                 },

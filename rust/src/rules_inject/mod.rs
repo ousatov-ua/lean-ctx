@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 const MARKER: &str = "# lean-ctx — Context Engineering Layer";
 const END_MARKER: &str = "<!-- /lean-ctx -->";
-const RULES_VERSION: &str = "lean-ctx-rules-v11";
+const RULES_VERSION: &str = "lean-ctx-rules-v12";
 
 pub const RULES_MARKER: &str = MARKER;
 pub const RULES_END_MARKER: &str = END_MARKER;

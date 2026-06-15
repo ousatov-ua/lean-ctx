@@ -35,14 +35,16 @@ impl McpTool for CtxReadTool {
         tool_def(
             "ctx_read",
             "Read a file. Prefer over native Read/cat/head/tail (cached, compressed).\n\
-             Unchanged re-reads cost ~13 tokens. Auto-selects mode. fresh=true forces a disk re-read.",
+             Omit mode to auto-select (recommended); use full only right before editing. \
+             Re-reads ~13 tokens. fresh=true forces a disk re-read.",
             json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Absolute file path" },
                     "mode": {
                         "type": "string",
-                        "description": "auto (default)|full|raw (no header/footer)|map|signatures|diff|task|reference|aggressive|entropy|lines:N-M|density:0.X"
+                        "default": "auto",
+                        "description": "Omit to auto-select (recommended). auto(default)|full (for editing)|raw|map (large files)|signatures|diff|task|reference|aggressive|entropy|lines:N-M|density:0.X"
                     },
                     "start_line": { "type": "integer", "description": "Read from this line on" },
                     "fresh": { "type": "boolean", "description": "Bypass cache, force disk re-read" }

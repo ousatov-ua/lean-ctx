@@ -1,24 +1,24 @@
 <!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->
 # lean-ctx — Context Engineering Layer
-<!-- lean-ctx-rules-v11 -->
+<!-- lean-ctx-rules-v12 -->
 
 ## Tool Mapping (MANDATORY — use instead of native equivalents)
 | Instead of | Use | Example |
 |------------|-----|---------|
-| Read/cat/head/tail | `ctx_read(path, mode)` | `ctx_read("src/main.rs", "full")` |
+| Read/cat/head/tail | `ctx_read(path, mode)` | `ctx_read("src/main.rs")` (omit mode = auto) |
 | Grep/rg/find | `ctx_search(pattern, path)` | `ctx_search("fn handle", "src/")` |
 | Shell/bash | `ctx_shell(command)` | `ctx_shell("cargo test")` |
 | Edit (when Read unavailable) | `ctx_edit(path, old, new)` | `ctx_edit("f.rs", "old", "new")` |
 
-## ctx_read Mode Selection
+## ctx_read Mode Selection (omit mode to auto-select — recommended)
 | Goal | Mode | When |
 |------|------|------|
-| Edit this file | `full` | Before any edit |
+| Exploring / unsure | `auto` (default) | Omit mode; system picks optimal |
+| Edit this file | `full` | Right before an edit |
 | Understand API | `signatures` | Context-only, won't edit |
-| Re-read after edit | `diff` | Post-edit verification |
 | Large file overview | `map` | >500 lines, won't edit |
+| Re-read after edit | `diff` | Post-edit verification |
 | Specific region | `lines:N-M` | Know exact location |
-| Unsure | `auto` | System selects optimal mode |
 
 ## Workflow (follow this order)
 1. **Orient:** `ctx_overview(task)` or `ctx_compose(task, path)` for unfamiliar tasks
