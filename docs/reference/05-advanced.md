@@ -89,21 +89,24 @@ on the smaller history. Tune via `[proxy].history_mode` (or
 >   `lean-ctx proxy enable` (or `--force` to override detection). Claude traffic is
 >   then compressed by the proxy.
 
-### Codex in front of the proxy (HTTP/SSE + local HTTP upstreams)
+### Codex in front of the proxy (native WebSocket + HTTP/SSE)
 
-The proxy serves the OpenAI Responses API over **HTTP/SSE** on both `/v1/responses`
-and the bare `/responses` path. Codex, however, defaults to a **WebSocket** transport
-(`ws://…/responses`), which the proxy does not serve yet ([#440](https://github.com/yvgude/lean-ctx/issues/440)).
-Until WebSocket support lands, force Codex onto HTTP/SSE explicitly so it does not
-fail over to WS and report reconnect errors:
+The proxy serves the OpenAI Responses API on both `/v1/responses` and the bare
+`/responses` path over **two transports**: native **WebSocket**
+(`ws://127.0.0.1:4444/responses`) — Codex's default — and **HTTP/SSE** for clients
+that prefer it ([#440](https://github.com/yvgude/lean-ctx/issues/440)). Point Codex
+at the proxy and it connects over WebSockets out of the box; the proxy bridges the
+WS frames to the upstream and compresses them like any other request:
 
 ```toml
-# ~/.codex/config.toml — point Codex at the proxy and disable WebSockets
+# ~/.codex/config.toml — point Codex at the proxy (WebSockets work as-is)
 [model_providers.lean-ctx]
 name = "lean-ctx"
 base_url = "http://127.0.0.1:4444/v1"
-supports_websockets = false
 ```
+
+> Prefer HTTP/SSE instead? Set `supports_websockets = false` in the provider block
+> to force Codex onto the `/v1/responses` HTTP transport.
 
 **Non-loopback HTTP upstreams (e.g. `codex-lb`).** By default an upstream must be
 HTTPS unless it is loopback (`127.0.0.1` / `localhost` / `[::1]`). To put the proxy
