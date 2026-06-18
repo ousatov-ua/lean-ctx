@@ -125,6 +125,16 @@ pub fn compress_output(command: &str, output: &str) -> Option<String> {
         return Some(r);
     }
 
+    // VCS history (git/jj/gh/glab) is owned by its dedicated compressor. Its
+    // lines look log-ish (one per commit) but are NOT application logs, so the
+    // generic log/test fallbacks would mis-summarize them — e.g. truncating an
+    // explicit `git log --oneline -40` to "last 15" or flagging a commit
+    // subject as an error. When the dedicated compressor finds no gain we keep
+    // the output verbatim instead of letting a generic heuristic mangle it.
+    if has_vcs_owner(command) {
+        return None;
+    }
+
     if let Some(r) = log_dedup::compress(clean_output)
         && let Some(r) = shorter_only(r, output)
     {
@@ -138,6 +148,18 @@ pub fn compress_output(command: &str, output: &str) -> Option<String> {
     }
 
     None
+}
+
+/// True for version-control commands whose output is authoritative under their
+/// own compressor and must not be reinterpreted by the generic log/test
+/// fallbacks (commit history is not application log output).
+pub(crate) fn has_vcs_owner(command: &str) -> bool {
+    let c = command.trim_start().to_ascii_lowercase();
+    c.starts_with("git ")
+        || c.starts_with("jj ")
+        || c.starts_with("gh ")
+        || c.starts_with("glab ")
+        || c.starts_with("hg ")
 }
 
 /// Collapse whitespace into single spaces so comparisons align with logical word tokens.
