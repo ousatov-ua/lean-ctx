@@ -287,13 +287,22 @@ fn cmd_apply() {
 }
 
 fn cmd_validate() {
+    // GH #450: always surface *where* the effective settings come from first, so
+    // a "no config" result is never a dead end and a silently shadowed value
+    // (env / project-local / parse error) is immediately visible.
+    print_config_provenance();
+
     let schema = config::schema::ConfigSchema::generate();
     let known = schema.known_keys();
 
     let path = match config::Config::path() {
         Some(p) if p.exists() => p,
-        _ => {
-            println!("[OK] No config.toml found — using defaults.");
+        Some(p) => {
+            println!("[OK] No config.toml at {} — using defaults.", p.display());
+            return;
+        }
+        None => {
+            println!("[OK] No config dir resolved — using defaults.");
             return;
         }
     };
@@ -397,6 +406,68 @@ fn cmd_validate() {
         );
         std::process::exit(1);
     }
+}
+
+/// Print where the editable settings actually come from (GH #450): the resolved
+/// `config.toml` path, the layout pin, any parse error, and the env /
+/// project-local overrides that can silently shadow a saved value. This makes the
+/// "my quick settings keep resetting" reports self-diagnosing — the reporter sees
+/// the exact mechanism instead of an opaque "no config" message.
+fn print_config_provenance() {
+    let prov = config::Config::provenance();
+
+    println!("Config source:");
+    match &prov.config_path {
+        Some(p) if prov.config_exists => println!("  config.toml:    {} (exists)", p.display()),
+        Some(p) => println!(
+            "  config.toml:    {} (missing — using defaults)",
+            p.display()
+        ),
+        None => println!("  config.toml:    <no config dir resolved — using defaults>"),
+    }
+    println!(
+        "  layout pin:     {}",
+        if prov.xdg_pinned { "xdg" } else { "unpinned" }
+    );
+
+    if let Some(err) = &prov.parse_error {
+        println!("  [!] parse error: config.toml is unparseable — running on DEFAULTS:");
+        println!("                  {err}");
+        println!("                  Run `lean-ctx doctor --fix` to repair.");
+    }
+
+    if prov.local_exists && !prov.local_keys.is_empty() {
+        let path = prov
+            .local_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        println!(
+            "  [!] project-local: {path} overrides {}",
+            prov.local_keys.join(", ")
+        );
+        println!("                  (these win over the global config for this project)");
+    }
+
+    if !prov.env_overrides.is_empty() {
+        let list = prov
+            .env_overrides
+            .iter()
+            .map(|e| format!("{} ({})", e.var, e.setting))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  [!] env override: {list}");
+        println!(
+            "                  (these win over config.toml; unset them for saved values to apply)"
+        );
+    }
+
+    if prov.has_shadow() {
+        println!(
+            "  -> A saved setting can appear to \"reset\" because a source above shadows it (GH #450)."
+        );
+    }
+    println!();
 }
 
 fn find_closest(needle: &str, haystack: &[String]) -> Option<String> {

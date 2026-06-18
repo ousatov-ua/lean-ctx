@@ -472,6 +472,11 @@ pub(super) fn cmd_dashboard(rest: &[String]) {
             .find_map(|p| p.strip_prefix("--open="))
             .map(String::from)
     };
+    // GH #450: pin the XDG layout before serving, exactly like the daemon/server
+    // start paths do. Without this the dashboard was the only writer that could
+    // land config.toml in a divergent (unpinned/legacy) dir while the runtime
+    // read another — so a saved quick-setting silently "reset" on the next read.
+    crate::core::layout_pin::heal();
     super::spawn_proxy_if_needed();
     super::run_async(dashboard::start(
         port, host, base_path, auth_token, open_mode,

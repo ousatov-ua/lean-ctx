@@ -8,6 +8,7 @@ use super::memory_policy::MemoryPolicy;
 mod defaults_allowlist;
 mod enums;
 mod memory;
+mod provenance;
 mod proxy;
 mod render;
 pub mod schema;
@@ -26,6 +27,7 @@ pub use enums::{
     RulesScope, TeeMode, TerseAgent,
 };
 pub use memory::{MemoryCleanup, MemoryGuardConfig, MemoryProfile, SavingsFooter};
+pub use provenance::{ConfigProvenance, EnvOverride};
 pub use proxy::{
     HistoryMode, ProxyConfig, ProxyProvider, UpstreamDrift, Upstreams, diagnose_drift,
     env_upstream_override, is_local_proxy_url, normalize_url, normalize_url_opt,

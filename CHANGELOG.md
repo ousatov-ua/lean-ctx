@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **Quick settings that "keep resetting" are now diagnosable and stable (#450)** —
+  a value saved in the dashboard could be silently shadowed so it appeared to
+  revert to defaults (lite/off), and `lean-ctx config validate` only said
+  "no config" without telling you *where* it looked. There are four mechanisms
+  and none of them was visible: an env var (`LEAN_CTX_*`), a project-local
+  `.lean-ctx.toml` override (`compression_level`/`terse_agent`/`tool_profile`), a
+  divergent resolved config dir (dashboard writes path X, runtime reads path Y),
+  or an unparseable `config.toml` falling back to defaults. Fixed by making the
+  provenance explicit and the path stable:
+  - **`config validate` shows the source** — it now always prints the resolved
+    `config.toml` path (even when missing), the layout-pin state, any parse
+    error, and the active env / project-local overrides, with a one-line
+    explanation of why a value can appear to "reset".
+  - **Dashboard surfaces provenance** — `/api/settings` returns `config_path`,
+    `config_exists`, `parse_error` and a per-setting `local_override`; the Quick
+    Settings panel shows which `config.toml` is read and warns (and disables the
+    toggle) when an env var or a project-local `.lean-ctx.toml` is winning.
+  - **Dashboard pins the layout** — `lean-ctx dashboard` now runs the same
+    `layout_pin::heal()` as the daemon/server start paths, so it can no longer
+    write `config.toml` into a divergent dir the runtime never reads.
 - **Dashboard no longer times out on load; heavy index/graph routes never block (#452)** —
   opening the dashboard mounted ~22 `<cockpit-*>` components that each fired
   `loadData()` from `connectedCallback()` at once — a thundering herd of
