@@ -47,6 +47,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - **Learning Ledger** — `lean-ctx gotchas ledger` renders a human-readable
     summary (errors observed, fixes correlated, repeats avoided, promoted to
     knowledge) plus the distilled strategies/pitfalls, making the learning visible.
+- **Semantic near-duplicate detection on `ctx_knowledge remember`** — the lexical
+  similarity check only caught facts sharing tokens, so paraphrases of the same
+  decision silently accumulated. `remember` now also runs an embedding cosine
+  pass (threshold 0.86) *before* upsert and appends a non-destructive "SEMANTIC
+  NEAR-DUPLICATES" advisory listing paraphrases the lexical pass missed, so the
+  agent can `judge`/merge them. Self-matches and already-judged pairs are
+  excluded; the embedding path is behind the default `embeddings` feature.
 
 ### Fixed
 - **High idle CPU when no session is running (#453)** — on v3.8.8 (macOS, Claude
