@@ -437,36 +437,13 @@ impl GraphProvider {
 
 /// Open whichever graph is already populated on disk, **without** triggering any
 /// build, plus a flag telling the caller the property graph still wants a
-/// (re)build. Backend selection (#682): `legacy` never consults the property
-/// graph — the escape hatch if a PG regression surfaces. `auto` (the default
-/// since #682.4, parity proven lossless in #682.3) and `property-graph` prefer a
-/// populated PG and fall back to the graph index when PG is not yet populated.
+/// (re)build. Prefers a fully-populated PropertyGraph and falls back to the
+/// in-memory graph_index extractor while the PG is not yet populated (first run
+/// or just after a rebuild), flagging `needs_build` so the caller can warm the
+/// PG for the next call (#696 phase D: the `legacy` backend escape hatch was
+/// retired once PG-only persistence proved lossless in #682.3).
 fn open_existing(project_root: &str) -> (Option<OpenGraphProvider>, bool) {
     let t0 = std::time::Instant::now();
-
-    let backend =
-        crate::core::config::GraphBackend::effective(&crate::core::config::Config::load());
-    if backend == crate::core::config::GraphBackend::Legacy {
-        if let Some(idx) = super::index_orchestrator::try_load_graph_index(project_root)
-            && (!idx.edges.is_empty() || !idx.files.is_empty())
-        {
-            log_source_selection(
-                GraphProviderSource::GraphIndex,
-                idx.files.len(),
-                idx.edges.len(),
-                t0,
-            );
-            return (
-                Some(OpenGraphProvider {
-                    source: GraphProviderSource::GraphIndex,
-                    provider: GraphProvider::GraphIndex(idx),
-                }),
-                false,
-            );
-        }
-        // Legacy never builds the property graph.
-        return (None, false);
-    }
 
     let mut pg_provider = None;
     let mut pg_populated = false;

@@ -29,7 +29,6 @@ Top-level configuration keys
 - `excluded_commands` (string[], default `[]`) — Commands to exclude from shell hook interception
 - `extra_ignore_patterns` (string[], default `[]`) — Extra glob patterns to ignore in graph/overview/preload
 - `extra_roots` (string[], default `[]` — env `LEAN_CTX_EXTRA_ROOTS`) — Extra project roots for multi-root workspaces (auto-added to PathJail allow-list)
-- `graph_backend` (enum(legacy|auto|property-graph), default `auto` — env `LEAN_CTX_GRAPH_BACKEND`) — Which graph engine the provider uses: auto (default; prefer SQLite PropertyGraph when fully built, else fall back to graph_index), legacy (in-memory graph_index only — escape hatch), property-graph (prefer PropertyGraph)
 - `graph_index_max_files` (u64, default `0`) — Maximum files in graph index. 0 = unlimited (default). Set >0 to cap for constrained systems
 - `journal_enabled` (bool, default `true`) — Write human-readable activity journal to ~/.lean-ctx/journal.md
 - `max_disk_mb` (u64, default `0` — env `LEAN_CTX_MAX_DISK_MB`) — Simplified disk budget in MB (0 = disabled). Distributes: archive ~25%, BM25 ~10%

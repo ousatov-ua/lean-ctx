@@ -62,28 +62,9 @@ pub(crate) fn cmd_index(args: &[String]) {
                 eprintln!("  BM25 error: {err}");
             }
 
-            // Legacy builds PG via the deep_queries engine here; non-legacy
-            // already mirrored graph_index into PG inside ensure_all_background
-            // above (#682.2), so a second build would clobber the mirror.
-            let backend =
-                crate::core::config::GraphBackend::effective(&crate::core::config::Config::load());
-            if backend == crate::core::config::GraphBackend::Legacy {
-                eprint!("rebuilding property graph");
-                let result = crate::tools::ctx_impact::handle(
-                    "build",
-                    None,
-                    &project_root,
-                    None,
-                    Some("text"),
-                );
-                if result.contains("ERROR") {
-                    eprintln!(" {result}");
-                } else {
-                    eprintln!(" done");
-                }
-            } else {
-                eprintln!("property graph mirrored from graph_index during index build");
-            }
+            // The property graph was already mirrored from the graph_index
+            // extractor inside ensure_all_background above (#682.2).
+            eprintln!("property graph mirrored from graph_index during index build");
 
             // build-full is an explicit "make everything fresh". Drop the in-process
             // graph cache and flush the running daemon's read cache too, so ctx_read
@@ -95,32 +76,19 @@ pub(crate) fn cmd_index(args: &[String]) {
             }
         }
         Some("build-graph") => {
-            let backend =
-                crate::core::config::GraphBackend::effective(&crate::core::config::Config::load());
-            if backend == crate::core::config::GraphBackend::Legacy {
-                let result = crate::tools::ctx_impact::handle(
-                    "build",
-                    None,
-                    &project_root,
-                    None,
-                    Some("text"),
-                );
-                println!("{result}");
-            } else {
-                // #682.1: mirror the proven graph_index extractor into the
-                // property graph (complete symbols + file_catalog).
-                match crate::core::graph_provider::build_property_graph(&project_root) {
-                    Ok(()) => match crate::core::property_graph::CodeGraph::open(&project_root) {
-                        Ok(g) => println!(
-                            "property graph built from graph_index: {} nodes, {} edges, {} files",
-                            g.node_count().unwrap_or(0),
-                            g.edge_count().unwrap_or(0),
-                            g.file_catalog_count().unwrap_or(0),
-                        ),
-                        Err(_) => println!("property graph built from graph_index"),
-                    },
-                    Err(e) => eprintln!("property graph build failed: {e}"),
-                }
+            // #682.1: mirror the proven graph_index extractor into the property
+            // graph (complete symbols + file_catalog).
+            match crate::core::graph_provider::build_property_graph(&project_root) {
+                Ok(()) => match crate::core::property_graph::CodeGraph::open(&project_root) {
+                    Ok(g) => println!(
+                        "property graph built from graph_index: {} nodes, {} edges, {} files",
+                        g.node_count().unwrap_or(0),
+                        g.edge_count().unwrap_or(0),
+                        g.file_catalog_count().unwrap_or(0),
+                    ),
+                    Err(_) => println!("property graph built from graph_index"),
+                },
+                Err(e) => eprintln!("property graph build failed: {e}"),
             }
         }
         Some("watch") => run_watcher(root),

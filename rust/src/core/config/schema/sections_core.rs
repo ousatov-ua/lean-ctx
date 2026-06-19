@@ -340,15 +340,6 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             ),
         );
     root.insert(
-        "graph_backend".into(),
-        key_with_env(
-            "enum(legacy|auto|property-graph)",
-            serde_json::json!("auto"),
-            "Which graph engine the provider uses: auto (default; prefer SQLite PropertyGraph when fully built, else fall back to graph_index), legacy (in-memory graph_index only — escape hatch), property-graph (prefer PropertyGraph)",
-            "LEAN_CTX_GRAPH_BACKEND",
-        ),
-    );
-    root.insert(
         "shell_hook_disabled".into(),
         key_with_env(
             "bool",

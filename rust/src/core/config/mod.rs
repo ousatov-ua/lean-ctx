@@ -7,7 +7,6 @@ use super::memory_policy::MemoryPolicy;
 
 mod defaults_allowlist;
 mod enums;
-mod graph_backend;
 mod memory;
 mod provenance;
 mod proxy;
@@ -27,7 +26,6 @@ pub use enums::{
     CompressionLevel, OutputDensity, PermissionInheritance, ResponseVerbosity, RulesInjection,
     RulesScope, TeeMode, TerseAgent,
 };
-pub use graph_backend::GraphBackend;
 pub use memory::{MemoryCleanup, MemoryGuardConfig, MemoryProfile, SavingsFooter};
 pub use provenance::{ConfigProvenance, EnvOverride};
 pub use proxy::{
@@ -329,12 +327,6 @@ pub struct Config {
     /// Override via `LEAN_CTX_SHELL_ACTIVATION` env var.
     #[serde(default)]
     pub shell_activation: ShellActivation,
-    /// Which graph engine the provider facade selects. Defaults to `legacy`
-    /// (the proven in-memory graph_index) so completing the SQLite PropertyGraph
-    /// can never silently flip production onto an unverified backend (#682).
-    /// Override via LEAN_CTX_GRAPH_BACKEND env var.
-    #[serde(default)]
-    pub graph_backend: GraphBackend,
     /// Disable the daily version check against leanctx.com/version.txt.
     /// Override via LEAN_CTX_NO_UPDATE_CHECK env var.
     #[serde(default)]
@@ -543,7 +535,6 @@ impl Default for Config {
             shell_hook_disabled: false,
             shadow_mode: false,
             shell_activation: ShellActivation::default(),
-            graph_backend: GraphBackend::default(),
             update_check_disabled: false,
             updates: UpdatesConfig::default(),
             graph_index_max_files: serde_defaults::default_graph_index_max_files(),
