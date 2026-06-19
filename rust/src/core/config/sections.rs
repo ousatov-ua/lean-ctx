@@ -503,6 +503,38 @@ impl CostConfig {
     }
 }
 
+/// Outcome-based **success-fee** terms (GL #669, EPIC #671): the commercial
+/// inputs for turning verified savings into a Stripe invoice item.
+///
+/// The four fee parameters have **no defaults** — they are negotiated per
+/// customer, so `lean-ctx` must never invent a price. They stay `None` until set
+/// explicitly (e.g. `lean-ctx config set success_fee.take_rate 0.2`), and the
+/// invoice command fails closed when any is missing. The Stripe **secret key is
+/// never stored here**; it is read from the environment at invoice time.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SuccessFeeConfig {
+    /// Share of (haircut-adjusted) verified savings charged as the fee (`0.0..=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub take_rate: Option<f64>,
+    /// Fixed component added before the cap, in USD (`>= 0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_floor: Option<f64>,
+    /// Multiplier discounting cache-sourced savings (`0.0..=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_haircut: Option<f64>,
+    /// Cap: the fee may not exceed this fraction of the customer-provided
+    /// provider-bill delta (`0.0..=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoice_cap_pct: Option<f64>,
+    /// Invoice currency (ISO code, e.g. `usd`). Defaults to `usd` at invoice time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// Default Stripe customer id (`cus_…`) to bill. Overridable per run via `--customer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stripe_customer: Option<String>,
+}
+
 /// Settings for the code graph — in particular the *traversal* (co-access) edges
 /// learned from real agent sessions (#289).
 ///

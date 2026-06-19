@@ -3,6 +3,7 @@
 
 use super::savings::savings_agent_id;
 use crate::core;
+use crate::core::billing::stripe_invoice::{InvoiceItemRequest, StripeClient};
 
 /// `lean-ctx billing <plans|entitlements|usage>` — the commercial-plane billing
 /// substrate (EPIC 13.6). All subcommands are **informational and read-only**:
@@ -16,13 +17,21 @@ pub(in crate::cli::dispatch) fn cmd_billing(rest: &[String]) {
         "plans" => cmd_billing_plans(json),
         "entitlements" => cmd_billing_entitlements(rest.get(1).map(String::as_str), json),
         "usage" => cmd_billing_usage(json),
+        "invoice" => cmd_billing_invoice(rest, json),
         other => {
             eprintln!(
-                "unknown billing action '{other}'. Use: status | plans | entitlements <plan> | usage [--json]"
+                "unknown billing action '{other}'. Use: status | plans | entitlements <plan> | usage | invoice [--json]"
             );
             std::process::exit(1);
         }
     }
+}
+
+/// Reads `--key=value` style flags.
+fn flag(args: &[String], prefix: &str) -> Option<String> {
+    args.iter()
+        .find_map(|a| a.strip_prefix(prefix))
+        .map(str::to_string)
 }
 
 /// `lean-ctx billing status [--json]` — the at-a-glance commercial state for this
@@ -210,6 +219,302 @@ fn cmd_billing_usage(json: bool) {
         }
     );
     println!("  Provenance:    {}", usage.last_entry_hash);
+}
+
+/// `lean-ctx billing invoice --provider-delta-usd=N [--customer=cus_…] [--period=LABEL]
+/// [--create-invoice [--finalize]] [--dry-run] [--json]` — turn the **verified**
+/// signed savings into a Stripe success-fee invoice item (GL #669).
+///
+/// Fail-closed for *billing*: an unsigned or broken ledger never produces an
+/// invoice (but never blocks the local experience). The four fee terms have no
+/// defaults — the command refuses to invent a price. Stripe TEST mode only.
+fn cmd_billing_invoice(rest: &[String], json: bool) {
+    let dry_run = rest.iter().any(|a| a == "--dry-run");
+    let create_invoice = rest.iter().any(|a| a == "--create-invoice");
+    let finalize = rest.iter().any(|a| a == "--finalize");
+
+    let cfg = core::config::Config::load();
+
+    // 1. Commercial terms (no defaults → fail closed when unset).
+    let params = match core::billing::FeeParams::from_config(&cfg.success_fee) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    // 2. The invoice cap applies to the customer's actual provider-bill delta,
+    //    which only the customer knows — so it is a required input.
+    let Some(delta_str) = flag(rest, "--provider-delta-usd=") else {
+        eprintln!(
+            "--provider-delta-usd=<USD> is required: the customer-provided provider-bill \
+             delta the invoice cap (success_fee.invoice_cap_pct) applies to."
+        );
+        std::process::exit(1);
+    };
+    let provider_delta = match delta_str.trim().parse::<f64>() {
+        Ok(v) if v.is_finite() && v >= 0.0 => v,
+        _ => {
+            eprintln!("--provider-delta-usd must be a non-negative number (got '{delta_str}')");
+            std::process::exit(1);
+        }
+    };
+
+    // 3. Verified usage. Only a signed + intact chain is billable.
+    let agent_id = savings_agent_id();
+    let usage = core::billing::metered_usage(&agent_id);
+    if !usage.is_billable() {
+        let reason = format!(
+            "ledger is {} / {}",
+            if usage.signed { "signed" } else { "UNSIGNED" },
+            if usage.chain_valid {
+                "chain intact"
+            } else {
+                "chain BROKEN"
+            },
+        );
+        if json {
+            let payload = serde_json::json!({
+                "billable": false,
+                "reason": reason,
+                "saved_usd": usage.saved_usd,
+                "signed": usage.signed,
+                "chain_valid": usage.chain_valid,
+            });
+            print_json_or_die(&payload, "billing invoice");
+        } else {
+            eprintln!("Not billable ({reason}). No invoice created (billing fails closed).");
+        }
+        std::process::exit(2);
+    }
+
+    // 4. Compute the fee.
+    let breakdown = params.compute(usage.saved_usd, provider_delta);
+    let currency = cfg
+        .success_fee
+        .currency
+        .clone()
+        .unwrap_or_else(|| "usd".to_string());
+    let customer = flag(rest, "--customer=").or_else(|| cfg.success_fee.stripe_customer.clone());
+    let period = flag(rest, "--period=").unwrap_or_else(|| usage.period.clone());
+    let head_short: String = usage.last_entry_hash.chars().take(16).collect();
+    let idem = sanitize_idem(&format!(
+        "leanctx-fee-{}-{}",
+        customer.as_deref().unwrap_or("nocustomer"),
+        period
+    ));
+    let description = format!(
+        "lean-ctx success fee — period {period} (verified savings ${:.2})",
+        usage.saved_usd
+    );
+
+    let metadata = vec![
+        ("lean_ctx_period".to_string(), period.clone()),
+        (
+            "lean_ctx_ledger_head".to_string(),
+            usage.last_entry_hash.clone(),
+        ),
+        ("lean_ctx_agent".to_string(), usage.agent_id.clone()),
+        (
+            "saved_usd".to_string(),
+            format!("{:.6}", breakdown.saved_usd),
+        ),
+        (
+            "provider_delta_usd".to_string(),
+            format!("{:.6}", breakdown.provider_delta_usd),
+        ),
+        ("take_rate".to_string(), params.take_rate.to_string()),
+        (
+            "fixed_floor_usd".to_string(),
+            params.fixed_floor.to_string(),
+        ),
+        (
+            "cache_haircut".to_string(),
+            params.cache_haircut.to_string(),
+        ),
+        (
+            "invoice_cap_pct".to_string(),
+            params.invoice_cap_pct.to_string(),
+        ),
+        (
+            "base_fee_usd".to_string(),
+            format!("{:.6}", breakdown.base_fee_usd),
+        ),
+        ("cap_usd".to_string(), format!("{:.6}", breakdown.cap_usd)),
+        ("capped".to_string(), breakdown.capped.to_string()),
+    ];
+
+    // Nothing to bill → never create an empty invoice.
+    if !breakdown.is_billable_amount() {
+        if json {
+            let payload = serde_json::json!({
+                "billable": true,
+                "created": false,
+                "reason": "computed fee rounds to $0.00",
+                "currency": currency,
+                "fee": breakdown,
+            });
+            print_json_or_die(&payload, "billing invoice");
+        } else {
+            print_invoice_preview(
+                &breakdown,
+                &currency,
+                &period,
+                &head_short,
+                customer.as_deref(),
+            );
+            println!("\n  Computed fee is $0.00 → no invoice created.");
+        }
+        return;
+    }
+
+    if dry_run {
+        if json {
+            let payload = serde_json::json!({
+                "billable": true,
+                "created": false,
+                "dry_run": true,
+                "currency": currency,
+                "customer": customer,
+                "period": period,
+                "idempotency_key": idem,
+                "fee": breakdown,
+            });
+            print_json_or_die(&payload, "billing invoice");
+        } else {
+            print_invoice_preview(
+                &breakdown,
+                &currency,
+                &period,
+                &head_short,
+                customer.as_deref(),
+            );
+            println!("\n  Dry run — no Stripe call made. Re-run without --dry-run to create it.");
+        }
+        return;
+    }
+
+    // 5. Real (test-mode) Stripe call. Customer is required now.
+    let Some(customer) = customer else {
+        eprintln!(
+            "No Stripe customer: pass --customer=cus_… or set success_fee.stripe_customer in config."
+        );
+        std::process::exit(1);
+    };
+    let client = match StripeClient::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let item_req = InvoiceItemRequest {
+        customer: customer.clone(),
+        amount_cents: breakdown.amount_cents,
+        currency: currency.clone(),
+        description,
+        metadata,
+    };
+    let item = match client.create_invoice_item(&item_req, &idem) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Optionally draft (and, with --finalize, advance) an invoice that pulls the
+    // pending item. Idempotent per period via a distinct key suffix.
+    let invoice = if create_invoice {
+        match client.create_invoice(&customer, &format!("{idem}-inv"), finalize) {
+            Ok(o) => Some(o),
+            Err(e) => {
+                eprintln!(
+                    "invoice item created ({}) but drafting the invoice failed: {e}",
+                    item.id
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    if json {
+        let payload = serde_json::json!({
+            "billable": true,
+            "created": true,
+            "mode": "test",
+            "currency": currency,
+            "customer": customer,
+            "period": period,
+            "idempotency_key": idem,
+            "fee": breakdown,
+            "invoice_item": item,
+            "invoice": invoice,
+        });
+        print_json_or_die(&payload, "billing invoice");
+        return;
+    }
+
+    print_invoice_preview(&breakdown, &currency, &period, &head_short, Some(&customer));
+    println!("\n  Stripe (TEST): invoice item {} created.", item.id);
+    if let Some(inv) = invoice {
+        println!(
+            "  Stripe (TEST): invoice {} ({}).",
+            inv.id,
+            inv.status.as_deref().unwrap_or("draft")
+        );
+    } else {
+        println!("  (pending on the customer — add --create-invoice to draft an invoice now.)");
+    }
+}
+
+/// Print the fee breakdown in a stable, human-readable block.
+fn print_invoice_preview(
+    b: &core::billing::FeeBreakdown,
+    currency: &str,
+    period: &str,
+    head_short: &str,
+    customer: Option<&str>,
+) {
+    println!("lean-ctx success-fee invoice (Stripe TEST mode)\n");
+    println!("  Customer:      {}", customer.unwrap_or("<unset>"));
+    println!("  Period:        {period}");
+    println!("  Ledger head:   {head_short}");
+    println!("  Verified saved: ${:.2}", b.saved_usd);
+    println!("  Provider delta: ${:.2}", b.provider_delta_usd);
+    println!(
+        "  Base fee:      ${:.2}  (floor + rate × saved × haircut)",
+        b.base_fee_usd
+    );
+    println!(
+        "  Cap:           ${:.2}  (cap_pct × provider delta)",
+        b.cap_usd
+    );
+    println!(
+        "  Fee:           ${:.2} {}{}",
+        b.fee_usd,
+        currency.to_uppercase(),
+        if b.capped { "  (capped)" } else { "" }
+    );
+    println!("  Amount:        {} cents", b.amount_cents);
+}
+
+/// Stripe idempotency keys must be ASCII and bounded; map anything else to `-`.
+fn sanitize_idem(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(200)
+        .collect()
 }
 
 /// Render a quota: [`core::billing::plans::UNBOUNDED`] → "unlimited", else the

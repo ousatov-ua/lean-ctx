@@ -95,6 +95,10 @@ pub struct Config {
     /// Model declaration for measured-vs-estimated cost reporting (MCP-only IDEs).
     #[serde(default)]
     pub cost: CostConfig,
+    /// Outcome-based success-fee terms (GL #669): take_rate / fixed_floor /
+    /// cache_haircut / invoice_cap_pct (no defaults) + Stripe customer/currency.
+    #[serde(default)]
+    pub success_fee: SuccessFeeConfig,
     #[serde(default)]
     pub autonomy: AutonomyConfig,
     #[serde(default)]
@@ -469,6 +473,7 @@ impl Default for Config {
             cloud: CloudConfig::default(),
             gain: GainConfig::default(),
             cost: CostConfig::default(),
+            success_fee: SuccessFeeConfig::default(),
             autonomy: AutonomyConfig::default(),
             providers: ProvidersConfig::default(),
             proxy: ProxyConfig::default(),

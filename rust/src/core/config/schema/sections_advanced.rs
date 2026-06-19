@@ -83,6 +83,65 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         },
     );
 
+    let mut success_fee = BTreeMap::new();
+    success_fee.insert(
+        "take_rate".into(),
+        key(
+            "f64",
+            serde_json::json!(cfg.success_fee.take_rate),
+            "Outcome pricing: share of (haircut-adjusted) verified savings charged as the success fee (0.0..=1.0). No default — must be set per customer",
+        ),
+    );
+    success_fee.insert(
+        "fixed_floor".into(),
+        key(
+            "f64",
+            serde_json::json!(cfg.success_fee.fixed_floor),
+            "Outcome pricing: fixed USD component added before the invoice cap (>= 0). No default",
+        ),
+    );
+    success_fee.insert(
+        "cache_haircut".into(),
+        key(
+            "f64",
+            serde_json::json!(cfg.success_fee.cache_haircut),
+            "Outcome pricing: multiplier discounting cache-sourced savings (0.0..=1.0). No default",
+        ),
+    );
+    success_fee.insert(
+        "invoice_cap_pct".into(),
+        key(
+            "f64",
+            serde_json::json!(cfg.success_fee.invoice_cap_pct),
+            "Outcome pricing: fee may not exceed this fraction of the customer-provided provider-bill delta (0.0..=1.0). No default",
+        ),
+    );
+    success_fee.insert(
+        "currency".into(),
+        key(
+            "string?",
+            serde_json::json!(cfg.success_fee.currency),
+            "Outcome pricing: invoice currency ISO code (e.g. usd). Defaults to usd at invoice time",
+        ),
+    );
+    success_fee.insert(
+        "stripe_customer".into(),
+        key(
+            "string?",
+            serde_json::json!(cfg.success_fee.stripe_customer),
+            "Outcome pricing: default Stripe customer id (cus_…) to bill. Overridable per run via --customer. The Stripe secret key is never stored in config — set STRIPE_API_KEY (test key) in the environment",
+        ),
+    );
+    sections.insert(
+        "success_fee".into(),
+        SectionSchema {
+            description:
+                "Outcome-based success-fee terms (GL #669): Stripe invoice from verified savings"
+                    .into(),
+            keys: success_fee,
+        },
+    );
+
     let mem = &cfg.memory;
     let mut mem_knowledge = BTreeMap::new();
     mem_knowledge.insert(

@@ -25,9 +25,12 @@
 
 pub mod metering;
 pub mod plans;
+pub mod stripe_invoice;
+pub mod success_fee;
 
 pub use metering::{Usage, metered_usage};
 pub use plans::{Entitlements, Plan, entitlement_allows, min_plan_for};
+pub use success_fee::{FeeBreakdown, FeeParams};
 
 #[cfg(test)]
 mod tests {

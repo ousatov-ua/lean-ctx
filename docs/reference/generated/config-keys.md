@@ -335,6 +335,17 @@ Skillify miner: distill recurring session diary + knowledge patterns into rules
 - `min_recurrence` (u32, default `2`) — Minimum reinforcements (confirmations / repeated mentions) before a sub-threshold-confidence pattern is codified.
 - `scope` (enum: project | global, default `project`) — Where generated rules are written: project (<repo>/.cursor/rules, git-committable) or global (~/.cursor/rules).
 
+## `[success_fee]`
+
+Outcome-based success-fee terms (GL #669): Stripe invoice from verified savings
+
+- `cache_haircut` (f64, default `null`) — Outcome pricing: multiplier discounting cache-sourced savings (0.0..=1.0). No default
+- `currency` (string?, default `null`) — Outcome pricing: invoice currency ISO code (e.g. usd). Defaults to usd at invoice time
+- `fixed_floor` (f64, default `null`) — Outcome pricing: fixed USD component added before the invoice cap (>= 0). No default
+- `invoice_cap_pct` (f64, default `null`) — Outcome pricing: fee may not exceed this fraction of the customer-provided provider-bill delta (0.0..=1.0). No default
+- `stripe_customer` (string?, default `null`) — Outcome pricing: default Stripe customer id (cus_…) to bill. Overridable per run via --customer. The Stripe secret key is never stored in config — set STRIPE_API_KEY (test key) in the environment
+- `take_rate` (f64, default `null`) — Outcome pricing: share of (haircut-adjusted) verified savings charged as the success fee (0.0..=1.0). No default — must be set per customer
+
 ## `[summaries]`
 
 AI session summaries: periodic, semantically-recallable session digests

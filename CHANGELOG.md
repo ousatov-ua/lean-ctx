@@ -35,6 +35,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   correlates the fix — the gotcha loop now works in the hybrid CLI-shell setup.
 
 ### Added
+- **#669 — automated success-fee invoice from verified savings → Stripe (TEST
+  mode).** Turns the Ed25519-signed savings batch (`billing usage`,
+  `is_billable = signed && chain_valid`) into a Stripe **invoice item** for the
+  agreed enterprise success fee: `fee = min(fixed_floor + take_rate × (saved_usd
+  × cache_haircut), invoice_cap_pct × provider_delta)`. New `[success_fee]`
+  config section — `take_rate` / `fixed_floor` / `cache_haircut` /
+  `invoice_cap_pct` have **no defaults** (commercial terms; the command fails
+  closed naming any missing key). Fail-closed for billing: an unsigned/broken
+  chain creates **no** invoice (never affects the local plane); a `$0` fee
+  creates none. **Stripe TEST mode is enforced** — a non-`*_test_*` key is
+  refused, and the secret is read from `STRIPE_API_KEY` (never stored in config).
+  Idempotent per `(customer, period)`. New `core/billing/success_fee.rs` +
+  `core/billing/stripe_invoice.rs`; CLI `lean-ctx billing invoice
+  [--provider-delta-usd=N --customer=cus_… --period=… --create-invoice --finalize
+  --dry-run --json]`. Contract: `docs/contracts/success-fee-invoice-v1.md`.
 - **#668 — FinOps showback: readable project names.** The savings ledger stores
   only a truncated repo hash (never a path), so the `finops export` `project`
   column was opaque. An opt-in `<config_dir>/finops-aliases.toml` (`[projects]`
