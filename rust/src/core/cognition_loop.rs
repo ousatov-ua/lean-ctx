@@ -27,6 +27,8 @@ pub struct CognitionLoopReport {
     pub facts_archived: u32,
     pub contradictions_resolved: u32,
     pub lateral_connections: u32,
+    /// Facts whose confidence was lifted by the replay-consolidation pass (#3).
+    pub facts_consolidated: u32,
     pub duration_ms: u64,
 }
 
@@ -35,7 +37,8 @@ impl std::fmt::Display for CognitionLoopReport {
         write!(
             f,
             "Cognition Loop ({} steps, {}ms): promoted={}, repaired={}, \
-             strengthened={}, decayed={}, archived={}, contradictions={}, lateral={}",
+             strengthened={}, decayed={}, archived={}, contradictions={}, lateral={}, \
+             consolidated={}",
             self.steps_run,
             self.duration_ms,
             self.facts_promoted,
@@ -45,6 +48,7 @@ impl std::fmt::Display for CognitionLoopReport {
             self.facts_archived,
             self.contradictions_resolved,
             self.lateral_connections,
+            self.facts_consolidated,
         )
     }
 }
@@ -104,6 +108,12 @@ pub fn run_cognition_loop(project_root: &str, max_steps: u8) -> CognitionLoopRep
         if max_steps >= 8 {
             let lifecycle = knowledge.run_memory_lifecycle(&policy);
             report.facts_archived = lifecycle.archived_count as u32;
+            // Step 8b (#3): complementary-learning-systems consolidation lifts the
+            // confidence of related, frequently-retrieved facts.
+            report.facts_consolidated = step_replay_consolidation(knowledge);
+            if report.facts_consolidated > 0 {
+                crate::core::introspect::tick("memory_consolidation");
+            }
             report.steps_run = 8;
         }
 
@@ -307,6 +317,10 @@ fn step_decay(
         low_confidence_threshold: policy.lifecycle.low_confidence_threshold,
         stale_days: policy.lifecycle.stale_days,
         consolidation_similarity: policy.lifecycle.similarity_threshold,
+        forgetting_model: crate::core::memory_lifecycle::ForgettingModel::parse(
+            &policy.lifecycle.forgetting_model,
+        ),
+        base_stability_days: policy.lifecycle.base_stability_days,
     };
     crate::core::memory_lifecycle::apply_confidence_decay(&mut knowledge.facts, &lifecycle_cfg);
 
@@ -332,6 +346,74 @@ fn step_decay(
     });
 
     low_conf_count
+}
+
+/// Step 8b (#3): replay consolidation over the knowledge facts. Maps facts into
+/// consolidation entries, runs the sleep-inspired NREM/REM/replay pass, then
+/// promotes the replay-boosted importance back onto fact confidence. Additive:
+/// merges and pruning are owned by the lifecycle step, so here we only *lift*
+/// the confidence of facts the replay pass found related-and-co-accessed —
+/// never lower or delete. Deterministic.
+fn step_replay_consolidation(knowledge: &mut ProjectKnowledge) -> u32 {
+    use crate::core::memory_consolidation::{KnowledgeEntry, consolidate};
+
+    let mut entries: Vec<KnowledgeEntry> = knowledge
+        .facts
+        .iter()
+        .filter(|f| f.is_current())
+        .map(|f| {
+            let last_access = f
+                .last_retrieved
+                .unwrap_or(f.last_confirmed)
+                .timestamp()
+                .max(0) as u64;
+            KnowledgeEntry {
+                key: format!("{}/{}", f.category, f.key),
+                content: f.value.clone(),
+                access_count: u64::from(f.retrieval_count),
+                last_access,
+                created_at: f.created_at.timestamp().max(0) as u64,
+                importance: f64::from(f.confidence),
+            }
+        })
+        .collect();
+    if entries.len() < 2 {
+        return 0;
+    }
+    consolidate(&mut entries);
+
+    let boosted: std::collections::HashMap<String, f64> =
+        entries.into_iter().map(|e| (e.key, e.importance)).collect();
+
+    let mut promoted = 0u32;
+    for f in knowledge.facts.iter_mut().filter(|f| f.is_current()) {
+        let id = format!("{}/{}", f.category, f.key);
+        if let Some(&imp) = boosted.get(&id) {
+            let new_conf = (imp as f32).min(1.0);
+            if new_conf > f.confidence + 0.001 {
+                f.confidence = new_conf;
+                promoted += 1;
+            }
+        }
+    }
+    promoted
+}
+
+/// Idle replay (#7): the sleep-inspired (sharp-wave-ripple) consolidation pass,
+/// run when the agent has been quiet rather than as part of the periodic loop.
+/// Reloads knowledge under the shared lock, replays the consolidation/promote
+/// step, and reports the facts whose confidence the replay lifted. Distinct from
+/// the in-loop step (#3) so idle-time "rest" consolidation is observable on its
+/// own via `introspect`. Deterministic; mutates the store, never tool output.
+pub fn run_idle_replay(project_root: &str) -> u32 {
+    let mut promoted = 0u32;
+    let _ = ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        promoted = step_replay_consolidation(knowledge);
+    });
+    if promoted > 0 {
+        crate::core::introspect::tick("replay_consolidation");
+    }
+    promoted
 }
 
 fn slug_key(s: &str, max: usize) -> String {
@@ -602,6 +684,86 @@ mod tests {
             graph.edges[0].count, 2,
             "Edge with count=3 should be decremented to 2"
         );
+    }
+
+    #[test]
+    fn replay_consolidation_promotes_related_accessed_facts() {
+        // #3: related (jaccard in replay band) + frequently-retrieved facts get
+        // their confidence lifted by the replay-boost pass.
+        let mut f1 = make_fact(
+            "arch",
+            "db",
+            "uses postgres database for primary storage",
+            0.5,
+        );
+        f1.retrieval_count = 50;
+        f1.last_retrieved = Some(Utc::now());
+        let mut f2 = make_fact(
+            "arch",
+            "db2",
+            "uses postgres database for sessions cache",
+            0.5,
+        );
+        f2.retrieval_count = 50;
+        f2.last_retrieved = Some(Utc::now());
+
+        let mut knowledge = make_knowledge("/tmp/test", vec![f1, f2]);
+        let promoted = step_replay_consolidation(&mut knowledge);
+        assert!(
+            promoted >= 1,
+            "related, frequently-accessed facts should be promoted (#3)"
+        );
+        assert!(
+            knowledge.facts.iter().any(|f| f.confidence > 0.5),
+            "confidence must be lifted by replay boost"
+        );
+    }
+
+    #[test]
+    fn idle_replay_consolidates_from_disk() {
+        // #7: the idle replay pass loads knowledge under lock, consolidates the
+        // related/frequently-retrieved facts, and persists the lifted confidence.
+        let _lock = crate::core::data_dir::test_env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        crate::test_env::set_var(
+            "LEAN_CTX_DATA_DIR",
+            tmp.path().to_string_lossy().to_string(),
+        );
+        let project_root = tmp.path().join("proj");
+        std::fs::create_dir_all(&project_root).expect("mkdir");
+        let root = project_root.to_string_lossy().to_string();
+
+        let policy = MemoryPolicy::default();
+        let mut knowledge = ProjectKnowledge::load_or_create(&root);
+        knowledge.remember(
+            "arch",
+            "db",
+            "uses postgres database for primary storage",
+            "s1",
+            0.5,
+            &policy,
+        );
+        knowledge.remember(
+            "arch",
+            "db2",
+            "uses postgres database for sessions cache",
+            "s1",
+            0.5,
+            &policy,
+        );
+        for f in &mut knowledge.facts {
+            f.retrieval_count = 50;
+            f.last_retrieved = Some(Utc::now());
+        }
+        let _ = knowledge.save();
+
+        let promoted = run_idle_replay(&root);
+        assert!(
+            promoted >= 1,
+            "idle replay should consolidate related facts (#7)"
+        );
+
+        crate::test_env::remove_var("LEAN_CTX_DATA_DIR");
     }
 
     #[test]

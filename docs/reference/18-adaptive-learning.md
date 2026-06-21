@@ -128,6 +128,66 @@ or distributed via CI without drift.
 If a learning layer does not move its metric, it gets retuned or removed — the
 layers earn their place with evidence, not theory.
 
+## Cognition v2 — science-grounded subsystems
+
+A second wave of layers models the *context lifecycle itself* on neuroscience and
+physics. Unlike the adaptive layers above (which tune compression), these govern
+what stays in working context, how salience decays, and what is admitted from
+external sources. **All are deterministic by default** so tool output stays
+byte-stable (prompt-cache contract / Rule #498); probabilistic exploration is
+opt-in via `LEAN_CTX_STOCHASTIC=1`.
+
+| Subsystem | Science | What it does | Key config |
+|---|---|---|---|
+| Time-variant Φ | Attention salience | Recomputes + EMA-blends context Φ on every re-read instead of freezing it | — |
+| Power-law decay | Ebbinghaus + spacing | Knowledge confidence decays `R = exp(-Δt/S)`, `S` grows per retrieval | `forgetting_model`, `base_stability_days`, `LEAN_CTX_LIFECYCLE_FORGETTING` |
+| Hebbian eviction | "Fire together, wire together" | Co-accessed cache entries protect each other from eviction | — |
+| CLS consolidation | Complementary learning systems | Replay lifts confidence of related, frequently-retrieved facts | — |
+| Integration-aware Φ | IIT non-redundancy (MMR) | Greedy MMR selection + **content**-based dedup (not paths) | — |
+| Global-workspace ignition | Global Workspace Theory | High-Φ outliers are broadcast/pinned, resist downgrade | `LEAN_CTX_GWT_IGNITION_Z` |
+| Learned field weights | Reinforcement learning | Bandit picks Φ weights — argmax-of-mean by default, Thompson under flag | `LEAN_CTX_STOCHASTIC` |
+| Idle replay | Sharp-wave-ripple replay | A quiet gap triggers a deeper background consolidation pass | `LEAN_CTX_COGNITION_IDLE_SECS` |
+| FEP prefetch | Active inference / free energy | Surfaces likely-next co-accessed files as a warmup hint (never auto-reads) | — |
+| Immune detector | Artificial immune system | Screens external provider data for injection/poisoning before ingest; stricter for untrusted workspaces | coupled to Workspace Trust |
+
+### Proving they are active
+
+Every subsystem ticks a shared activity registry at its real call site. Inspect
+what is wired and what has actually fired this session:
+
+```
+$ lean-ctx introspect cognition
+Cognition subsystems: 7/11 active (11 wired)
+
+  [active] Sticky-Phi fix             count=42   last=3s ago   time-variant salience (attention)
+  [active] Immune detector            count=2    last=1m ago   artificial immune system
+  [idle  ] QUBO selection (spike)     count=0    last=never    quantum-inspired optimization
+  ...
+```
+
+`lean-ctx doctor` summarizes the same (`Cognition  7/11 subsystems active`).
+Add `--json` for machine-readable output.
+
+### QUBO selection (research spike)
+
+Context selection under a token budget is a quadratic optimization (maximize Φ,
+penalize redundancy, respect budget) — i.e. a QUBO, the form solved by quantum
+annealers. A deterministic simulated-annealing solver and a benchmark harness ship
+behind `LEAN_CTX_EXPERIMENTAL_QUBO`:
+
+```
+$ lean-ctx introspect qubo
+QUBO spike (experimental, greedy stays default)
+items=13  budget=1500
+greedy: phi=3.800 tokens=1500
+qubo:   phi=3.800 tokens=1500
+phi gain: +0.0%
+```
+
+On clean problems QUBO reaches parity with the greedy knapsack — **no measurable
+win, so greedy remains the default.** The spike exists to *measure*; promotion is
+conditional on a future, reproducible gain.
+
 ## Research references
 
 - LLMLingua / LLMLingua-2 (2403.12968) — perplexity/classifier token pruning
@@ -137,3 +197,10 @@ layers earn their place with evidence, not theory.
 - Theta–gamma coupling (Lisman & Jensen 2013) — working-memory chunking
 - Information Bottleneck (Tishby et al.) — relevance-conditioned compression
 - Stigmergy (Theraulaz & Bonabeau 1999) — indirect coordination
+- Ebbinghaus (1885), SM-2 spacing — forgetting curve, spacing effect
+- Hebb (1949), McClelland CLS (1995) — associative learning, consolidation
+- Integrated Information Theory (Tononi 2004) — integration / non-redundancy
+- Global Workspace Theory (Baars 1988; Dehaene) — ignition / broadcast
+- Free-Energy Principle (Friston 2010) — active inference, prefetch
+- Artificial Immune Systems (de Castro & Timmis 2002) — anomaly/self-nonself
+- QUBO / simulated bifurcation (Goto et al. 2019) — quantum-inspired optimization

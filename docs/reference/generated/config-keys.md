@@ -257,7 +257,9 @@ Knowledge memory budgets (facts, patterns, gotchas)
 
 Knowledge lifecycle policy (decay, staleness, dedup)
 
+- `base_stability_days` (f32, default `90.0`) — Characteristic memory stability (days) for the Ebbinghaus curve
 - `decay_rate` (f32, default `0.01`) — Rate at which knowledge confidence decays over time
+- `forgetting_model` (string, default `ebbinghaus`) — Forgetting curve: ebbinghaus (default, exponential + spacing) or linear
 - `low_confidence_threshold` (f32, default `0.3`) — Threshold below which facts are considered low-confidence
 - `similarity_threshold` (f32, default `0.85`) — Similarity threshold for deduplication
 - `stale_days` (i64, default `30`) — Days after which unused facts are considered stale

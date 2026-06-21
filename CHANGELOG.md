@@ -5,6 +5,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **Cognition v2 — science-grounded context engineering, deterministic by default,
+  provably active.** Ten neuroscience/physics-motivated mechanisms are wired to
+  real hot-path call sites and made inspectable via `lean-ctx introspect cognition`
+  (each subsystem reports wired/active/last-run/count; also surfaced in `lean-ctx
+  doctor`). All decision layers are deterministic by default (Rule #498 / prompt
+  cache intact); stochastic exploration is gated behind `LEAN_CTX_STOCHASTIC`.
+  - **Time-variant Φ (attention).** Context salience is recomputed and EMA-blended
+    on every re-read instead of being frozen on first sight (`context_ledger`).
+  - **Ebbinghaus forgetting + spacing effect.** Knowledge confidence decays as
+    `R = exp(-Δt/S)` with stability `S` growing per retrieval, replacing linear
+    decay. Configurable via `forgetting_model` (`ebbinghaus`|`linear`),
+    `base_stability_days`, and `LEAN_CTX_LIFECYCLE_FORGETTING` (`memory_lifecycle`).
+  - **Hebbian eviction.** Co-accessed cache entries protect each other from
+    eviction ("fire together, wire together") via a deterministic association bonus
+    (`cache`, `hebbian_cache`).
+  - **Complementary-learning-systems consolidation.** Idle/loop replay lifts the
+    confidence of related, frequently-retrieved facts (`cognition_loop`).
+  - **Integration-aware Φ (IIT non-redundancy / MMR).** The context compiler now
+    selects via greedy Maximal-Marginal-Relevance and deduplicates on **content**
+    (fixes a bug that compared file *paths*), so near-duplicate items collapse to
+    one (`context_compiler`, `context_field`).
+  - **Global-workspace ignition.** High-salience Φ-outliers (z-score > θ, default
+    `LEAN_CTX_GWT_IGNITION_Z`) are broadcast/pinned and resist reinjection
+    downgrades (`context_ledger`, `context_gate`).
+  - **Learned field weights (bandit).** Φ field weights are chosen by a Thompson
+    bandit — deterministic argmax-of-posterior-mean by default, sampling only under
+    `LEAN_CTX_STOCHASTIC` (`bandit`, `context_field`, `adaptive_thresholds`).
+  - **Sharp-wave-ripple idle replay.** A quiet gap (default 300 s,
+    `LEAN_CTX_COGNITION_IDLE_SECS`) triggers a deeper replay-consolidation pass in
+    the background (`cognition_scheduler`, `cognition_loop`).
+  - **FEP prefetch (active inference).** After a read, likely-next files from the
+    co-access graph are surfaced as a deterministic warmup hint — never an automatic
+    read (`fep_prefetch`, `context_gate`).
+  - **Immune detector (artificial immune system).** External provider data is
+    screened for prompt-injection/poisoning before it can become a fact, edge or
+    cache entry; untrusted workspaces get a stricter screen (coupled to Workspace
+    Trust) (`immune_detector`, `consolidation`, `ctx_provider`).
+- **`lean-ctx introspect cognition` / `introspect qubo`.** New CLI to prove which
+  cognition subsystems are wired and active, and to run the experimental
+  QUBO-vs-greedy selection benchmark.
+- **QUBO selection spike (research only).** A deterministic simulated-annealing
+  QUBO solver and benchmark harness for redundancy-aware context selection, gated
+  behind `LEAN_CTX_EXPERIMENTAL_QUBO`. On clean problems it reaches parity with the
+  greedy knapsack (no measurable win), so **greedy remains the default**; promotion
+  is conditional on a future measurable gain (`qubo_select`).
+
 ### Security
 - **Shell allowlist now enforced on the `-t` / track path (external audit, finding 1).**
   `exec_argv` (used by the default shell hook `_lc() { lean-ctx -t "$@" }` for

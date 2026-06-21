@@ -19,6 +19,10 @@ impl ProjectKnowledge {
             low_confidence_threshold: policy.lifecycle.low_confidence_threshold,
             stale_days: policy.lifecycle.stale_days,
             consolidation_similarity: policy.lifecycle.similarity_threshold,
+            forgetting_model: crate::core::memory_lifecycle::ForgettingModel::parse(
+                &policy.lifecycle.forgetting_model,
+            ),
+            base_stability_days: policy.lifecycle.base_stability_days,
         };
         crate::core::memory_lifecycle::run_lifecycle(&mut self.facts, &cfg)
     }

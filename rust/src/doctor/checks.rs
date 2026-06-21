@@ -42,6 +42,27 @@ pub(super) fn shell_allowlist_outcome() -> Outcome {
 /// disabled it, and whether configured `allow_paths`/`extra_roots` entries
 /// actually resolve — the silent failure mode behind "allow_paths has no
 /// effect" reports (unexpanded `$VAR`, typos, paths that don't exist).
+/// Cognition v2 activation: how many science-backed subsystems have actually
+/// fired on this install. Proves the stack is wired (not dead code) without
+/// needing external instrumentation — `lean-ctx introspect cognition` drills in.
+pub(super) fn cognition_activity_outcome() -> Outcome {
+    let snap = crate::core::introspect::snapshot();
+    let total = snap.len();
+    let active = snap.iter().filter(|(_, a)| a.count > 0).count();
+    // Before any tool calls have run nothing has fired yet — neutral, not a
+    // failure. Always pass; the value is the visibility, not a gate.
+    let line = if active == 0 {
+        format!(
+            "{BOLD}Cognition{RST}  {DIM}no activity recorded yet{RST}  {DIM}(inspect: lean-ctx introspect cognition){RST}"
+        )
+    } else {
+        format!(
+            "{BOLD}Cognition{RST}  {GREEN}{active}/{total} subsystems active{RST}  {DIM}(details: lean-ctx introspect cognition){RST}"
+        )
+    };
+    Outcome { ok: true, line }
+}
+
 pub(super) fn path_jail_outcome() -> Outcome {
     if cfg!(feature = "no-jail") {
         return Outcome {

@@ -317,6 +317,22 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "Similarity threshold for deduplication",
         ),
     );
+    mem_lifecycle.insert(
+        "forgetting_model".into(),
+        key(
+            "string",
+            serde_json::json!(mem.lifecycle.forgetting_model),
+            "Forgetting curve: ebbinghaus (default, exponential + spacing) or linear",
+        ),
+    );
+    mem_lifecycle.insert(
+        "base_stability_days".into(),
+        key(
+            "f32",
+            clean_f32(mem.lifecycle.base_stability_days),
+            "Characteristic memory stability (days) for the Ebbinghaus curve",
+        ),
+    );
     sections.insert(
         "memory.lifecycle".into(),
         SectionSchema {

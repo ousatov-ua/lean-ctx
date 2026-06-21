@@ -514,6 +514,10 @@ pub fn run() {
                 super::cmd_stats(&rest);
                 return;
             }
+            "introspect" => {
+                super::cmd_introspect(&rest);
+                return;
+            }
             "cache" => {
                 super::cmd_cache(&rest);
                 return;

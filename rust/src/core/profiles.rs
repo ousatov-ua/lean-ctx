@@ -822,6 +822,17 @@ fn merge_profiles(parent: Profile, child: Profile) -> Profile {
                 .lifecycle
                 .similarity_threshold
                 .or(parent.memory.lifecycle.similarity_threshold),
+            forgetting_model: child
+                .memory
+                .lifecycle
+                .forgetting_model
+                .clone()
+                .or_else(|| parent.memory.lifecycle.forgetting_model.clone()),
+            base_stability_days: child
+                .memory
+                .lifecycle
+                .base_stability_days
+                .or(parent.memory.lifecycle.base_stability_days),
         },
     };
     let verification = crate::core::output_verification::VerificationConfig {

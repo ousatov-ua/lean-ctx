@@ -216,6 +216,15 @@ impl CacheEntry {
 
 const RRF_K: f64 = 60.0;
 
+/// Hebbian protection added to an entry's RRF eviction score per unit of
+/// association strength with the currently-active working set (#3). Files that
+/// are read together resist eviction together ("fire together, wire together").
+/// Deterministic: a fixed multiplier, no sampling.
+const HEBBIAN_PROTECT_WEIGHT: f64 = 0.05;
+/// Size of the "active working set" (most-recently-accessed entries) against
+/// which Hebbian association is measured during eviction.
+const HEBBIAN_ACTIVE_SET: usize = 8;
+
 /// Compute Reciprocal Rank Fusion eviction scores for a batch of cache entries.
 /// Each signal (recency, frequency, size) produces an independent ranking.
 /// The final score is the sum of `1/(k + rank)` across all signals.
@@ -277,6 +286,19 @@ pub fn eviction_scores_rrf(entries: &[(&String, &CacheEntry)], now: Instant) -> 
             ((*path).clone(), score)
         })
         .collect()
+}
+
+/// Add the Hebbian co-access bonus (#3) to RRF eviction scores in place. A
+/// higher score means "keep longer", so co-accessed entries are protected.
+fn apply_hebbian_bonus(scores: &mut [(String, f64)], bonus: &HashMap<String, f64>) {
+    if bonus.is_empty() {
+        return;
+    }
+    for s in scores.iter_mut() {
+        if let Some(b) = bonus.get(&s.0) {
+            s.1 += *b;
+        }
+    }
 }
 
 /// Aggregated cache statistics: hits, reads, and token savings.
@@ -361,6 +383,10 @@ pub struct SessionCache {
     next_ref: usize,
     stats: CacheStats,
     shared_blocks: Vec<SharedBlock>,
+    /// Hebbian co-access matrix (#3): tracks which files are read together so
+    /// eviction can protect co-accessed clusters. Updated on `store`, consulted
+    /// during eviction.
+    co_access: crate::core::hebbian_cache::CoAccessMatrix,
 }
 
 impl Default for SessionCache {
@@ -378,7 +404,61 @@ impl SessionCache {
             next_ref: 1,
             shared_blocks: Vec::new(),
             stats: CacheStats::default(),
+            co_access: crate::core::hebbian_cache::CoAccessMatrix::new(),
         }
+    }
+
+    /// Record that `path` was accessed, strengthening its Hebbian association
+    /// with other files read in the same burst window (#3). Called on every
+    /// `store`; co-access boundaries are flushed via [`flush_co_access`].
+    pub fn record_co_access(&mut self, path: &str) {
+        let key = normalize_key(path);
+        self.co_access
+            .record_access(crate::core::hebbian_cache::path_hash(&key));
+    }
+
+    /// Close the current co-access burst so its associations are committed.
+    /// Call at the end of a logical tool call (post-dispatch).
+    pub fn flush_co_access(&mut self) {
+        self.co_access.end_burst();
+    }
+
+    /// Per-entry Hebbian eviction bonus (#3): each cached entry that is
+    /// co-accessed with the recently-active working set earns a positive bonus
+    /// that is added to its RRF score, so clustered files survive eviction
+    /// together. Deterministic (no sampling); ticks the activation registry when
+    /// any association actually influences the decision.
+    pub(crate) fn hebbian_eviction_bonus(&self) -> HashMap<String, f64> {
+        use crate::core::hebbian_cache::path_hash;
+        if self.entries.is_empty() {
+            return HashMap::new();
+        }
+        let mut by_recency: Vec<(&String, Instant)> = self
+            .entries
+            .iter()
+            .map(|(k, e)| (k, e.last_access()))
+            .collect();
+        by_recency.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        let active: Vec<u64> = by_recency
+            .iter()
+            .take(HEBBIAN_ACTIVE_SET)
+            .map(|(k, _)| path_hash(k))
+            .collect();
+
+        let mut out = HashMap::new();
+        for k in self.entries.keys() {
+            let h = path_hash(k);
+            // Exclude self so an entry never "protects itself".
+            let peers: Vec<u64> = active.iter().copied().filter(|&a| a != h).collect();
+            let strength = self.co_access.association_strength(h, &peers);
+            if strength > 0.0 {
+                out.insert(k.clone(), f64::from(strength) * HEBBIAN_PROTECT_WEIGHT);
+            }
+        }
+        if !out.is_empty() {
+            crate::core::introspect::tick("hebbian_cache");
+        }
+        out
     }
 
     /// Returns or assigns a short file reference label (F1, F2, ...) for the given path.
@@ -474,6 +554,10 @@ impl SessionCache {
     /// Stores file content in the cache; returns a hit if content hash matches.
     pub fn store(&mut self, path: &str, content: &str) -> StoreResult {
         let key = normalize_key(path);
+        // #3: feed the Hebbian co-access matrix on every read so eviction can
+        // later protect files that are habitually read together.
+        self.co_access
+            .record_access(crate::core::hebbian_cache::path_hash(&key));
         let hash = compute_md5(content);
         let line_count = content.lines().count();
         let original_tokens = count_tokens(content);
@@ -574,6 +658,7 @@ impl SessionCache {
         let now = Instant::now();
         let all: Vec<(&String, &CacheEntry)> = self.entries.iter().collect();
         let mut scores = eviction_scores_rrf(&all, now);
+        apply_hebbian_bonus(&mut scores, &self.hebbian_eviction_bonus());
         // Sort ascending: lowest RRF score = least valuable = evict first
         scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -729,6 +814,7 @@ impl SessionCache {
         let now = Instant::now();
         let all: Vec<(&String, &CacheEntry)> = self.entries.iter().collect();
         let mut scores = eviction_scores_rrf(&all, now);
+        apply_hebbian_bonus(&mut scores, &self.hebbian_eviction_bonus());
         scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut freed = 0usize;
@@ -1038,6 +1124,21 @@ mod tests {
         assert_eq!(cache.get_stats().cache_hits(), total * 2);
         assert_eq!(cache.get("/a.rs").unwrap().read_count(), 1 + total as u32);
         assert_eq!(cache.get("/b.rs").unwrap().read_count(), 1 + total as u32);
+    }
+
+    #[test]
+    fn hebbian_eviction_bonus_is_wired() {
+        // #3: files read together build a Hebbian association via store()'s
+        // recording, and that association must feed the eviction bonus.
+        let mut cache = SessionCache::new();
+        cache.store("/a.rs", "fn a() {}");
+        cache.store("/b.rs", "fn b() {}");
+        cache.flush_co_access(); // commit the burst → association (a,b) forms
+        let bonus = cache.hebbian_eviction_bonus();
+        assert!(
+            !bonus.is_empty(),
+            "co-accessed reads must yield a Hebbian eviction bonus (#3 wired)"
+        );
     }
 
     #[test]
