@@ -2,18 +2,17 @@
 //! (GL#440): `content` (payloads), `targets` (agent catalog), `detect`
 //! (installation checks), `write` (atomic file surgery), `skills` (SKILL.md).
 //! This hub owns the shared types and the orchestration entry points.
+//!
+//! Content is delegated to `core::rules_canonical` — all rule text lives
+//! there as `pub const` sections.  Markers (`START_MARK`, `END_MARK`,
+//! `RULES_VERSION`) are also re-exported from canonical.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-const MARKER: &str = "# lean-ctx — Context Engineering Layer";
-const END_MARKER: &str = "<!-- /lean-ctx -->";
-const RULES_VERSION: &str = "lean-ctx-rules-v12";
-
-pub const RULES_MARKER: &str = MARKER;
-pub const RULES_END_MARKER: &str = END_MARKER;
-pub const RULES_VERSION_STR: &str = RULES_VERSION;
+use crate::core::rules_canonical::RulesFile;
+pub use crate::core::rules_canonical::{END_MARK, RULES_VERSION, START_MARK};
 
 mod content;
 mod detect;
@@ -24,42 +23,26 @@ mod tests;
 mod write;
 
 pub use content::{
-    GEMINI_DEDICATED_CONTEXT_FILENAME, dedicated_session_summary, gemini_dedicated_rules_path,
-    opencode_dedicated_rules_path,
+    GEMINI_DEDICATED_CONTEXT_FILENAME, gemini_dedicated_rules_path, opencode_dedicated_rules_path,
 };
 pub use skills::{install_all_skills, install_skill_for_agent};
 
 /// Forwarding functions — content is delegated to `core::rules_canonical`.
-/// Kept for backward compat with existing callers (context_overhead, drift, etc.).
-/// Respects `shadow_mode` from config: when active, emits workflow principles
-/// instead of the tool-mapping table (native tools are transparently intercepted).
 pub fn canonical_rules_block() -> String {
     let shadow = crate::core::config::Config::load().shadow_mode;
-    crate::core::rules_canonical::shared_rules_with_shadow(
-        crate::core::rules_canonical::Mode::Mcp,
-        shadow,
-    )
+    crate::core::rules_canonical::render(shadow, crate::core::rules_canonical::Wrapper::Shared)
 }
 pub fn rules_shared_content() -> String {
-    let shadow = crate::core::config::Config::load().shadow_mode;
-    crate::core::rules_canonical::shared_rules_with_shadow(
-        crate::core::rules_canonical::Mode::Mcp,
-        shadow,
-    )
+    canonical_rules_block()
 }
 pub fn rules_dedicated_markdown() -> String {
     let shadow = crate::core::config::Config::load().shadow_mode;
-    crate::core::rules_canonical::dedicated_rules_with_shadow(
-        crate::core::rules_canonical::Mode::Mcp,
-        shadow,
-    )
+    crate::core::rules_canonical::render(shadow, crate::core::rules_canonical::Wrapper::Dedicated)
 }
 
 use detect::is_tool_detected;
 use targets::build_rules_targets;
 use write::inject_rules;
-
-// ---------------------------------------------------------------------------
 
 struct RulesTarget {
     name: &'static str,
@@ -91,12 +74,7 @@ pub struct RulesTargetStatus {
     pub note: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Injection logic
-// ---------------------------------------------------------------------------
-
 enum RulesResult {
-    Injected,
     Updated,
     AlreadyPresent,
 }
@@ -106,8 +84,6 @@ pub fn inject_all_rules(home: &std::path::Path) -> InjectResult {
     if cfg.rules_scope_effective() == crate::core::config::RulesScope::Project {
         return InjectResult::default();
     }
-    // `Off`: the host supplies its own steering (or this is a phase-isolated /
-    // non-caching harness) — write no rules file at all (#361).
     if cfg.rules_injection_effective() == crate::core::config::RulesInjection::Off {
         return InjectResult::default();
     }
@@ -139,7 +115,6 @@ pub fn inject_all_rules(home: &std::path::Path) -> InjectResult {
             .flatten();
 
         match inject_rules(target) {
-            Ok(RulesResult::Injected) => result.injected.push(target.name.to_string()),
             Ok(RulesResult::Updated) => {
                 result.updated.push(target.name.to_string());
                 let bak_is_new = if bak_existed_before {
@@ -165,14 +140,11 @@ pub fn inject_all_rules(home: &std::path::Path) -> InjectResult {
 }
 
 /// Inject global rules for a single agent (by CLI key like "opencode", "cursor", etc.).
-/// Used by `init --agent` to ensure global rules are written alongside MCP config.
 pub fn inject_rules_for_agent(home: &std::path::Path, agent_key: &str) -> InjectResult {
     let cfg = crate::core::config::Config::load();
     if cfg.rules_scope_effective() == crate::core::config::RulesScope::Project {
         return InjectResult::default();
     }
-    // `Off`: skip rule-file injection entirely (host-supplied workflow or
-    // phase-isolated / non-caching harness, #361).
     if cfg.rules_injection_effective() == crate::core::config::RulesInjection::Off {
         return InjectResult::default();
     }
@@ -196,7 +168,6 @@ pub fn inject_rules_for_agent(home: &std::path::Path, agent_key: &str) -> Inject
         let bak_existed_before = bak_path.exists();
 
         match inject_rules(target) {
-            Ok(RulesResult::Injected) => result.injected.push(target.name.to_string()),
             Ok(RulesResult::Updated) => {
                 result.updated.push(target.name.to_string());
                 if !bak_existed_before && bak_path.exists() {
@@ -214,15 +185,7 @@ pub fn inject_rules_for_agent(home: &std::path::Path, agent_key: &str) -> Inject
 }
 
 /// Returns `true` if a lean-ctx rules marker is present in *any* supported
-/// agent's rules file (checking both the shared and dedicated layouts).
-///
-/// Drift-proof by construction: the path catalog is derived from
-/// `build_rules_targets`, the same source the injector writes to, so a newly
-/// supported agent is covered automatically. This replaces a hand-maintained
-/// list that silently omitted OpenCode and ~18 other agents (#442) — that gap
-/// made `SetupConfig::should_inject_rules()` report "no rules present" for
-/// OpenCode-only users, so their MCP got registered without the `ctx_*`
-/// guidance that makes the model actually call the tools.
+/// agent's rules file.
 #[must_use]
 pub fn any_rules_marker_present(home: &std::path::Path) -> bool {
     use crate::core::config::RulesInjection;
@@ -232,8 +195,10 @@ pub fn any_rules_marker_present(home: &std::path::Path) -> bool {
             if !seen.insert(target.path.clone()) {
                 continue;
             }
-            if std::fs::read_to_string(&target.path).is_ok_and(|content| content.contains(MARKER)) {
-                return true;
+            if let Ok(content) = std::fs::read_to_string(&target.path) {
+                if RulesFile::parse(&content).has_content() {
+                    return true;
+                }
             }
         }
     }
@@ -273,12 +238,9 @@ fn match_agent_name(cli_key: &str, target_name: &str) -> bool {
 }
 
 /// Check if the rules file for a given MCP client is up-to-date.
-/// Returns `Some(message)` if rules are stale/missing, `None` if current.
 pub fn check_rules_freshness(client_name: &str) -> Option<String> {
     let home = dirs::home_dir()?;
     let injection = crate::core::config::Config::load().rules_injection_effective();
-    // `Off`: lean-ctx does not manage a rules file, so it never nags about
-    // staleness (#361).
     if injection == crate::core::config::RulesInjection::Off {
         return None;
     }
@@ -298,7 +260,8 @@ pub fn check_rules_freshness(client_name: &str) -> Option<String> {
             continue;
         }
         let content = std::fs::read_to_string(&target.path).ok()?;
-        if content.contains(MARKER) && !content.contains(RULES_VERSION) {
+        let file = RulesFile::parse(&content);
+        if file.has_content() && !file.is_current() {
             return Some(format!(
                 "[RULES OUTDATED] Your {} rules were written by an older lean-ctx version. \
                  Re-read your rules file ({}) or run `lean-ctx setup` to update, \
@@ -328,8 +291,9 @@ pub fn collect_rules_status(home: &std::path::Path) -> Vec<RulesTargetStatus> {
         } else {
             match std::fs::read_to_string(&target.path) {
                 Ok(content) => {
-                    if content.contains(MARKER) {
-                        if content.contains(RULES_VERSION) {
+                    let file = RulesFile::parse(&content);
+                    if file.has_content() {
+                        if file.is_current() {
                             "up_to_date".to_string()
                         } else {
                             "outdated".to_string()
