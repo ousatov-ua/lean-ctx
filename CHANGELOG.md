@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Review-before-overwrite for consequential CLI writes (#852).** State-mutating
+  writes that could clobber existing state now print a before→after diff plus a
+  risk note and require confirmation (or `--yes`) — mirroring the `yolo` / `secure`
+  pattern, and refusing to run non-interactively without `--yes`. Covers
+  `lean-ctx config set` for security/egress-relevant keys (`path_jail`,
+  `shell_security`, `sandbox_level`, `secret_detection.*`, `boundary_policy`,
+  `proxy.*_upstream`) and `lean-ctx knowledge remember` when it would overwrite an
+  existing fact with a materially different value (the prior value is archived).
+  The knowledge gate reuses the exact overwrite predicate the write path applies
+  (`check_contradiction`), so additive, identical, near-identical (>0.8 similarity)
+  and no-op writes stay frictionless. The shared prompt/confirm helper is now a
+  single `cli::prompt` module (extracted from `security_cmd`), and config-key risk
+  classification lives in `core::config::risk` — deterministic and local-only. The
+  MCP `ctx_knowledge` tool path is unchanged (agent writes stay versioned and
+  contradiction-warned without an interactive gate).
 - **Tool & rule budget — `lean-ctx tools health` (#848).** A deterministic,
   local-only "rot" report answering whether every always-on token earns its
   place. Cross-references the *fixed cost* of each advertised MCP tool schema,

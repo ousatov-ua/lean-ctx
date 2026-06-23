@@ -28,6 +28,7 @@ mod policy_cmd;
 mod policy_enforce_cmd;
 mod policy_org_cmd;
 mod profile_cmd;
+pub(crate) mod prompt;
 mod proof_cmd;
 mod read_cmd;
 mod repomap_cmd;

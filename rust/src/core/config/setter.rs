@@ -30,6 +30,40 @@ pub fn set_by_key(key: &str, value: &str) -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// Returns the current value of `key` from the on-disk `config.toml`, rendered
+/// as the string a user would type (no TOML quoting), or `None` if the key is
+/// unset (still at its schema default).
+///
+/// Powers the before→after review for consequential `config set` writes (#852).
+/// Reads only the user's file, so an unset key is reported as `None` rather than
+/// the default — the review then shows `(default) → <new>`.
+#[must_use]
+pub fn current_value(key: &str) -> Option<String> {
+    let table = load_config_as_table().ok()?;
+    let parts: Vec<&str> = key.split('.').collect();
+    let (parents, leaf) = parts.split_at(parts.len() - 1);
+
+    let mut current = &table;
+    for part in parents {
+        current = current.get(*part)?.as_table()?;
+    }
+    current.get(leaf[0]).map(display_toml_value)
+}
+
+/// Renders a scalar `toml::Value` the way a user types it on the CLI: strings
+/// without quotes, arrays comma-joined, everything else via its TOML form.
+fn display_toml_value(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Array(items) => items
+            .iter()
+            .map(display_toml_value)
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
+    }
+}
+
 /// Loads the current config file as a raw TOML table.
 /// If no file exists, returns an empty table (fresh config).
 fn load_config_as_table() -> Result<toml::Table, String> {
@@ -223,5 +257,23 @@ mod tests {
         table.insert("proxy".into(), toml::Value::String("oops".into()));
         let err = set_nested(&mut table, "proxy.port", toml::Value::Integer(8080)).unwrap_err();
         assert!(err.contains("non-table"), "got: {err}");
+    }
+
+    #[test]
+    fn display_toml_value_renders_user_facing_form() {
+        // Strings drop their quotes (what a user would type on the CLI).
+        assert_eq!(
+            display_toml_value(&toml::Value::String("enforce".into())),
+            "enforce"
+        );
+        assert_eq!(display_toml_value(&toml::Value::Boolean(false)), "false");
+        assert_eq!(display_toml_value(&toml::Value::Integer(8080)), "8080");
+        assert_eq!(
+            display_toml_value(&toml::Value::Array(vec![
+                toml::Value::String("a".into()),
+                toml::Value::String("b".into()),
+            ])),
+            "a, b"
+        );
     }
 }

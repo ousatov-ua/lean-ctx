@@ -11,6 +11,7 @@ mod memory;
 mod provenance;
 mod proxy;
 mod render;
+pub mod risk;
 pub mod schema;
 mod sections;
 mod serde_defaults;

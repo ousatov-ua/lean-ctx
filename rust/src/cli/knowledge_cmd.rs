@@ -130,6 +130,16 @@ fn cmd_remember(args: &[String], project_root: &str) {
         std::process::exit(1);
     }
 
+    // #852: an interactive overwrite of an existing fact with a materially
+    // different value is consequential (the prior value gets archived). Gate it
+    // behind the same review/confirmation the security toggles use, BEFORE the
+    // daemon write below. Additive / no-op / same-value writes are frictionless.
+    if let (Some(cat), Some(k), Some(v)) = (category.as_deref(), key.as_deref(), value.as_deref())
+        && !confirm_knowledge_overwrite(project_root, cat, k, v, args)
+    {
+        return;
+    }
+
     #[cfg(unix)]
     {
         if let Some(out) = crate::daemon_client::try_daemon_tool_call_blocking_text(
@@ -163,6 +173,60 @@ fn cmd_remember(args: &[String], project_root: &str) {
         None,
     );
     println!("{out}");
+}
+
+/// #852: gate an interactive `knowledge remember` that would overwrite an
+/// existing current fact with a materially different value.
+///
+/// Reuses the exact overwrite predicate the write path applies
+/// ([`ProjectKnowledge::check_contradiction`]) so the prompt fires on precisely
+/// the writes that archive the prior value — never on additive, identical, or
+/// near-identical (>0.8 similarity) updates. Returns `true` to proceed, `false`
+/// to abort (user declined, or non-interactive without `--yes`).
+fn confirm_knowledge_overwrite(
+    project_root: &str,
+    category: &str,
+    key: &str,
+    value: &str,
+    args: &[String],
+) -> bool {
+    use crate::core::knowledge::{ContradictionSeverity, ProjectKnowledge};
+
+    let Some(knowledge) = ProjectKnowledge::load(project_root) else {
+        return true;
+    };
+    let Ok(policy) = crate::tools::knowledge_shared::load_policy_or_error() else {
+        return true;
+    };
+    let Some(contradiction) = knowledge.check_contradiction(category, key, value, &policy) else {
+        return true;
+    };
+
+    const BOLD: &str = "\x1b[1m";
+    const DIM: &str = "\x1b[2m";
+    const YELLOW: &str = "\x1b[33m";
+    const RST: &str = "\x1b[0m";
+
+    let risk = match contradiction.severity {
+        ContradictionSeverity::High => {
+            "High-confidence, repeatedly confirmed fact. The current value will be archived (recoverable via history)."
+        }
+        ContradictionSeverity::Medium => {
+            "The current value will be archived and superseded by the new one."
+        }
+        ContradictionSeverity::Low => "Low-confidence fact will be replaced.",
+    };
+
+    println!("{BOLD}Review knowledge overwrite [{category}/{key}]{RST}");
+    println!("  old:  {}", contradiction.existing_value);
+    println!("  new:  {}", contradiction.new_value);
+    println!("  {YELLOW}{risk}{RST}");
+
+    if !super::prompt::confirm("Overwrite this fact?", super::prompt::wants_yes(args)) {
+        println!("{DIM}Aborted — fact left unchanged.{RST}");
+        return false;
+    }
+    true
 }
 
 fn cmd_recall(args: &[String], project_root: &str) {

@@ -32,9 +32,12 @@ pub fn cmd_config(args: &[String]) {
             let key = &args[1];
             let val = &args[2];
 
-            // Special validation hooks for keys that need custom logic
-            // beyond what the schema type system can express.
-            match key.as_str() {
+            // Special validation hooks for keys that need custom logic beyond
+            // what the schema type system can express. These either hard-fail
+            // early, or normalize the value/key that is actually persisted —
+            // the resolved (write_key, write_val) then flows through the single
+            // governed write path below so the #852 review covers every route.
+            let (write_key, write_val): (String, String) = match key.as_str() {
                 "theme" if theme::from_preset(val).is_none() && val != "custom" => {
                     eprintln!(
                         "Unknown theme '{val}'. Available: {}",
@@ -48,14 +51,7 @@ pub fn cmd_config(args: &[String]) {
                         "false" => "never",
                         other => other,
                     };
-                    match config::setter::set_by_key("tee_mode", normalized) {
-                        Ok(_) => println!("Updated {key} = {val}"),
-                        Err(e) => {
-                            eprintln!("{e}");
-                            std::process::exit(1);
-                        }
-                    }
-                    return;
+                    ("tee_mode".to_string(), normalized.to_string())
                 }
                 "project_root" => {
                     let path = std::path::Path::new(val.as_str());
@@ -63,6 +59,7 @@ pub fn cmd_config(args: &[String]) {
                         eprintln!("Error: '{val}' is not an existing directory.");
                         std::process::exit(1);
                     }
+                    (key.clone(), val.clone())
                 }
                 "embedding.model"
                     if crate::core::embeddings::model_registry::EmbeddingModel::from_str_name(
@@ -79,28 +76,13 @@ pub fn cmd_config(args: &[String]) {
                     std::process::exit(1);
                 }
                 "proxy.anthropic_upstream" | "proxy.openai_upstream" | "proxy.gemini_upstream" => {
-                    let normalized = normalize_optional_upstream(val);
-                    let effective = normalized.as_deref().unwrap_or("");
-                    match config::setter::set_by_key(key, effective) {
-                        Ok(_) => println!("Updated {key} = {val}"),
-                        Err(e) => {
-                            eprintln!("{e}");
-                            std::process::exit(1);
-                        }
-                    }
-                    return;
+                    let effective = normalize_optional_upstream(val).unwrap_or_default();
+                    (key.clone(), effective)
                 }
-                _ => {}
-            }
+                _ => (key.clone(), val.clone()),
+            };
 
-            // Generic schema-based setter handles all keys
-            match config::setter::set_by_key(key, val) {
-                Ok(_) => println!("Updated {key} = {val}"),
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-            }
+            write_config_key(&write_key, &write_val, key, val, args);
         }
         "schema" => {
             let schema = config::schema::ConfigSchema::generate();
@@ -120,6 +102,52 @@ pub fn cmd_config(args: &[String]) {
         }
         _ => {
             eprintln!("Usage: lean-ctx config [init|set|show|schema|validate|apply]");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Single governed write path for `config set` (#852).
+///
+/// `key`/`value` are the resolved pair actually persisted; `display_key`/
+/// `display_val` are what the user typed (kept for messaging, e.g. when a value
+/// was normalized). Behavior:
+/// - **no-op** (current == new): report "unchanged", write nothing.
+/// - **consequential key** ([`config::risk`]): print a before→after review + a
+///   risk note, then require confirmation or `--yes`; abort if declined.
+/// - **routine key**: write directly, as before.
+fn write_config_key(key: &str, value: &str, display_key: &str, display_val: &str, args: &[String]) {
+    const BOLD: &str = "\x1b[1m";
+    const DIM: &str = "\x1b[2m";
+    const YELLOW: &str = "\x1b[33m";
+    const RST: &str = "\x1b[0m";
+
+    let current = config::setter::current_value(key);
+
+    if current.as_deref() == Some(value) {
+        println!("{display_key} is already set to {display_val} — unchanged.");
+        return;
+    }
+
+    if let Some(risk) = config::risk::classify(key) {
+        let before = current.as_deref().unwrap_or("(default)");
+        let after = if value.is_empty() { "(default)" } else { value };
+        println!("{BOLD}Review change to {display_key}{RST}");
+        println!("  {before}  →  {after}");
+        println!("  {YELLOW}{}{RST}", risk.note);
+        if !super::prompt::confirm(
+            &format!("Apply {display_key} = {display_val}?"),
+            super::prompt::wants_yes(args),
+        ) {
+            println!("{DIM}Aborted — {display_key} left unchanged.{RST}");
+            return;
+        }
+    }
+
+    match config::setter::set_by_key(key, value) {
+        Ok(_) => println!("Updated {display_key} = {display_val}"),
+        Err(e) => {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }

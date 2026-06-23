@@ -19,10 +19,10 @@
 //! re-enabling stays available via plain `lean-ctx config set …` / `lean-ctx
 //! allow …`.
 
+use super::prompt::{confirm, wants_yes};
 use crate::core::config::setter::set_by_key;
 use crate::core::security_posture::{JailState, PostureLevel, SecurityPosture};
 use crate::core::shell_allowlist::ShellSecurity;
-use std::io::{IsTerminal, Write};
 
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
@@ -245,33 +245,6 @@ fn onoff(on: bool) -> String {
     }
 }
 
-fn wants_yes(args: &[String]) -> bool {
-    args.iter()
-        .any(|a| matches!(a.as_str(), "-y" | "--yes" | "--force" | "-f"))
-}
-
-/// Confirm a consequential change. `assume_yes` short-circuits (for `--yes` and
-/// scripts). On a TTY we prompt; with no TTY and no `--yes` we refuse rather than
-/// silently weaken security (an agent must not disable containment unattended).
-fn confirm(prompt: &str, assume_yes: bool) -> bool {
-    if assume_yes {
-        return true;
-    }
-    if !std::io::stdin().is_terminal() {
-        eprintln!(
-            "{YELLOW}Refusing to change security non-interactively.{RST} Re-run with {BOLD}--yes{RST} to confirm."
-        );
-        return false;
-    }
-    print!("{prompt} [y/N] ");
-    let _ = std::io::stdout().flush();
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return false;
-    }
-    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
 fn print_usage() {
     println!(
         "Usage: lean-ctx security <status|open|strict|secrets>\n\
@@ -293,20 +266,6 @@ fn print_usage() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn wants_yes_detects_flags() {
-        assert!(wants_yes(&["--yes".to_string()]));
-        assert!(wants_yes(&["-y".to_string()]));
-        assert!(wants_yes(&["--force".to_string()]));
-        assert!(!wants_yes(&["open".to_string()]));
-        assert!(!wants_yes(&[]));
-    }
-
-    #[test]
-    fn confirm_assume_yes_short_circuits() {
-        assert!(confirm("anything", true));
-    }
 
     #[test]
     fn jail_line_reflects_state() {
