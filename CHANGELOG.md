@@ -55,6 +55,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   and search are pure, unit-tested functions (`paginate`, `all_ranked_cards`).
   (gitlab #868–#871)
 
+### Fixed
+- **`lean-ctx index build-semantic` cold-starts the embedding model again
+  (#545).** On a machine without the model cached, the build dead-ended with
+  *"embedding model not downloaded — auto-download … failed"* even though no
+  download was ever attempted: the build path checked `is_available()` (a pure
+  file-existence check) and bailed before the download could run — a regression
+  from the #519 ORT-teardown guard. `build_or_update` now downloads the model
+  first via a new `EmbeddingEngine::ensure_downloaded()` (pure network/file IO,
+  no ORT init) and only loads the ONNX Runtime once the files are present, so the
+  cold bootstrap works again and the #519 teardown safety is preserved. The
+  passive search path is unchanged.
+
 ## [3.8.12] — 2026-06-24
 
 ### Added
