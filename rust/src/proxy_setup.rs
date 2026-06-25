@@ -826,18 +826,16 @@ fn render_codex_config_with_extra_block(
     let mut prefix = String::new();
     for (key, value) in entries {
         if *key == "model_provider" {
-            let has_model_provider = cleaned
-                .lines()
-                .any(|line| line.trim_start().starts_with("model_provider"));
+            let has_model_provider =
+                has_top_level_codex_config_key(&cleaned, "model_provider", |_| true);
             if !has_model_provider {
                 prefix.push_str(&format!("{key} = \"{value}\"\n"));
             }
             continue;
         }
 
-        let has_remote_key = cleaned.lines().any(|l| {
-            let t = l.trim_start();
-            t.starts_with(key) && !(t.contains("127.0.0.1") || t.contains("localhost"))
+        let has_remote_key = has_top_level_codex_config_key(&cleaned, key, |t| {
+            !(t.contains("127.0.0.1") || t.contains("localhost"))
         });
         if !has_remote_key {
             prefix.push_str(&format!("{key} = \"{value}\"\n"));
@@ -871,37 +869,46 @@ fn render_codex_chatgpt_provider_block(base: &str) -> String {
     )
 }
 
-/// Remove lean-ctx's own Codex proxy entries from a `config.toml` body: the local
-/// `127.0.0.1`/`localhost` base URL written either as a top-level `openai_base_url`
-/// key or — by older versions — as a dead `[env] OPENAI_BASE_URL` line (#554). A now
-/// empty `[env]` table header is dropped too. Custom remote endpoints are preserved.
+/// Remove lean-ctx's own Codex proxy entries from a `config.toml` body: local
+/// top-level proxy URLs, older dead `[env]` URL lines (#554), and the generated
+/// ChatGPT provider block. Custom remote endpoints and profile tables are preserved.
 fn strip_codex_proxy_entries(body: &str) -> String {
-    let is_local_entry = |t: &str| {
-        (t.starts_with("openai_base_url")
-            || t.starts_with("OPENAI_BASE_URL")
-            || t.starts_with("chatgpt_base_url")
-            || t.starts_with("CHATGPT_BASE_URL"))
-            && (t.contains("127.0.0.1") || t.contains("localhost"))
-            || is_codex_proxy_model_provider_entry(t)
-    };
-    let kept: Vec<&str> = body
-        .lines()
-        .filter(|l| !is_local_entry(l.trim_start()))
-        .collect();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut current_table: Option<&str> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if is_generated_codex_chatgpt_provider_header(trimmed) {
+            i += 1;
+            while i < lines.len() && !lines[i].trim_start().starts_with('[') {
+                i += 1;
+            }
+            continue;
+        }
+
+        if lines[i].trim_start().starts_with('[') {
+            current_table = Some(trimmed);
+            kept.push(lines[i]);
+            i += 1;
+            continue;
+        }
+
+        if should_strip_codex_proxy_entry(lines[i].trim_start(), current_table) {
+            i += 1;
+            continue;
+        }
+
+        kept.push(lines[i]);
+        i += 1;
+    }
 
     // Drop an `[env]` header left without any keys after the removal.
     let mut out: Vec<&str> = Vec::with_capacity(kept.len());
     let mut i = 0;
     while i < kept.len() {
         let trimmed = kept[i].trim();
-        if is_generated_codex_chatgpt_provider_header(trimmed) {
-            i += 1;
-            while i < kept.len() && !kept[i].trim_start().starts_with('[') {
-                i += 1;
-            }
-            continue;
-        }
-        if kept[i].trim() == "[env]" {
+        if trimmed == "[env]" {
             let mut j = i + 1;
             while j < kept.len() && kept[j].trim().is_empty() {
                 j += 1;
@@ -927,10 +934,59 @@ fn strip_codex_proxy_entries(body: &str) -> String {
     }
 }
 
+fn has_top_level_codex_config_key(body: &str, key: &str, predicate: impl Fn(&str) -> bool) -> bool {
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with('[') {
+            break;
+        }
+        if toml_assignment_key(t) == Some(key) && predicate(t) {
+            return true;
+        }
+    }
+    false
+}
+
+fn should_strip_codex_proxy_entry(t: &str, current_table: Option<&str>) -> bool {
+    match current_table {
+        None => {
+            is_local_codex_base_url_entry(t, &["openai_base_url", "chatgpt_base_url"])
+                || is_codex_proxy_model_provider_entry(t)
+        }
+        Some("[env]") => is_local_codex_base_url_entry(t, &["OPENAI_BASE_URL", "CHATGPT_BASE_URL"]),
+        _ => false,
+    }
+}
+
+fn is_local_codex_base_url_entry(t: &str, keys: &[&str]) -> bool {
+    toml_assignment_key(t).is_some_and(|key| keys.contains(&key))
+        && (t.contains("127.0.0.1") || t.contains("localhost"))
+}
+
+fn toml_assignment_key(t: &str) -> Option<&str> {
+    let key = t.split_once('=')?.0.trim();
+    if key.is_empty() || key.starts_with('#') {
+        None
+    } else {
+        Some(key)
+    }
+}
+
 fn is_codex_proxy_model_provider_entry(t: &str) -> bool {
-    let normalized: String = t.chars().filter(|c| !c.is_whitespace()).collect();
-    normalized == format!("model_provider=\"{CODEX_CHATGPT_PROVIDER_ID}\"")
-        || normalized == "model_provider=\"openai\""
+    is_toml_string_assignment(t, "model_provider", CODEX_CHATGPT_PROVIDER_ID)
+        || is_toml_string_assignment(t, "model_provider", "openai")
+}
+
+fn is_toml_string_assignment(t: &str, key: &str, value: &str) -> bool {
+    let Some((lhs, rhs)) = t.split_once('=') else {
+        return false;
+    };
+    if lhs.trim() != key {
+        return false;
+    }
+    let rhs = rhs.split('#').next().unwrap_or(rhs);
+    let normalized: String = rhs.chars().filter(|c| !c.is_whitespace()).collect();
+    normalized == format!("\"{value}\"")
 }
 
 fn is_generated_codex_chatgpt_provider_header(t: &str) -> bool {
@@ -938,14 +994,33 @@ fn is_generated_codex_chatgpt_provider_header(t: &str) -> bool {
 }
 
 fn codex_config_has_local_proxy_entry(body: &str) -> bool {
-    body.lines().any(|l| {
-        let t = l.trim_start();
-        (t.starts_with("openai_base_url")
-            || t.starts_with("OPENAI_BASE_URL")
-            || t.starts_with("chatgpt_base_url")
-            || t.starts_with("CHATGPT_BASE_URL"))
-            && (t.contains("127.0.0.1") || t.contains("localhost"))
-    })
+    let mut current_table: Option<&str> = None;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if is_generated_codex_chatgpt_provider_header(line.trim()) {
+            return true;
+        }
+        if t.starts_with('[') {
+            current_table = Some(line.trim());
+            continue;
+        }
+        match current_table {
+            None => {
+                if is_local_codex_base_url_entry(t, &["openai_base_url", "chatgpt_base_url"])
+                    || is_toml_string_assignment(t, "model_provider", CODEX_CHATGPT_PROVIDER_ID)
+                {
+                    return true;
+                }
+            }
+            Some("[env]")
+                if is_local_codex_base_url_entry(t, &["OPENAI_BASE_URL", "CHATGPT_BASE_URL"]) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// True when Codex will authenticate via a **ChatGPT login** (OAuth) rather than
@@ -1425,6 +1500,70 @@ $env:GEMINI_API_BASE_URL = "{base}"
         assert_eq!(once, twice, "ChatGPT provider render must be idempotent");
         assert_eq!(once.matches(CODEX_CHATGPT_PROVIDER_ID).count(), 2);
         assert!(once.contains("supports_websockets = false"));
+    }
+
+    #[test]
+    fn render_codex_chatgpt_provider_ignores_nested_model_provider() {
+        let base = "http://127.0.0.1:4444";
+        let entries = vec![
+            ("model_provider", CODEX_CHATGPT_PROVIDER_ID.to_string()),
+            ("openai_base_url", format!("{base}/backend-api/codex")),
+            ("chatgpt_base_url", format!("{base}/backend-api")),
+        ];
+        let block = render_codex_chatgpt_provider_block(base);
+        let body = "[profiles.work]\nmodel_provider = \"openai\"\nmodel = \"gpt-5.5\"\n";
+
+        let out = render_codex_config_with_extra_block(body, &entries, Some(&block));
+
+        let top_level_idx = out
+            .find(&format!("model_provider = \"{CODEX_CHATGPT_PROVIDER_ID}\""))
+            .expect("top-level ChatGPT provider present");
+        let profile_idx = out.find("[profiles.work]").expect("profile table present");
+        assert!(
+            top_level_idx < profile_idx,
+            "ChatGPT model_provider must be top-level, got:\n{out}"
+        );
+        assert!(
+            out.contains("[profiles.work]\nmodel_provider = \"openai\""),
+            "profile model_provider must be preserved, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn strip_codex_proxy_entries_preserves_nested_model_provider() {
+        let body = format!(
+            "model_provider = \"{CODEX_CHATGPT_PROVIDER_ID}\"\n\
+             openai_base_url = \"http://127.0.0.1:4444/backend-api/codex\"\n\
+             chatgpt_base_url = \"http://127.0.0.1:4444/backend-api\"\n\n\
+             {}\n\
+             [profiles.work]\n\
+             model_provider = \"openai\"\n\
+             openai_base_url = \"http://127.0.0.1:9999/v1\"\n",
+            render_codex_chatgpt_provider_block("http://127.0.0.1:4444")
+        );
+
+        let out = strip_codex_proxy_entries(&body);
+
+        assert!(
+            !out.contains(&format!("[model_providers.{CODEX_CHATGPT_PROVIDER_ID}]")),
+            "generated provider block must be removed, got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "[profiles.work]\nmodel_provider = \"openai\"\nopenai_base_url = \"http://127.0.0.1:9999/v1\""
+            ),
+            "profile provider config must be preserved, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn codex_proxy_cleanup_detection_ignores_plain_openai_provider() {
+        assert!(!codex_config_has_local_proxy_entry(
+            "model_provider = \"openai\"\n"
+        ));
+        assert!(codex_config_has_local_proxy_entry(&format!(
+            "model_provider = \"{CODEX_CHATGPT_PROVIDER_ID}\"\n"
+        )));
     }
 
     /// `render_codex_config` inserts the key as a *top-level* key (before the first
