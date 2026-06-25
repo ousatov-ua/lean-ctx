@@ -10,6 +10,8 @@ use super::ProxyState;
 use super::compress::compress_tool_result;
 use super::forward;
 use super::tool_kind::{self, ToolResultKind, should_protect};
+use super::{cache_safety, prose};
+use crate::core::config::{HistoryMode, ProseRole};
 
 /// Proxy handler for OpenAI's Responses API (`POST /v1/responses`).
 ///
@@ -61,6 +63,10 @@ pub(super) fn compress_request_body(
 ) -> (Vec<u8>, usize, usize) {
     let mut doc = parsed;
     let cfg = crate::core::config::Config::load();
+    let system_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::System);
+    let user_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::User);
+    let live_compress = cfg.proxy.live_compresses();
+    let mode = cfg.proxy.resolved_history_mode();
     // #493: in-band CCR expansion (opt-in). Splice any <lc_expand:HASH> the model
     // echoed back into the verbatim original from the local tee store. A strict
     // no-op when no marker is present (byte-identical body → cache-safe). Runs
@@ -93,12 +99,18 @@ pub(super) fn compress_request_body(
     // Meter-only (#481): live compression off and history pruning off → forward
     // the body unchanged while upstream usage metering still runs. A pending
     // in-band splice (`modified`) opts out: the body did change this turn.
-    if !cfg.proxy.live_compresses()
-        && cfg.proxy.resolved_history_mode() == crate::core::config::HistoryMode::Off
+    if !live_compress
+        && mode == HistoryMode::Off
+        && system_aggr.is_none()
+        && user_aggr.is_none()
         && !modified
     {
         let out = serde_json::to_vec(&doc).unwrap_or_default();
         return (out, original_size, original_size);
+    }
+    let mut prose_segments: u64 = 0;
+    if let Some(a) = system_aggr {
+        prose_segments += u64::from(prose::compress_string_field(&mut doc, "instructions", a));
     }
     // Two-stage, like the Chat Completions path: (1) cache-aware prune of the
     // frozen OLD region — old file reads collapse to re-read stubs, old logs
@@ -106,9 +118,39 @@ pub(super) fn compress_request_body(
     // Stage 1 runs first so a stubbed old output isn't needlessly re-compressed.
     modified |= prune_responses_input(&mut doc);
     modified |= compress_responses_input(&mut doc);
+    if let Some(a) = user_aggr {
+        prose_segments += u64::from(compress_responses_user_prose(&mut doc, mode, a));
+    }
+    if prose_segments > 0 {
+        modified = true;
+    }
+    cache_safety::record(prose_segments, true);
     let out = serde_json::to_vec(&doc).unwrap_or_default();
     let compressed_size = if modified { out.len() } else { original_size };
     (out, original_size, compressed_size)
+}
+
+fn compress_responses_user_prose(doc: &mut Value, mode: HistoryMode, aggressiveness: f64) -> u32 {
+    let Some(input) = doc.get_mut("input").and_then(|i| i.as_array_mut()) else {
+        return 0;
+    };
+    let boundary = super::history_prune::prune_boundary(mode, input.len());
+    if boundary == 0 {
+        return 0;
+    }
+
+    let mut segments = 0;
+    for item in input.iter_mut().take(boundary) {
+        let item_type = item
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("message");
+        let role = item.get("role").and_then(|r| r.as_str());
+        if item_type == "message" && role == Some("user") {
+            segments += prose::compress_message_content(item, aggressiveness);
+        }
+    }
+    segments
 }
 
 /// Cache-aware history pruning for the Responses API.
@@ -286,6 +328,13 @@ mod tests {
         s
     }
 
+    fn big_prose() -> String {
+        let p = "You are a careful, senior software engineer. You always explain your \
+                 reasoning before making changes, you prefer small reviewable diffs, and \
+                 you never introduce mock data or placeholders into production code. ";
+        [p; 6].join("\n")
+    }
+
     #[test]
     fn string_output_mirrors_engine_and_shrinks() {
         // tee path depends on the data dir; serialize env access so a parallel
@@ -378,6 +427,109 @@ mod tests {
         assert_eq!(comp, orig);
         let reparsed: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn responses_instructions_prose_compressed_and_assistant_untouched() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        crate::core::config::Config::update_global(|c| {
+            c.proxy.role_aggressiveness.system = Some(0.6);
+        })
+        .unwrap();
+
+        let prose = big_prose();
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "instructions": prose,
+            "input": [
+                {"type": "message", "role": "user", "content": "hi"},
+                {"type": "message", "role": "assistant", "content": prose},
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+        assert!(comp < orig, "enabled instructions prose must save bytes");
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+
+        assert!(
+            parsed["instructions"].as_str().unwrap().len() < prose.len(),
+            "Responses instructions must be compressed when enabled"
+        );
+        assert_eq!(
+            parsed["input"][1]["content"].as_str().unwrap(),
+            prose,
+            "assistant turns must pass through verbatim (#710)"
+        );
+    }
+
+    #[test]
+    fn responses_user_prose_compressed_only_in_frozen_region() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        crate::core::config::Config::update_global(|c| {
+            c.proxy.role_aggressiveness.user = Some(0.7);
+        })
+        .unwrap();
+
+        let prose = big_prose();
+        // 30 messages -> cache-aware boundary = ((30 - 8) / 16) * 16 = 16.
+        let mut input = Vec::new();
+        for i in 0..30 {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            input.push(serde_json::json!({
+                "type": "message",
+                "role": role,
+                "content": prose,
+            }));
+        }
+        let body = serde_json::json!({"model": "gpt-5", "input": input});
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+        assert!(comp < orig, "old user prose must save bytes");
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+
+        let frozen_user = parsed["input"][0]["content"].as_str().unwrap();
+        assert!(
+            frozen_user.len() < prose.len(),
+            "old user prose should compress"
+        );
+        assert_eq!(
+            parsed["input"][1]["content"].as_str().unwrap(),
+            prose,
+            "assistant prose must stay verbatim"
+        );
+        assert_eq!(
+            parsed["input"][16]["content"].as_str().unwrap(),
+            prose,
+            "live-tail user prose must stay verbatim"
+        );
+    }
+
+    #[test]
+    fn responses_prose_compression_is_deterministic() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        crate::core::config::Config::update_global(|c| {
+            c.proxy.role_aggressiveness.system = Some(0.6);
+        })
+        .unwrap();
+
+        let prose = big_prose();
+        let mk = || {
+            serde_json::json!({
+                "model": "gpt-5",
+                "instructions": prose,
+                "input": [{"type": "message", "role": "user", "content": "hi"}],
+            })
+        };
+        let (a, b) = (mk(), mk());
+        let (la, lb) = (
+            serde_json::to_vec(&a).unwrap().len(),
+            serde_json::to_vec(&b).unwrap().len(),
+        );
+        assert_eq!(
+            compress_request_body(a, la).0,
+            compress_request_body(b, lb).0,
+            "identical input must yield byte-identical output (#498)"
+        );
     }
 
     #[test]
