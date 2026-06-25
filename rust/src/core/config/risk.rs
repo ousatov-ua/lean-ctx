@@ -42,6 +42,9 @@ pub fn classify(key: &str) -> Option<ConfigRisk> {
         "boundary_policy" => {
             "Boundary policy controls what context is allowed to leave this machine. Relaxing it widens data egress."
         }
+        "proxy_require_token" => {
+            "Proxy token policy controls whether provider API keys can authenticate local proxy requests without the lean-ctx Bearer token."
+        }
         "proxy.anthropic_upstream"
         | "proxy.openai_upstream"
         | "proxy.chatgpt_upstream"
@@ -72,6 +75,7 @@ mod tests {
             "secret_detection.enabled",
             "secret_detection.redact",
             "boundary_policy",
+            "proxy_require_token",
             "proxy.openai_upstream",
             "proxy.chatgpt_upstream",
             "proxy.anthropic_upstream",

@@ -249,4 +249,13 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn proxy_require_token_is_cli_settable() {
+        let schema = ConfigSchema::generate();
+        assert!(
+            schema.lookup("proxy_require_token").is_some(),
+            "`lean-ctx config set proxy_require_token <bool>` must be accepted"
+        );
+    }
 }

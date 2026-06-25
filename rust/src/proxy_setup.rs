@@ -753,7 +753,8 @@ fn install_codex_env_at_mode(config_dir: &Path, port: u16, quiet: bool, mode: Co
     // Codex reads the built-in OpenAI provider's base URL from the top-level
     // `openai_base_url` key (openai/codex#12031). API-key mode uses `/v1`;
     // ChatGPT subscription auth uses Codex's backend rail under
-    // `/backend-api/codex`, plus `chatgpt_base_url` for aux `/wham/*` calls.
+    // `/backend-api/codex`, plus `chatgpt_base_url` for aux `/backend-api/*`
+    // calls such as the codex_apps streamable HTTP MCP endpoint.
     let base = format!("http://127.0.0.1:{port}");
     let entries: Vec<(&str, String)> = match mode {
         CodexProxyMode::ApiKey => vec![("openai_base_url", format!("{base}/v1"))],

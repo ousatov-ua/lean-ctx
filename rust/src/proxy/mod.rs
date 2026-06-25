@@ -294,8 +294,10 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
             "/backend-api/codex/responses/{*rest}",
             any(chatgpt::codex_responses_handler),
         )
-        .route("/backend-api/wham", any(chatgpt::wham_handler))
-        .route("/backend-api/wham/{*rest}", any(chatgpt::wham_handler))
+        // Non-model ChatGPT backend calls (including codex_apps MCP) are not
+        // prompt JSON. Keep them as credential-preserving passthrough traffic.
+        .route("/backend-api", any(chatgpt::backend_api_handler))
+        .route("/backend-api/{*rest}", any(chatgpt::backend_api_handler))
         .route("/v1/references/{id}", get(v1_resolve_reference))
         // Drop-in `compress(messages, model)` contract (#739): deterministic
         // messages-in / messages-out compression for SDK clients.
@@ -325,7 +327,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
         "  OpenAI:    POST /v1/responses → {openai_upstream}  (bare /responses also accepted)"
     );
     println!("  ChatGPT:   POST /backend-api/codex/responses → {chatgpt_upstream}");
-    println!("  ChatGPT:   any  /backend-api/wham/* → {chatgpt_upstream}");
+    println!("  ChatGPT:   any  /backend-api/* → {chatgpt_upstream}");
     println!("  Gemini:    POST /v1beta/models/... → {gemini_upstream}");
     println!("  Compress:  POST /v1/compress (deterministic messages-in/out, local)");
     // Codex defaults to a WebSocket Responses transport (ws://…/responses). The
@@ -555,8 +557,7 @@ fn is_provider_route(path: &str) -> bool {
         || path.starts_with("/chat/completions")
         || path.starts_with("/responses")
         || path.starts_with("/messages")
-        || path.starts_with("/backend-api/codex/responses")
-        || path.starts_with("/backend-api/wham")
+        || path.starts_with("/backend-api")
 }
 
 /// Decides whether a request authenticates via a provider API key alone, without
@@ -729,6 +730,11 @@ mod auth_tests {
         assert!(is_provider_route("/backend-api/codex/responses"));
         assert!(is_provider_route("/backend-api/codex/responses/resp_123"));
         assert!(is_provider_route("/backend-api/wham/session"));
+        assert!(is_provider_route("/backend-api/ps/mcp"));
+        assert!(is_provider_route("/backend-api/codex_apps"));
+        assert!(is_provider_route("/backend-api/codex_apps/mcp"));
+        assert!(is_provider_route("/backend-api/mcp/codex_apps"));
+        assert!(is_provider_route("/backend-api/apps/codex_apps/mcp"));
     }
 
     #[test]

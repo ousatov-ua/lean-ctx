@@ -184,6 +184,8 @@ pub(super) const ALLOWED_REQUEST_HEADERS: &[&str] = &[
     "x-client-request-id",
     "x-openai-subagent",
     "x-codex-turn-state",
+    "mcp-session-id",
+    "last-event-id",
     "cache-control",
     "x-goog-api-key",
     "x-goog-api-client",
@@ -214,6 +216,7 @@ async fn send_upstream(
 pub(super) const FORWARDED_HEADERS: &[&str] = &[
     "content-type",
     "content-encoding",
+    "mcp-session-id",
     "x-request-id",
     "openai-organization",
     "openai-processing-ms",
@@ -366,5 +369,19 @@ mod tests {
                 "request header `{required}` must be forwarded upstream"
             );
         }
+    }
+
+    #[test]
+    fn forwards_streamable_http_mcp_headers() {
+        for required in ["mcp-session-id", "last-event-id"] {
+            assert!(
+                ALLOWED_REQUEST_HEADERS.contains(&required),
+                "request header `{required}` must be forwarded upstream"
+            );
+        }
+        assert!(
+            FORWARDED_HEADERS.contains(&"mcp-session-id"),
+            "MCP session id response header must be forwarded downstream"
+        );
     }
 }

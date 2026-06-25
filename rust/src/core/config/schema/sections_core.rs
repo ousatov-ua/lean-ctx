@@ -549,6 +549,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             ),
         );
     root.insert(
+        "proxy_require_token".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.proxy_require_token),
+            "Require lean-ctx Bearer token authentication and disable provider API key fallback",
+        ),
+    );
+    root.insert(
         "response_verbosity".into(),
         key_enum_with_env(
             &["normal", "compact", "minimal"],
