@@ -55,7 +55,10 @@ pub async fn ws_handler(
     super::openai_responses_ws::upgrade(state, ws, &headers)
 }
 
-fn compress_request_body(parsed: Value, original_size: usize) -> (Vec<u8>, usize, usize) {
+pub(super) fn compress_request_body(
+    parsed: Value,
+    original_size: usize,
+) -> (Vec<u8>, usize, usize) {
     let mut doc = parsed;
     let cfg = crate::core::config::Config::load();
     // #493: in-band CCR expansion (opt-in). Splice any <lc_expand:HASH> the model

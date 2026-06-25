@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct ProxyConfig {
     pub anthropic_upstream: Option<String>,
     pub openai_upstream: Option<String>,
+    pub chatgpt_upstream: Option<String>,
     pub gemini_upstream: Option<String>,
     /// History-pruning strategy for proxied chat requests.
     /// "cache-aware" (default) | "rolling" | "off". See [`HistoryMode`].
@@ -363,6 +364,11 @@ impl ProxyConfig {
                 self.openai_upstream.as_deref(),
                 "https://api.openai.com",
             ),
+            ProxyProvider::ChatGpt => (
+                "LEAN_CTX_CHATGPT_UPSTREAM",
+                self.chatgpt_upstream.as_deref(),
+                "https://chatgpt.com",
+            ),
             ProxyProvider::Gemini => (
                 "LEAN_CTX_GEMINI_UPSTREAM",
                 self.gemini_upstream.as_deref(),
@@ -422,6 +428,7 @@ impl ProxyConfig {
         Upstreams {
             anthropic: self.resolve_upstream(ProxyProvider::Anthropic),
             openai: self.resolve_upstream(ProxyProvider::OpenAi),
+            chatgpt: self.resolve_upstream(ProxyProvider::ChatGpt),
             gemini: self.resolve_upstream(ProxyProvider::Gemini),
         }
     }
@@ -437,6 +444,7 @@ impl ProxyConfig {
         Upstreams {
             anthropic: pick(ProxyProvider::Anthropic),
             openai: pick(ProxyProvider::OpenAi),
+            chatgpt: pick(ProxyProvider::ChatGpt),
             gemini: pick(ProxyProvider::Gemini),
         }
     }
@@ -455,6 +463,7 @@ impl ProxyConfig {
         Upstreams {
             anthropic: keep(ProxyProvider::Anthropic, &last.anthropic),
             openai: keep(ProxyProvider::OpenAi, &last.openai),
+            chatgpt: keep(ProxyProvider::ChatGpt, &last.chatgpt),
             gemini: keep(ProxyProvider::Gemini, &last.gemini),
         }
     }
@@ -467,6 +476,7 @@ impl ProxyConfig {
 pub struct Upstreams {
     pub anthropic: String,
     pub openai: String,
+    pub chatgpt: String,
     pub gemini: String,
 }
 
@@ -474,6 +484,7 @@ pub struct Upstreams {
 pub enum ProxyProvider {
     Anthropic,
     OpenAi,
+    ChatGpt,
     Gemini,
 }
 
@@ -500,6 +511,7 @@ pub fn env_upstream_override(provider: ProxyProvider) -> Option<String> {
     let var = match provider {
         ProxyProvider::Anthropic => "LEAN_CTX_ANTHROPIC_UPSTREAM",
         ProxyProvider::OpenAi => "LEAN_CTX_OPENAI_UPSTREAM",
+        ProxyProvider::ChatGpt => "LEAN_CTX_CHATGPT_UPSTREAM",
         ProxyProvider::Gemini => "LEAN_CTX_GEMINI_UPSTREAM",
     };
     std::env::var(var).ok().and_then(|v| normalize_url_opt(&v))
@@ -543,6 +555,7 @@ pub fn normalize_url_opt(value: &str) -> Option<String> {
 const ALLOWED_UPSTREAM_HOSTS: &[&str] = &[
     "api.anthropic.com",
     "api.openai.com",
+    "chatgpt.com",
     "generativelanguage.googleapis.com",
 ];
 
@@ -833,6 +846,7 @@ mod tests {
         let up = cfg.resolve_all_disk();
         assert_eq!(up.openai, "http://127.0.0.1:19101");
         assert_eq!(up.anthropic, "https://api.anthropic.com");
+        assert_eq!(up.chatgpt, "https://chatgpt.com");
         assert_eq!(up.gemini, "https://generativelanguage.googleapis.com");
     }
 
@@ -856,6 +870,7 @@ mod tests {
         let last = Upstreams {
             anthropic: "https://api.anthropic.com".into(),
             openai: "http://127.0.0.1:19101".into(),
+            chatgpt: "https://chatgpt.com".into(),
             gemini: "https://generativelanguage.googleapis.com".into(),
         };
         let cfg = ProxyConfig {
@@ -877,6 +892,7 @@ mod tests {
         let last = Upstreams {
             anthropic: "https://api.anthropic.com".into(),
             openai: "http://127.0.0.1:19101".into(),
+            chatgpt: "https://chatgpt.com".into(),
             gemini: "https://generativelanguage.googleapis.com".into(),
         };
         let cfg = ProxyConfig {

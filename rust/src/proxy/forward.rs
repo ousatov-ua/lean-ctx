@@ -13,7 +13,7 @@ use super::ProxyState;
 /// `LEAN_CTX_PROXY_MAX_BODY_MB`.
 const DEFAULT_MAX_BODY_MB: usize = 64;
 
-fn max_body_bytes() -> usize {
+pub(super) fn max_body_bytes() -> usize {
     std::env::var("LEAN_CTX_PROXY_MAX_BODY_MB")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -166,7 +166,7 @@ fn build_upstream_url(parts: &Parts, base: &str, default_path: &str) -> String {
 /// the OpenAI SDK send the project scope via this header for project-scoped API
 /// keys when calling the Responses API (`/responses`). Dropping it makes OpenAI
 /// reject the request with `Missing scopes: api.responses.write` (#366).
-const ALLOWED_REQUEST_HEADERS: &[&str] = &[
+pub(super) const ALLOWED_REQUEST_HEADERS: &[&str] = &[
     "authorization",
     "x-api-key",
     "content-type",
@@ -178,6 +178,13 @@ const ALLOWED_REQUEST_HEADERS: &[&str] = &[
     "openai-organization",
     "openai-project",
     "openai-beta",
+    "chatgpt-account-id",
+    "x-openai-fedramp",
+    "oai-product-sku",
+    "x-client-request-id",
+    "x-openai-subagent",
+    "x-codex-turn-state",
+    "cache-control",
     "x-goog-api-key",
     "x-goog-api-client",
 ];
@@ -204,7 +211,7 @@ async fn send_upstream(
     })
 }
 
-const FORWARDED_HEADERS: &[&str] = &[
+pub(super) const FORWARDED_HEADERS: &[&str] = &[
     "content-type",
     "content-encoding",
     "x-request-id",
@@ -336,6 +343,24 @@ mod tests {
         // It must be forwarded upstream, otherwise the Responses API rejects the
         // call with `Missing scopes: api.responses.write`.
         for required in ["authorization", "openai-project", "openai-organization"] {
+            assert!(
+                ALLOWED_REQUEST_HEADERS.contains(&required),
+                "request header `{required}` must be forwarded upstream"
+            );
+        }
+    }
+
+    #[test]
+    fn forwards_chatgpt_codex_oauth_headers() {
+        for required in [
+            "authorization",
+            "chatgpt-account-id",
+            "x-openai-fedramp",
+            "oai-product-sku",
+            "x-client-request-id",
+            "x-openai-subagent",
+            "x-codex-turn-state",
+        ] {
             assert!(
                 ALLOWED_REQUEST_HEADERS.contains(&required),
                 "request header `{required}` must be forwarded upstream"

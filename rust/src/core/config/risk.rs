@@ -42,7 +42,10 @@ pub fn classify(key: &str) -> Option<ConfigRisk> {
         "boundary_policy" => {
             "Boundary policy controls what context is allowed to leave this machine. Relaxing it widens data egress."
         }
-        "proxy.anthropic_upstream" | "proxy.openai_upstream" | "proxy.gemini_upstream" => {
+        "proxy.anthropic_upstream"
+        | "proxy.openai_upstream"
+        | "proxy.chatgpt_upstream"
+        | "proxy.gemini_upstream" => {
             "Redirects provider traffic to a custom upstream — every request and API key for this provider will flow through it."
         }
         _ => return None,
@@ -70,6 +73,7 @@ mod tests {
             "secret_detection.redact",
             "boundary_policy",
             "proxy.openai_upstream",
+            "proxy.chatgpt_upstream",
             "proxy.anthropic_upstream",
             "proxy.gemini_upstream",
         ] {

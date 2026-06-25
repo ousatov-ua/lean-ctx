@@ -516,9 +516,9 @@ pub(super) fn proxy_auth_probe(port: u16) -> bool {
 }
 
 /// Fetches the proxy's live upstreams from the authenticated `/status` endpoint.
-/// Returns `(anthropic, openai, gemini)`, or `None` if the proxy is unreachable
-/// or the response lacks the `upstreams` block. Drives the #449 drift check.
-pub(super) fn proxy_live_upstreams(port: u16) -> Option<(String, String, String)> {
+/// Returns `(anthropic, openai, chatgpt, gemini)`, or `None` if unreachable or
+/// the response lacks the `upstreams` block. Drives the #449 drift check.
+pub(super) fn proxy_live_upstreams(port: u16) -> Option<(String, String, String, String)> {
     let token = crate::core::session_token::resolve_proxy_token("LEAN_CTX_PROXY_TOKEN");
     let url = format!("http://127.0.0.1:{port}/status");
     let resp = ureq::get(&url)
@@ -531,6 +531,7 @@ pub(super) fn proxy_live_upstreams(port: u16) -> Option<(String, String, String)
     Some((
         up.get("anthropic")?.as_str()?.to_string(),
         up.get("openai")?.as_str()?.to_string(),
+        up.get("chatgpt")?.as_str()?.to_string(),
         up.get("gemini")?.as_str()?.to_string(),
     ))
 }

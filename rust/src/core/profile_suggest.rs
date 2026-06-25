@@ -306,6 +306,9 @@ fn detect_providers(cfg: &Config) -> Vec<String> {
     if cfg.proxy.openai_upstream.is_some() {
         push_unique(&mut providers, "openai");
     }
+    if cfg.proxy.chatgpt_upstream.is_some() {
+        push_unique(&mut providers, "chatgpt");
+    }
     if cfg.proxy.gemini_upstream.is_some() {
         push_unique(&mut providers, "gemini");
     }

@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod cache_safety;
 pub mod ccr;
+pub mod chatgpt;
 pub mod cold_prefix;
 pub mod compress;
 pub mod compress_api;
@@ -63,6 +64,11 @@ impl ProxyState {
     /// Current OpenAI upstream (live).
     pub fn openai_upstream(&self) -> String {
         self.upstreams.borrow().openai.clone()
+    }
+
+    /// Current ChatGPT upstream (live).
+    pub fn chatgpt_upstream(&self) -> String {
+        self.upstreams.borrow().chatgpt.clone()
     }
 
     /// Current Gemini upstream (live).
@@ -184,6 +190,9 @@ fn log_upstream_change(old: &Upstreams, new: &Upstreams) {
     if old.openai != new.openai {
         println!("  ↻ OpenAI upstream → {}", new.openai);
     }
+    if old.chatgpt != new.chatgpt {
+        println!("  ↻ ChatGPT upstream → {}", new.chatgpt);
+    }
     if old.gemini != new.gemini {
         println!("  ↻ Gemini upstream → {}", new.gemini);
     }
@@ -240,6 +249,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     let Upstreams {
         anthropic: anthropic_upstream,
         openai: openai_upstream,
+        chatgpt: chatgpt_upstream,
         gemini: gemini_upstream,
     } = initial;
 
@@ -276,6 +286,16 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
             post(openai_responses::handler).get(openai_responses::ws_handler),
         )
         .route("/responses/{*rest}", any(openai_responses::handler))
+        .route(
+            "/backend-api/codex/responses",
+            post(chatgpt::codex_responses_handler).get(chatgpt::codex_responses_ws_handler),
+        )
+        .route(
+            "/backend-api/codex/responses/{*rest}",
+            any(chatgpt::codex_responses_handler),
+        )
+        .route("/backend-api/wham", any(chatgpt::wham_handler))
+        .route("/backend-api/wham/{*rest}", any(chatgpt::wham_handler))
         .route("/v1/references/{id}", get(v1_resolve_reference))
         // Drop-in `compress(messages, model)` contract (#739): deterministic
         // messages-in / messages-out compression for SDK clients.
@@ -304,6 +324,8 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     println!(
         "  OpenAI:    POST /v1/responses → {openai_upstream}  (bare /responses also accepted)"
     );
+    println!("  ChatGPT:   POST /backend-api/codex/responses → {chatgpt_upstream}");
+    println!("  ChatGPT:   any  /backend-api/wham/* → {chatgpt_upstream}");
     println!("  Gemini:    POST /v1beta/models/... → {gemini_upstream}");
     println!("  Compress:  POST /v1/compress (deterministic messages-in/out, local)");
     // Codex defaults to a WebSocket Responses transport (ws://…/responses). The
@@ -407,6 +429,7 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
         "upstreams": {
             "anthropic": up.anthropic.clone(),
             "openai": up.openai.clone(),
+            "chatgpt": up.chatgpt.clone(),
             "gemini": up.gemini.clone(),
         },
         "requests_total": s.requests_total.load(Relaxed),
@@ -532,6 +555,8 @@ fn is_provider_route(path: &str) -> bool {
         || path.starts_with("/chat/completions")
         || path.starts_with("/responses")
         || path.starts_with("/messages")
+        || path.starts_with("/backend-api/codex/responses")
+        || path.starts_with("/backend-api/wham")
 }
 
 /// Decides whether a request authenticates via a provider API key alone, without
@@ -697,6 +722,13 @@ mod auth_tests {
     #[test]
     fn is_provider_route_chat() {
         assert!(is_provider_route("/chat/completions"));
+    }
+
+    #[test]
+    fn is_provider_route_chatgpt_backend_api() {
+        assert!(is_provider_route("/backend-api/codex/responses"));
+        assert!(is_provider_route("/backend-api/codex/responses/resp_123"));
+        assert!(is_provider_route("/backend-api/wham/session"));
     }
 
     #[test]
@@ -917,6 +949,7 @@ mod upstream_tests {
         Upstreams {
             anthropic: "https://api.anthropic.com".into(),
             openai: openai.into(),
+            chatgpt: "https://chatgpt.com".into(),
             gemini: "https://generativelanguage.googleapis.com".into(),
         }
     }

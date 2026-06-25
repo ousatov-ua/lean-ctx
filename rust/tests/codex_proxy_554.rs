@@ -1,8 +1,7 @@
-//! End-to-end regression for #554: `proxy enable` must only wire Codex through the
-//! proxy when it runs in API-key mode. A Codex **ChatGPT login** authenticates via
-//! OAuth directly against `chatgpt.com/backend-api`, so a custom `openai_base_url`
-//! is ignored and the proxy never sees the traffic — pointing it there is dead
-//! config that left users staring at `Requests: 0 / Compressed: 0`.
+//! End-to-end regression for #554 plus ChatGPT subscription routing: `proxy enable`
+//! must write the right Codex base URLs for both auth modes. API-key mode uses
+//! `/v1`; ChatGPT login uses `/backend-api/codex` for model turns and
+//! `/backend-api` for aux calls.
 //!
 //! Both scenarios live in one serial test: they redirect Codex via `CODEX_HOME`
 //! (the documented override `resolve_codex_dir` honours) and a live dummy proxy so
@@ -48,7 +47,7 @@ fn proxy_enable_respects_codex_auth_mode_554() {
         return;
     }
 
-    // --- ChatGPT login: the proxy can't see the traffic, so config stays untouched.
+    // --- ChatGPT login: route Codex backend traffic through the proxy.
     {
         let home = tempfile::tempdir().unwrap();
         let codex = home.path().join(".codex");
@@ -58,21 +57,28 @@ fn proxy_enable_respects_codex_auth_mode_554() {
             r#"{"auth_mode":"chatgpt","tokens":{"access_token":"x"}}"#,
         )
         .unwrap();
-        let original = "model = \"gpt-5.5\"\n";
-        std::fs::write(codex.join("config.toml"), original).unwrap();
+        std::fs::write(codex.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
 
         let _codex_home = CodexHome::set(&codex);
         let (_listener, port) = dummy_proxy_port();
         lean_ctx::proxy_setup::install_proxy_env_unchecked(home.path(), port, true, false);
 
         let cfg = std::fs::read_to_string(codex.join("config.toml")).unwrap();
-        assert_eq!(
-            cfg, original,
-            "ChatGPT-login Codex config must stay untouched (#554), got:\n{cfg}"
+        assert!(
+            cfg.contains(&format!(
+                "openai_base_url = \"http://127.0.0.1:{port}/backend-api/codex\""
+            )),
+            "ChatGPT-login Codex must route model turns via backend-api/codex, got:\n{cfg}"
         );
         assert!(
-            !cfg.contains("openai_base_url"),
-            "no dead openai_base_url may be written for a ChatGPT login"
+            cfg.contains(&format!(
+                "chatgpt_base_url = \"http://127.0.0.1:{port}/backend-api\""
+            )),
+            "ChatGPT-login Codex must route aux backend calls via backend-api, got:\n{cfg}"
+        );
+        assert!(
+            cfg.contains("model = \"gpt-5.5\""),
+            "unrelated Codex config must be preserved"
         );
     }
 

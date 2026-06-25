@@ -39,6 +39,12 @@ use super::ProxyState;
 const FORWARDED_UPGRADE_HEADERS: &[&str] = &[
     "authorization",
     "x-api-key",
+    "chatgpt-account-id",
+    "x-openai-fedramp",
+    "oai-product-sku",
+    "x-client-request-id",
+    "x-openai-subagent",
+    "x-codex-turn-state",
     "openai-organization",
     "openai-project",
     "openai-beta",
@@ -48,8 +54,19 @@ const FORWARDED_UPGRADE_HEADERS: &[&str] = &[
 /// Upgrades a Responses WebSocket and bridges it to the HTTP/SSE upstream.
 pub fn upgrade(state: ProxyState, ws: WebSocketUpgrade, headers: &HeaderMap) -> Response {
     let upstream = state.openai_upstream();
+    upgrade_to(state, ws, headers, upstream, "/v1/responses")
+}
+
+/// Upgrades a Responses WebSocket and bridges it to a selected HTTP/SSE target.
+pub fn upgrade_to(
+    state: ProxyState,
+    ws: WebSocketUpgrade,
+    headers: &HeaderMap,
+    upstream: String,
+    path: &'static str,
+) -> Response {
     let fwd = capture_forward_headers(headers);
-    ws.on_upgrade(move |socket| bridge(socket, state, upstream, fwd))
+    ws.on_upgrade(move |socket| bridge(socket, state, upstream, path, fwd))
 }
 
 fn capture_forward_headers(headers: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
@@ -67,6 +84,7 @@ async fn bridge(
     mut socket: WebSocket,
     state: ProxyState,
     upstream: String,
+    path: &'static str,
     fwd_headers: Vec<(HeaderName, HeaderValue)>,
 ) {
     // The Responses WS protocol runs turns sequentially: one in-flight response
@@ -76,9 +94,16 @@ async fn bridge(
         let Ok(msg) = msg else { break };
         match msg {
             Message::Text(text) => {
-                if run_turn(&mut socket, &state, &upstream, &fwd_headers, text.as_str())
-                    .await
-                    .is_break()
+                if run_turn(
+                    &mut socket,
+                    &state,
+                    &upstream,
+                    path,
+                    &fwd_headers,
+                    text.as_str(),
+                )
+                .await
+                .is_break()
                 {
                     break;
                 }
@@ -99,6 +124,7 @@ async fn run_turn(
     socket: &mut WebSocket,
     state: &ProxyState,
     upstream: &str,
+    path: &str,
     fwd_headers: &[(HeaderName, HeaderValue)],
     text: &str,
 ) -> ControlFlow<()> {
@@ -123,7 +149,7 @@ async fn run_turn(
         state.stats.record_compression(original_size, payload.len());
     }
 
-    let url = format!("{upstream}/v1/responses");
+    let url = format!("{upstream}{path}");
     let mut req = state
         .client
         .post(&url)

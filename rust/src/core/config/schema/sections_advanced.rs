@@ -25,6 +25,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         ),
     );
     proxy.insert(
+        "chatgpt_upstream".into(),
+        key(
+            "string?",
+            serde_json::json!(cfg.proxy.chatgpt_upstream),
+            "Custom upstream URL for ChatGPT/Codex subscription API proxy",
+        ),
+    );
+    proxy.insert(
         "gemini_upstream".into(),
         key(
             "string?",

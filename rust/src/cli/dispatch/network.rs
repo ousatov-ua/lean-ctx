@@ -608,6 +608,7 @@ fn print_live_upstreams_and_drift(v: &serde_json::Value, cfg: &crate::core::conf
             &disk.anthropic,
         ),
         ("OpenAI", "openai", ProxyProvider::OpenAi, &disk.openai),
+        ("ChatGPT", "chatgpt", ProxyProvider::ChatGpt, &disk.chatgpt),
         ("Gemini", "gemini", ProxyProvider::Gemini, &disk.gemini),
     ] {
         let live = up.get(key).and_then(|x| x.as_str()).unwrap_or("?");
