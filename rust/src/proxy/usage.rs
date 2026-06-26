@@ -31,11 +31,11 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// Maps the proxy's `provider_label` (`"Anthropic"`, `"OpenAI"`, else Gemini).
+    /// Maps the proxy's `provider_label` (`"Anthropic"`, `"OpenAI"`/`"ChatGPT"`, else Gemini).
     pub fn from_label(label: &str) -> Self {
         match label {
             "Anthropic" => Self::Anthropic,
-            "OpenAI" => Self::OpenAi,
+            "OpenAI" | "ChatGPT" => Self::OpenAi,
             _ => Self::Gemini,
         }
     }

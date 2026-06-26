@@ -2,9 +2,10 @@ use super::ccr;
 use crate::core::tokens::count_tokens;
 use crate::core::web::distill;
 
-/// Char budget for the research-prose squeeze (~6k tokens). Only oversized prose
-/// is truncated; the squeeze's main job is dedup + blank-collapse, not cutting.
-const RESEARCH_PROSE_CAP: usize = 24_000;
+/// Byte-ish budget for the research-prose squeeze (~5k tokens on English prose).
+/// Only oversized prose is truncated; the squeeze's main job is dedup + blank-collapse,
+/// not cutting.
+const RESEARCH_PROSE_CAP: usize = 20_000;
 
 /// Proxy compression funnel: routes a tool result to the right compressor.
 ///

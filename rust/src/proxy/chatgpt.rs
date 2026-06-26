@@ -21,7 +21,7 @@ pub async fn codex_responses_handler(
         &upstream,
         "/backend-api/codex/responses",
         openai_responses::compress_request_body,
-        "OpenAI",
+        "ChatGPT",
         &[],
     )
     .await

@@ -161,7 +161,9 @@ async fn run_turn(
     } else {
         original_size
     };
-    state.stats.record_request(original_size, compressed_size);
+    state
+        .stats
+        .record_provider_request("OpenAI", original_size, compressed_size);
 
     let url = format!("{upstream}{path}");
     let mut req = state

@@ -86,6 +86,19 @@ pub struct ProxyStats {
     pub tokens_saved: AtomicU64,
     pub bytes_original: AtomicU64,
     pub bytes_compressed: AtomicU64,
+    pub anthropic: ProviderStats,
+    pub openai: ProviderStats,
+    pub chatgpt: ProviderStats,
+    pub gemini: ProviderStats,
+}
+
+#[derive(Default)]
+pub struct ProviderStats {
+    pub requests_total: AtomicU64,
+    pub requests_compressed: AtomicU64,
+    pub tokens_saved: AtomicU64,
+    pub bytes_original: AtomicU64,
+    pub bytes_compressed: AtomicU64,
 }
 
 impl Default for ProxyStats {
@@ -96,12 +109,37 @@ impl Default for ProxyStats {
             tokens_saved: AtomicU64::new(0),
             bytes_original: AtomicU64::new(0),
             bytes_compressed: AtomicU64::new(0),
+            anthropic: ProviderStats::default(),
+            openai: ProviderStats::default(),
+            chatgpt: ProviderStats::default(),
+            gemini: ProviderStats::default(),
         }
     }
 }
 
 impl ProxyStats {
     pub fn record_request(&self, original: usize, compressed: usize) {
+        self.record_totals(original, compressed);
+    }
+
+    pub fn record_provider_request(
+        &self,
+        provider_label: &str,
+        original: usize,
+        compressed: usize,
+    ) {
+        let (effective_compressed, saved_tokens, compressed_request) =
+            self.record_totals(original, compressed);
+
+        self.provider(provider_label).record(
+            original,
+            effective_compressed,
+            compressed_request,
+            saved_tokens,
+        );
+    }
+
+    fn record_totals(&self, original: usize, compressed: usize) -> (usize, u64, bool) {
         self.requests_total.fetch_add(1, Ordering::Relaxed);
         self.bytes_original
             .fetch_add(original as u64, Ordering::Relaxed);
@@ -113,6 +151,7 @@ impl ProxyStats {
         }
         let saved_tokens = (original.saturating_sub(effective_compressed) / 4) as u64;
         self.tokens_saved.fetch_add(saved_tokens, Ordering::Relaxed);
+        (effective_compressed, saved_tokens, compressed < original)
     }
 
     pub fn compression_ratio(&self) -> f64 {
@@ -122,6 +161,64 @@ impl ProxyStats {
         }
         let compressed = self.bytes_compressed.load(Ordering::Relaxed);
         (1.0 - compressed as f64 / original as f64) * 100.0
+    }
+
+    fn provider(&self, provider_label: &str) -> &ProviderStats {
+        match provider_label {
+            "Anthropic" => &self.anthropic,
+            "OpenAI" => &self.openai,
+            "ChatGPT" => &self.chatgpt,
+            _ => &self.gemini,
+        }
+    }
+
+    pub fn provider_summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "anthropic": self.anthropic.summary(),
+            "openai": self.openai.summary(),
+            "chatgpt": self.chatgpt.summary(),
+            "gemini": self.gemini.summary(),
+        })
+    }
+}
+
+impl ProviderStats {
+    fn record(
+        &self,
+        original: usize,
+        effective_compressed: usize,
+        compressed_request: bool,
+        saved_tokens: u64,
+    ) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+        if compressed_request {
+            self.requests_compressed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.tokens_saved.fetch_add(saved_tokens, Ordering::Relaxed);
+        self.bytes_original
+            .fetch_add(original as u64, Ordering::Relaxed);
+        self.bytes_compressed
+            .fetch_add(effective_compressed as u64, Ordering::Relaxed);
+    }
+
+    fn compression_ratio(&self) -> f64 {
+        let original = self.bytes_original.load(Ordering::Relaxed);
+        if original == 0 {
+            return 0.0;
+        }
+        let compressed = self.bytes_compressed.load(Ordering::Relaxed);
+        (1.0 - compressed as f64 / original as f64) * 100.0
+    }
+
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "requests_total": self.requests_total.load(Ordering::Relaxed),
+            "requests_compressed": self.requests_compressed.load(Ordering::Relaxed),
+            "tokens_saved": self.tokens_saved.load(Ordering::Relaxed),
+            "bytes_original": self.bytes_original.load(Ordering::Relaxed),
+            "bytes_compressed": self.bytes_compressed.load(Ordering::Relaxed),
+            "compression_ratio_pct": format!("{:.1}", self.compression_ratio()),
+        })
     }
 }
 
@@ -153,6 +250,32 @@ mod stats_tests {
         assert_eq!(stats.requests_compressed.load(Ordering::Relaxed), 0);
         assert_eq!(stats.tokens_saved.load(Ordering::Relaxed), 0);
         assert_eq!(stats.compression_ratio(), 0.0);
+    }
+
+    #[test]
+    fn provider_stats_are_separate() {
+        let stats = ProxyStats::default();
+
+        stats.record_provider_request("OpenAI", 1_000, 500);
+        stats.record_provider_request("ChatGPT", 2_000, 1_000);
+
+        assert_eq!(stats.requests_total.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.openai.requests_total.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.chatgpt.requests_total.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.openai.tokens_saved.load(Ordering::Relaxed), 125);
+        assert_eq!(stats.chatgpt.tokens_saved.load(Ordering::Relaxed), 250);
+        assert_eq!(stats.openai.compression_ratio(), 50.0);
+        assert_eq!(stats.chatgpt.compression_ratio(), 50.0);
+    }
+
+    #[test]
+    fn unlabelled_requests_do_not_count_as_gemini() {
+        let stats = ProxyStats::default();
+
+        stats.record_request(1_000, 500);
+
+        assert_eq!(stats.requests_total.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.gemini.requests_total.load(Ordering::Relaxed), 0);
     }
 }
 
@@ -475,6 +598,7 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
         "bytes_original": s.bytes_original.load(Relaxed),
         "bytes_compressed": s.bytes_compressed.load(Relaxed),
         "compression_ratio_pct": format!("{:.1}", s.compression_ratio()),
+        "per_upstream": s.provider_summary(),
         "cache_safety": cache_safety::snapshot(),
         "effort": effort::snapshot(active_effort),
         "per_model": cost::snapshot(),

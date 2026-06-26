@@ -584,6 +584,37 @@ fn stop_proxy_process(port: u16) -> bool {
     true
 }
 
+#[cfg(feature = "http-server")]
+fn print_compression_by_upstream(v: &serde_json::Value) {
+    let Some(per_upstream) = v.get("per_upstream").and_then(|u| u.as_object()) else {
+        return;
+    };
+    println!("  Compression by upstream:");
+    for (label, key) in [
+        ("Anthropic", "anthropic"),
+        ("OpenAI", "openai"),
+        ("ChatGPT", "chatgpt"),
+        ("Gemini", "gemini"),
+    ] {
+        let Some(row) = per_upstream.get(key).and_then(|x| x.as_object()) else {
+            continue;
+        };
+        let requests = row
+            .get("requests_total")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let saved = row
+            .get("tokens_saved")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let ratio = row
+            .get("compression_ratio_pct")
+            .and_then(|x| x.as_str())
+            .unwrap_or("0.0");
+        println!("    {label:<10} {ratio:>5}% saved, {saved} tok, {requests} req");
+    }
+}
+
 /// Prints the proxy's live upstreams (from `/status`) and warns when they drift
 /// from what the operator expects. Covers both #449 cases: a shell-exported
 /// `LEAN_CTX_*_UPSTREAM` that never reached the MCP/service-spawned proxy, and a
@@ -749,6 +780,7 @@ pub(super) fn cmd_proxy(rest: &[String]) {
                                 "  Compression: {}%",
                                 v["compression_ratio_pct"].as_str().unwrap_or("0.0")
                             );
+                            print_compression_by_upstream(&v);
                             print_live_upstreams_and_drift(&v, &cfg);
                         }
                     } else {

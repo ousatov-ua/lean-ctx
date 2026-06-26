@@ -54,7 +54,7 @@ pub async fn forward_request(
     if let Some(ref parsed) = parsed {
         let provider = match provider_label {
             "Anthropic" => super::introspect::Provider::Anthropic,
-            "OpenAI" => super::introspect::Provider::OpenAi,
+            "OpenAI" | "ChatGPT" => super::introspect::Provider::OpenAi,
             _ => super::introspect::Provider::Gemini,
         };
         let breakdown = super::introspect::analyze_request(parsed, provider);
@@ -68,7 +68,9 @@ pub async fn forward_request(
         .and_then(|p| cohort_arm(p, provider_label, default_path));
 
     if compression_candidate {
-        state.stats.record_request(original_size, compressed_size);
+        state
+            .stats
+            .record_provider_request(provider_label, original_size, compressed_size);
     }
 
     let tokens_saved = original_size.saturating_sub(compressed_size) as u64 / 4;
@@ -131,7 +133,7 @@ fn cohort_arm(
     }
     let key = match provider_label {
         "Anthropic" => super::holdout::anthropic_key(parsed),
-        "OpenAI" => {
+        "OpenAI" | "ChatGPT" => {
             if default_path.contains("responses") {
                 super::holdout::openai_responses_key(parsed)
             } else {
@@ -698,5 +700,24 @@ mod tests {
                 "response header `{required}` must be forwarded downstream"
             );
         }
+    }
+
+    #[test]
+    fn chatgpt_responses_use_openai_responses_holdout_key() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        crate::core::config::Config::update_global(|c| {
+            c.proxy.output_holdout = Some(1.0);
+        })
+        .unwrap();
+
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "input": "same conversation",
+        });
+
+        assert_eq!(
+            cohort_arm(&body, "ChatGPT", "/backend-api/codex/responses"),
+            cohort_arm(&body, "OpenAI", "/v1/responses")
+        );
     }
 }

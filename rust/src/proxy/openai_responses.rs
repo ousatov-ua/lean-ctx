@@ -201,21 +201,43 @@ pub(super) fn prune_responses_input(doc: &mut Value) -> bool {
 /// pruning analogue of [`compress_output_field`].
 fn prune_output_field(output: &mut Value, kind: ToolResultKind) -> bool {
     match output {
-        Value::String(s) => match super::history_prune::prune_output_text(s, kind) {
-            Some(pruned) => {
+        Value::String(s) => match rewrite_json_payload_text(s, kind, |text| {
+            super::history_prune::prune_output_text(text, kind)
+        }) {
+            JsonRewrite::Changed(pruned) => {
                 *s = pruned;
                 true
             }
-            None => false,
+            JsonRewrite::Unchanged => false,
+            JsonRewrite::NotJson => match super::history_prune::prune_output_text(s, kind) {
+                Some(pruned) => {
+                    *s = pruned;
+                    true
+                }
+                None => false,
+            },
         },
         Value::Array(parts) => {
             let mut changed = false;
             for part in parts.iter_mut() {
-                if let Some(Value::String(text)) = part.get_mut("text")
-                    && let Some(pruned) = super::history_prune::prune_output_text(text, kind)
-                {
-                    *text = pruned;
-                    changed = true;
+                if let Some(Value::String(text)) = part.get_mut("text") {
+                    match rewrite_json_payload_text(text, kind, |inner| {
+                        super::history_prune::prune_output_text(inner, kind)
+                    }) {
+                        JsonRewrite::Changed(pruned) => {
+                            *text = pruned;
+                            changed = true;
+                        }
+                        JsonRewrite::Unchanged => {}
+                        JsonRewrite::NotJson => {
+                            if let Some(pruned) =
+                                super::history_prune::prune_output_text(text, kind)
+                            {
+                                *text = pruned;
+                                changed = true;
+                            }
+                        }
+                    }
                 }
             }
             changed
@@ -281,6 +303,20 @@ fn compress_output_field(
 ) -> bool {
     match output {
         Value::String(s) => {
+            match rewrite_json_payload_text(s, kind, |text| {
+                if should_protect(kind, text) {
+                    return None;
+                }
+                let compressed = compress_tool_result(text, tool_name);
+                (compressed.len() < text.len()).then_some(compressed)
+            }) {
+                JsonRewrite::Changed(compressed) => {
+                    *s = compressed;
+                    return true;
+                }
+                JsonRewrite::Unchanged => return false,
+                JsonRewrite::NotJson => {}
+            }
             if should_protect(kind, s) {
                 return false;
             }
@@ -295,6 +331,21 @@ fn compress_output_field(
             let mut changed = false;
             for part in parts.iter_mut() {
                 if let Some(Value::String(text)) = part.get_mut("text") {
+                    match rewrite_json_payload_text(text, kind, |inner| {
+                        if should_protect(kind, inner) {
+                            return None;
+                        }
+                        let compressed = compress_tool_result(inner, tool_name);
+                        (compressed.len() < inner.len()).then_some(compressed)
+                    }) {
+                        JsonRewrite::Changed(compressed) => {
+                            *text = compressed;
+                            changed = true;
+                            continue;
+                        }
+                        JsonRewrite::Unchanged => continue,
+                        JsonRewrite::NotJson => {}
+                    }
                     if should_protect(kind, text) {
                         continue;
                     }
@@ -308,6 +359,74 @@ fn compress_output_field(
             changed
         }
         _ => false,
+    }
+}
+
+enum JsonRewrite {
+    NotJson,
+    Unchanged,
+    Changed(String),
+}
+
+fn rewrite_json_payload_text(
+    text: &str,
+    kind: ToolResultKind,
+    mut rewrite: impl FnMut(&str) -> Option<String>,
+) -> JsonRewrite {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return JsonRewrite::NotJson;
+    }
+    let Ok(mut value) = serde_json::from_str::<Value>(trimmed) else {
+        return JsonRewrite::NotJson;
+    };
+    let mut touched = false;
+    let mut changed = false;
+    rewrite_json_text_values(&mut value, kind, &mut rewrite, &mut touched, &mut changed);
+    if !touched || !changed {
+        return JsonRewrite::Unchanged;
+    }
+    match serde_json::to_string(&value) {
+        Ok(serialized) if serialized.len() < text.len() => JsonRewrite::Changed(serialized),
+        _ => JsonRewrite::Unchanged,
+    }
+}
+
+fn rewrite_json_text_values(
+    value: &mut Value,
+    kind: ToolResultKind,
+    rewrite: &mut impl FnMut(&str) -> Option<String>,
+    touched: &mut bool,
+    changed: &mut bool,
+) {
+    match value {
+        Value::Object(map) => {
+            let is_text_part = map
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| matches!(t, "text" | "input_text" | "output_text"));
+            let rewrite_all_strings =
+                matches!(kind, ToolResultKind::Shell | ToolResultKind::Search);
+            for (key, child) in map.iter_mut() {
+                if let Value::String(s) = child
+                    && (rewrite_all_strings || (is_text_part && key == "text"))
+                {
+                    *touched = true;
+                    if let Some(next) = rewrite(s) {
+                        *s = next;
+                        *changed = true;
+                    }
+                    continue;
+                }
+                rewrite_json_text_values(child, kind, rewrite, touched, changed);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                rewrite_json_text_values(item, kind, rewrite, touched, changed);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -333,6 +452,65 @@ mod tests {
                  reasoning before making changes, you prefer small reviewable diffs, and \
                  you never introduce mock data or placeholders into production code. ";
         [p; 6].join("\n")
+    }
+
+    fn long_tool_json() -> String {
+        let rows = (0..32)
+            .map(|i| {
+                serde_json::json!({
+                    "path": format!("/Users/alex/work/app/src/module_{i}.rs"),
+                    "regex": r"src/[a-z_]+\.rs:\d+",
+                    "error": format!("error[E0{i:03}]: expected exact diagnostic text"),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_string(&serde_json::json!({ "results": rows })).unwrap()
+    }
+
+    #[test]
+    fn shell_json_envelope_text_is_compressed() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let raw = long_git_status();
+        let expected = compress_tool_result(&raw, Some("Bash"));
+        let envelope = serde_json::to_string(&serde_json::json!({
+            "content": [{"type": "text", "text": raw}],
+            "isError": false,
+        }))
+        .unwrap();
+
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "input": [
+                {"type": "function_call", "call_id": "call_1", "name": "Bash", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": envelope}
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+
+        assert!(comp < orig);
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        let output = parsed["input"][1]["output"].as_str().unwrap();
+        let envelope: Value = serde_json::from_str(output).unwrap();
+        assert_eq!(envelope["content"][0]["text"].as_str().unwrap(), expected);
+    }
+
+    #[test]
+    fn old_shell_json_envelope_text_is_pruned() {
+        let raw = long_git_status();
+        let envelope = serde_json::to_string(&serde_json::json!({
+            "content": [{"type": "text", "text": raw}],
+            "isError": false,
+        }))
+        .unwrap();
+        let mut output = Value::String(envelope);
+
+        assert!(prune_output_field(&mut output, ToolResultKind::Shell));
+        let envelope: Value = serde_json::from_str(output.as_str().unwrap()).unwrap();
+        assert!(
+            envelope["content"][0]["text"].as_str().unwrap().len() < raw.len(),
+            "nested text payload should be pruned"
+        );
     }
 
     #[test]
@@ -427,6 +605,68 @@ mod tests {
         assert_eq!(comp, orig);
         let reparsed: Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(reparsed, body);
+    }
+
+    #[test]
+    fn chatgpt_responses_eval_fixture_keeps_exact_payloads_and_pairing() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        crate::core::config::Config::update_global(|c| {
+            c.proxy.role_aggressiveness.user = Some(0.8);
+        })
+        .unwrap();
+
+        let command_input = "$ cargo test --lib proxy::openai_responses\nerror[E0425]: cannot find value `x` in this scope\nsrc/proxy/openai_responses.rs:12:9";
+        let body = serde_json::json!({"model": "gpt-5", "input": command_input});
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body.clone(), bytes.len());
+        assert_eq!(comp, orig, "top-level exact command string must stay raw");
+        assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), body);
+
+        let old_json = long_tool_json();
+        let recent_json = long_tool_json();
+        let old_shell = long_git_status();
+        let input_text_block = "```rust\nfn main() { panic!(\"exact\"); }\n```\nRegex: src/[a-z_]+\\.rs:\\d+\nPath: /Users/alex/work/app/src/main.rs\nError: error[E0425]: cannot find value `x` in this scope";
+        let mut input = vec![
+            serde_json::json!({"type": "reasoning", "id": "rs_1", "summary": []}),
+            serde_json::json!({"type": "function_call", "call_id": "json_old", "name": "submit_tool_json", "arguments": "{\"strict\":true}"}),
+            serde_json::json!({"type": "function_call_output", "call_id": "json_old", "output": old_json}),
+            serde_json::json!({"type": "function_call", "call_id": "shell_old", "name": "Bash", "arguments": "{\"cmd\":\"git status\"}"}),
+            serde_json::json!({"type": "function_call_output", "call_id": "shell_old", "output": old_shell}),
+            serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": input_text_block}]}),
+        ];
+        while input.len() < 22 {
+            input.push(serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": format!("filler {}", input.len()),
+            }));
+        }
+        input.push(serde_json::json!({"type": "function_call", "call_id": "json_recent", "name": "submit_tool_json", "arguments": "{\"strict\":true}"}));
+        input.push(serde_json::json!({"type": "function_call_output", "call_id": "json_recent", "output": recent_json}));
+
+        let body = serde_json::json!({"model": "gpt-5", "input": input});
+        let item_count = body["input"].as_array().unwrap().len();
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+        assert!(comp < orig, "old shell output should still provide savings");
+
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        let input = parsed["input"].as_array().unwrap();
+        assert_eq!(input.len(), item_count, "no Responses item may be dropped");
+        assert_eq!(input[0]["type"], "reasoning");
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["output"].as_str().unwrap(), old_json);
+        assert_ne!(input[4]["output"].as_str().unwrap(), old_shell);
+        assert_eq!(
+            input[5]["content"][0]["text"].as_str().unwrap(),
+            input_text_block
+        );
+        assert_eq!(input[22]["type"], "function_call");
+        assert_eq!(input[23]["type"], "function_call_output");
+        assert_eq!(input[23]["output"].as_str().unwrap(), recent_json);
+        assert_eq!(input[1]["call_id"], input[2]["call_id"]);
+        assert_eq!(input[22]["call_id"], input[23]["call_id"]);
     }
 
     #[test]
