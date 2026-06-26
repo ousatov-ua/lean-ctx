@@ -491,12 +491,18 @@ fn handle_with_options_resolved(
 /// dominant "re-read an unchanged file" case proceeds under a shared lock and
 /// parallel reads of distinct files no longer serialize on a global write lock.
 pub fn try_stub_hit_readonly(cache: &SessionCache, path: &str) -> Option<ReadOutput> {
-    let file_ref = cache.get_file_ref_readonly(path)?;
-    let (cached_mtime, cached_hash, line_count) = {
-        let entry = cache.get(path)?;
-        (entry.stored_mtime, entry.hash.clone(), entry.line_count)
-    };
+    let current_conversation = crate::core::conversation::current_conversation_id();
+    try_stub_hit_readonly_scoped(cache, path, current_conversation.as_deref())
+}
 
+/// Conversation-scoped core of [`try_stub_hit_readonly`]. The current
+/// conversation id is injected (not read from the global resolver) so the
+/// conversation gate can be tested deterministically without global state.
+fn try_stub_hit_readonly_scoped(
+    cache: &SessionCache,
+    path: &str,
+    current_conversation: Option<&str>,
+) -> Option<ReadOutput> {
     let no_deg = crate::core::config::Config::load().no_degrade_effective();
     let prof = crate::core::profiles::active_profile();
     let force_full = no_deg
@@ -504,34 +510,84 @@ pub fn try_stub_hit_readonly(cache: &SessionCache, path: &str) -> Option<ReadOut
             && prof.compression.crp_mode_effective() == "off");
     let policy_allows_stub =
         crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full;
-    if !policy_allows_stub
-        || crate::core::cache::is_cache_entry_stale_verified(path, cached_mtime, &cached_hash)
-        || !cache.is_full_delivered(path)
-    {
+    if !policy_allows_stub {
         return None;
     }
 
-    cache.record_cache_hit(path);
+    // Warm path: a live in-memory entry is the freshest source of truth.
+    if let Some(file_ref) = cache.get_file_ref_readonly(path) {
+        let (cached_mtime, cached_hash, line_count, delivered_conv) = {
+            let entry = cache.get(path)?;
+            (
+                entry.stored_mtime,
+                entry.hash.clone(),
+                entry.line_count,
+                entry.delivered_conversation.clone(),
+            )
+        };
+        if crate::core::cache::is_cache_entry_stale_verified(path, cached_mtime, &cached_hash)
+            || !cache.is_full_delivered(path)
+        {
+            return None;
+        }
+        // Conversation scoping (#954): only stub when THIS conversation received
+        // the content. A different (or unknown) conversation re-delivers in full
+        // rather than emit a misleading stub. `current == None` (hooks absent)
+        // preserves legacy process-scoped behavior, so single-chat hit rates are
+        // unchanged.
+        if !crate::core::conversation::conversation_allows_stub(
+            current_conversation,
+            delivered_conv.as_deref(),
+        ) {
+            crate::core::cache_telemetry::record_conversation_mismatch();
+            return None;
+        }
+        cache.record_cache_hit(path);
+        return Some(render_unchanged_stub(&file_ref, path, line_count));
+    }
+
+    // Cold fallback (#955): no live entry (e.g. after a daemon restart or idle
+    // clear). Serve the stub from the persisted index iff the file is unchanged
+    // AND the *same known* conversation is asking — a stricter gate than the warm
+    // path, because a cold stub crosses a process boundary (no "no context →
+    // legacy" escape; see `conversation_allows_cold_stub`).
+    let rec = crate::core::read_stub_index::lookup(path)?;
+    if crate::core::cache::is_cache_entry_stale_verified(path, rec.stored_mtime(), &rec.hash) {
+        return None;
+    }
+    if !crate::core::conversation::conversation_allows_cold_stub(
+        current_conversation,
+        rec.delivered_conversation.as_deref(),
+    ) {
+        crate::core::cache_telemetry::record_conversation_mismatch();
+        return None;
+    }
+    Some(render_unchanged_stub(&rec.file_ref, path, rec.line_count))
+}
+
+/// Renders the `[unchanged …]` stub body shared by the warm and cold stub paths.
+///
+/// #498 determinism: the stub is a pure function of (file_ref, path, line_count),
+/// so identical re-reads stay byte-stable and provider prompt caching applies.
+/// The `fresh=true` escape is a *static* suffix (no rotating proof lines or
+/// read-count notes), so a re-reader in non-meta mode still sees how to force the
+/// content (#513) without breaking byte-stability.
+fn render_unchanged_stub(file_ref: &str, path: &str, line_count: usize) -> ReadOutput {
     let short = protocol::shorten_path(path);
     let out = if crate::core::protocol::meta_visible() {
         format!(
             "{file_ref}={short} [unchanged {line_count}L]\nUnchanged on disk. Use fresh=true to force re-read.",
         )
     } else {
-        // #498 determinism: the cache-hit stub is a pure function of (content,
-        // path) so identical re-reads stay byte-stable and provider prompt
-        // caching applies. The `fresh=true` escape is a *static* suffix (no
-        // rotating proof lines or read-count notes), so determinism holds while
-        // a re-reader in non-meta mode still sees how to force the content (#513).
         format!("{file_ref}={short} [unchanged {line_count}L · fresh=true to re-read]")
     };
     let out = crate::core::redaction::redact_text_if_enabled(&out);
     let sent = count_tokens(&out);
-    Some(ReadOutput {
+    ReadOutput {
         content: out,
         resolved_mode: "full".into(),
         output_tokens: sent,
-    })
+    }
 }
 
 /// Outcome of [`resolve_explicit_delta_mode`]: the (possibly rewritten) read
@@ -676,9 +732,29 @@ fn handle_with_options_inner(
         .map(|existing| (existing.original_tokens, existing.content()));
 
     if let Some((original_tokens, content_opt)) = cache_snapshot {
-        if mode == "full" {
+        // Resolve the read mode first — and *cache-aware* for `auto`. Handing the
+        // live cache to the resolver is what lets an `auto` re-read of an
+        // unchanged, already-fully-delivered file short-circuit to
+        // ("full", "cache_hit") and collapse to the cheap ~13-token `[unchanged]`
+        // stub, exactly like an explicit `full` re-read. The previous call passed
+        // no cache, so that branch was dead code and every `auto` re-read
+        // re-delivered the whole file ("re-reads aren't cached"). Resolving
+        // up-front also lets us hit the compressed-output cache BEFORE
+        // decompressing the full body (avoids ~2-5ms zstd on hits). The
+        // aggressiveness knob (#714) still routes `auto` through the density path.
+        let resolved_mode = if mode == "auto" {
+            tuning
+                .auto_density_mode()
+                .unwrap_or_else(|| resolve_auto_mode(Some(cache), path, original_tokens, task))
+        } else {
+            mode.to_string()
+        };
+
+        if resolved_mode == "full" {
             // Read-locked stub fast path (single source of truth, shared with
-            // the registered handler's concurrent read-lock attempt).
+            // the registered handler's concurrent read-lock attempt). Reached by
+            // an explicit `mode=full` and by `auto` that resolved to a full
+            // cache-hit, so both collapse identically to the `[unchanged]` stub.
             if let Some(out) = try_stub_hit_readonly(cache, path) {
                 return out;
             }
@@ -691,18 +767,6 @@ fn handle_with_options_inner(
                 output_tokens: sent,
             };
         }
-
-        // Resolve mode first so we can check compressed output cache BEFORE
-        // decompressing the full content (avoids ~2-5ms zstd overhead on hits).
-        // The aggressiveness knob (#714) routes `auto` through the density path
-        // so one number drives whole-file intensity; else the learned resolver.
-        let resolved_mode = if mode == "auto" {
-            tuning
-                .auto_density_mode()
-                .unwrap_or_else(|| resolve_auto_mode(path, original_tokens, task))
-        } else {
-            mode.to_string()
-        };
 
         if is_cacheable_mode(&resolved_mode) {
             let cache_key = compressed_cache_key(
@@ -837,7 +901,7 @@ fn handle_with_options_inner(
     let resolved_mode = if mode == "auto" {
         tuning
             .auto_density_mode()
-            .unwrap_or_else(|| resolve_auto_mode(path, store_result.original_tokens, task))
+            .unwrap_or_else(|| resolve_auto_mode(None, path, store_result.original_tokens, task))
     } else {
         mode.to_string()
     };
@@ -945,12 +1009,24 @@ fn cap_to_raw(
 }
 
 /// Delegates to the unified `auto_mode_resolver::resolve()`.
-fn resolve_auto_mode(file_path: &str, original_tokens: usize, task: Option<&str>) -> String {
+/// Resolve `auto` to a concrete mode.
+///
+/// Pass `Some(cache)` on the warm read path: the resolver then short-circuits an
+/// unchanged, already-fully-delivered file to `("full", "cache_hit")` so the
+/// caller can collapse the re-read to the cheap `[unchanged]` stub instead of
+/// re-delivering the whole body. Pass `None` only where no session cache exists
+/// (the CLI cold path), which forces a stateless cold resolution.
+fn resolve_auto_mode(
+    cache: Option<&SessionCache>,
+    file_path: &str,
+    original_tokens: usize,
+    task: Option<&str>,
+) -> String {
     let ctx = crate::core::auto_mode_resolver::AutoModeContext {
         path: file_path,
         token_count: original_tokens,
         task,
-        cache: None,
+        cache,
     };
     crate::core::auto_mode_resolver::resolve(&ctx).mode
 }

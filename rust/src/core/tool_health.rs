@@ -425,6 +425,14 @@ mod tests {
 
     #[test]
     fn compute_smoke_runs_and_counts_advertised_tools() {
+        // `advertised_tool_defs_default()` reads process-global env (tool
+        // profile, unified/full mode) and config, so it is not pure. Isolate the
+        // data dir and serialize on the shared test-env lock — otherwise a
+        // concurrent env-mutating test (e.g. the minimal-arm overhead test that
+        // sets LEAN_CTX_TOOL_PROFILE=minimal) can flip the profile between the two
+        // calls below, making the counts disagree. Latent race; surfaced once a
+        // slower sibling test shifted parallel scheduling (#945).
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let report = compute(tmp.path(), tmp.path());
         let expected = crate::server::tool_visibility::advertised_tool_defs_default().len();

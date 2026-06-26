@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [3.8.14] — unreleased
 
 ### Added
+- **Read-cache re-delivery telemetry (gitlab #953).** Turns the subjective
+  "re-reads feel unreliable" signal into data: every event that drops a
+  *fully-delivered* cache entry — forcing the next read to re-send the whole file
+  instead of the cheap `[unchanged]` stub — increments a process-global counter
+  grouped by cause (`compaction`, `idle`, `eviction`, `conversation`), surfaced
+  as a `re-deliveries forced:` line in `ctx_cache status`. The counters live only
+  in that diagnostic, never in a cacheable tool-output body, so output
+  determinism (#498) is preserved. Pure measurement — no behavioral change.
+- **Persistent, conversation-scoped `[unchanged]` stub index — survives daemon
+  restarts and idle clears (gitlab #955).** The in-memory read cache is wiped on
+  every daemon restart and emptied by the idle-TTL clear, so until now the first
+  unchanged re-read afterwards re-delivered the *whole* file — the single biggest
+  remaining source of the "re-reads aren't reliable" feeling. A new focused
+  module `core::read_stub_index` persists the *minimal bookkeeping* needed to emit
+  the ~13-token stub — `{path, md5, mtime, line_count, file_ref,
+  delivered_conversation}`, **never the content** — to
+  `{data_dir}/read_cache/stub_index.json` (atomic tmp+rename, LRU-capped at 1024
+  records). It is write-through on every full delivery, flushed on the
+  batch/idle/shutdown save cadence, and rehydrated at startup, so a re-read of an
+  unchanged file *in the same conversation* now collapses to the stub even across
+  a restart. Correctness is gated harder than the warm path: a cold stub (no live
+  entry) is served only when the file's mtime **and** md5 still match disk **and**
+  the current conversation equals the delivering one
+  (`conversation::conversation_allows_cold_stub` — no "no-context → legacy"
+  escape, because across a process boundary an unknown conversation cannot prove
+  the content is in context; this keeps #954's cross-chat hazard closed). A host
+  compaction drops the whole index synchronously (the conversation's context was
+  summarised away), mirroring `SessionCache::reset_delivery_flags`. Content is
+  always re-read from disk — only delivery bookkeeping persists — so tool-output
+  determinism (#498) is untouched. Side benefit: because the index outlives the
+  idle clear, same-conversation re-reads after idle no longer re-deliver either.
+  Kill-switch `LEAN_CTX_STUB_PERSIST=0`.
 - **Deterministic JSON crusher core — `core::json_crush` (gitlab #934/#935,
   Headroom "Smart Crusher" port).** Real JSON payloads (API responses, `kubectl
   get -o json`, DB dumps, RAG chunks) are dominated by arrays of objects that
@@ -116,6 +148,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `ctx_expand` handle so a dropped datum is never irrecoverable.
 
 ### Fixed
+- **`auto`-mode re-reads bypassed the `[unchanged]` cache stub and re-delivered
+  the whole file (gitlab #946).** The cheap ~13-token re-read stub
+  (`Fref=path [unchanged NL]`) only fired for an *explicit* `mode=full` re-read;
+  in the default `auto` mode a re-read of an unchanged, already fully-delivered
+  file re-sent the entire body — the "re-reads aren't cached / reliability is
+  worse than before" regression. Cause: `ctx_read` resolved `auto` with
+  `cache: None`, so the resolver's unit-tested `unchanged + full_delivered →
+  ("full","cache_hit")` short-circuit was dead code on the real read path (a
+  silent divergence from `ctx_smart_read`, which threaded the cache correctly;
+  introduced by the #683 deterministic cascade). `resolve_auto_mode` is now
+  cache-aware, the warm path routes an `auto`→`full` cache-hit through the same
+  `try_stub_hit_readonly` stub as an explicit full re-read, and the registered
+  read-lock fast path accepts `auto` too (self-guarded by the stub). Compressed-
+  first files still serve their cached compressed output on re-read — no wrong
+  escalation to full. Regression test
+  `auto_reread_of_fully_delivered_file_serves_unchanged_stub`.
+- **The `[unchanged]` re-read stub was not conversation-scoped — a file
+  delivered in one chat could be stubbed for a re-read in another (gitlab #954).**
+  The read `SessionCache` is shared across every chat served by one daemon, but
+  the stub asserts *"you already have this in context"* — true only within the
+  conversation that received the full content. A re-read from a different chat on
+  the same daemon could therefore receive `Fref=path [unchanged NL]` for content
+  it never saw (the idle-TTL clear only *incidentally* masked it). Each entry now
+  records the `delivered_conversation` (resolved from the live Cursor
+  `conversation_id` that hooks write to `active_transcript.json`), and
+  `try_stub_hit_readonly` serves the stub only when the current conversation
+  matches; a mismatch re-delivers in full and is counted by the new re-delivery
+  telemetry (#953). With no conversation context (hooks absent) it falls back to
+  the legacy process-scoped behavior, so single-chat hit rates are unchanged and
+  byte-stable (#498). The conversation gate is a pure, unit-tested function
+  (`conversation::conversation_allows_stub`) injected into the stub path for
+  deterministic, host-independent tests. Kill-switch
+  `LEAN_CTX_CONVERSATION_SCOPE=0`.
 - **`ctx_impact` missed Go and Kotlin same-package blast radius (#398 bug class).**
   The C#/Java fix in 3.8.13 closed one instance of a general gap: any language with
   implicit same-package visibility references project types with no import, so

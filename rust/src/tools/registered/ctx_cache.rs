@@ -65,8 +65,8 @@ impl McpTool for CtxCacheTool {
         let result = match action.as_str() {
             "status" => {
                 let entries = guard.get_all_entries();
-                if entries.is_empty() {
-                    "Cache empty — no files tracked.".to_string()
+                let mut lines = if entries.is_empty() {
+                    vec!["Cache empty — no files tracked.".to_string()]
                 } else {
                     let mut lines = vec![format!("Cache: {} file(s)", entries.len())];
                     for (path, entry) in &entries {
@@ -82,8 +82,18 @@ impl McpTool for CtxCacheTool {
                             entry.read_count()
                         ));
                     }
-                    lines.join("\n")
+                    lines
+                };
+                // Re-delivery telemetry: forced full re-sends grouped by cause
+                // (diagnostic only — never enters a cacheable body, #498).
+                let t = crate::core::cache_telemetry::snapshot();
+                if t.total() > 0 {
+                    lines.push(format!(
+                        "re-deliveries forced: compaction={} idle={} eviction={} conversation={} (total {})",
+                        t.compaction, t.idle, t.eviction, t.conversation, t.total()
+                    ));
                 }
+                lines.join("\n")
             }
             "clear" => {
                 let count = guard.clear();

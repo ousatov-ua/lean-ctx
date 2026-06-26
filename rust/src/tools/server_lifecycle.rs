@@ -117,6 +117,12 @@ impl LeanCtxServer {
         // each server start; multiplied across multiple agents and stdio respawns
         // it was the root cause of the idle-high-CPU report (#453).
 
+        // Rehydrate the persistent stub index (#955) so the first unchanged
+        // re-read after this restart can collapse to the `[unchanged]` stub
+        // instead of re-delivering the whole file — gated by conversation +
+        // mtime/md5 so it can never serve a stale or cross-chat stub.
+        crate::core::read_stub_index::load();
+
         let cache = Arc::new(RwLock::new(SessionCache::new()));
         let bm25_cache: Arc<std::sync::Mutex<Option<crate::core::bm25_cache::Bm25CacheEntry>>> =
             Arc::new(std::sync::Mutex::new(None));
@@ -198,10 +204,16 @@ impl LeanCtxServer {
                 let _ = session.save();
             }
             let mut cache = self.cache.write().await;
+            let redelivered = cache.count_full_delivered();
             let count = cache.clear();
+            crate::core::cache_telemetry::record_idle(redelivered as u64);
+            // The persisted stub index outlives the warm-cache clear, so a
+            // same-conversation re-read after idle still collapses to the stub
+            // via the cold fallback (#955). Flush it now for durability.
+            crate::core::read_stub_index::persist();
             if count > 0 {
                 tracing::info!(
-                    "Cache auto-cleared after {}s idle ({count} file(s))",
+                    "Cache auto-cleared after {}s idle ({count} file(s), {redelivered} forced re-delivery)",
                     self.cache_ttl_secs
                 );
             }
@@ -232,6 +244,9 @@ impl LeanCtxServer {
         // `cep.sessions`/`total_cache_hits` at 0 in stats.json despite real
         // cache hits (#361).
         crate::core::stats::flush();
+        // Flush the persistent stub index (#955) so an unchanged re-read survives
+        // this restart as a cheap stub instead of a full re-delivery.
+        crate::core::read_stub_index::persist();
         {
             let mut cache = self.cache.write().await;
             let count = cache.clear();

@@ -80,6 +80,11 @@ pub struct CacheEntry {
     /// Whether full (uncompressed) content was already delivered for this hash.
     /// Prevents cache-stub loops when upgrading from compressed to full mode.
     pub full_content_delivered: bool,
+    /// Conversation id that received the full content (see
+    /// [`crate::core::conversation`]). The `[unchanged]` stub is only valid for
+    /// a re-read from this same conversation; `None` means delivered without a
+    /// known conversation context (legacy / hooks absent).
+    pub delivered_conversation: Option<String>,
     /// Last read mode used for this file (for auto-escalation on edit failure).
     pub last_mode: String,
 }
@@ -118,6 +123,7 @@ impl CacheEntry {
             stored_mtime,
             compressed_outputs: HashMap::new(),
             full_content_delivered: false,
+            delivered_conversation: None,
             last_mode: String::new(),
         }
     }
@@ -209,8 +215,9 @@ impl CacheEntry {
         self.compressed_outputs.insert(mode_key.to_string(), output);
     }
 
-    pub fn mark_full_delivered(&mut self) {
+    pub fn mark_full_delivered(&mut self, conversation: Option<String>) {
         self.full_content_delivered = true;
+        self.delivered_conversation = conversation;
     }
 }
 
@@ -600,6 +607,7 @@ impl SessionCache {
             existing.original_tokens = original_tokens;
             let new_count = existing.bump_read_count();
             existing.full_content_delivered = false;
+            existing.delivered_conversation = None;
             if stored_mtime.is_some() {
                 existing.stored_mtime = stored_mtime;
             }
@@ -663,6 +671,7 @@ impl SessionCache {
         scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut freed = 0usize;
+        let mut redelivered = 0u64;
         let target = (current + incoming_tokens).saturating_sub(max_tokens);
 
         for (path, _score) in &scores {
@@ -671,9 +680,13 @@ impl SessionCache {
             }
             if let Some(entry) = self.entries.remove(path) {
                 freed += entry.original_tokens;
+                if entry.full_content_delivered {
+                    redelivered += 1;
+                }
                 self.file_refs.remove(path);
             }
         }
+        crate::core::cache_telemetry::record_eviction(redelivered);
     }
 
     /// Returns all cached entries as (path, entry) pairs.
@@ -740,10 +753,27 @@ impl SessionCache {
             .get_compressed(mode_key)
     }
 
-    /// Marks that full (uncompressed) content was delivered for this file.
+    /// Marks that full (uncompressed) content was delivered for this file,
+    /// tagging it with the current conversation so a later re-read only serves
+    /// the `[unchanged]` stub to the same conversation (see
+    /// [`crate::core::conversation`]).
     pub fn mark_full_delivered(&mut self, path: &str) {
-        if let Some(entry) = self.entries.get_mut(&normalize_key(path)) {
-            entry.mark_full_delivered();
+        let conversation = crate::core::conversation::current_conversation_id();
+        let key = normalize_key(path);
+        let file_ref = self.file_refs.get(&key).cloned();
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.mark_full_delivered(conversation.clone());
+            // Write-through to the persistent stub index so an unchanged re-read
+            // in the same conversation survives a daemon restart / idle clear
+            // (#955). `record` ignores None-conversation deliveries.
+            crate::core::read_stub_index::record(crate::core::read_stub_index::StubRecord::new(
+                key.clone(),
+                entry.hash.clone(),
+                entry.stored_mtime,
+                entry.line_count,
+                file_ref.unwrap_or_default(),
+                conversation,
+            ));
         }
     }
 
@@ -775,6 +805,16 @@ impl SessionCache {
             .is_some_and(|e| e.full_content_delivered)
     }
 
+    /// Counts entries that have full content delivered — i.e. those that would
+    /// serve a cheap `[unchanged]` stub and therefore force a full re-delivery
+    /// if dropped. Used by re-delivery telemetry at clear/eviction sites.
+    pub fn count_full_delivered(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|e| e.full_content_delivered)
+            .count()
+    }
+
     /// Removes all compressed output variants (map, signatures, etc.) from every entry,
     /// keeping the full zstd-compressed content intact. Returns the number of entries trimmed.
     pub fn trim_compressed_outputs(&mut self) -> usize {
@@ -798,10 +838,18 @@ impl SessionCache {
             .map(|(k, _)| k.clone())
             .collect();
         let count = to_remove.len();
+        let mut redelivered = 0u64;
         for key in &to_remove {
-            self.entries.remove(key);
+            if self
+                .entries
+                .remove(key)
+                .is_some_and(|e| e.full_content_delivered)
+            {
+                redelivered += 1;
+            }
             self.file_refs.remove(key);
         }
+        crate::core::cache_telemetry::record_eviction(redelivered);
         count
     }
 
@@ -818,6 +866,7 @@ impl SessionCache {
         scores.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut freed = 0usize;
+        let mut redelivered = 0u64;
         let target_free = current.saturating_sub(target_tokens);
         for (path, _score) in &scores {
             if freed >= target_free {
@@ -825,9 +874,13 @@ impl SessionCache {
             }
             if let Some(entry) = self.entries.remove(path) {
                 freed += entry.original_tokens;
+                if entry.full_content_delivered {
+                    redelivered += 1;
+                }
                 self.file_refs.remove(path);
             }
         }
+        crate::core::cache_telemetry::record_eviction(redelivered);
     }
 
     /// Estimates the approximate heap memory usage in bytes.

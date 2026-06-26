@@ -622,16 +622,17 @@ fn instruction_file_detection() {
 #[test]
 fn resolve_auto_mode_returns_full_for_instruction_files() {
     let mode = resolve_auto_mode(
+        None,
         "/home/user/.pi/agent/skills/committing-changes/SKILL.md",
         5000,
         Some("read"),
     );
     assert_eq!(mode, "full", "SKILL.md must always be read in full");
 
-    let mode = resolve_auto_mode("/workspace/AGENTS.md", 3000, Some("read"));
+    let mode = resolve_auto_mode(None, "/workspace/AGENTS.md", 3000, Some("read"));
     assert_eq!(mode, "full", "AGENTS.md must always be read in full");
 
-    let mode = resolve_auto_mode("/workspace/.cursorrules", 2000, None);
+    let mode = resolve_auto_mode(None, "/workspace/.cursorrules", 2000, None);
     assert_eq!(mode, "full", ".cursorrules must always be read in full");
 }
 
@@ -955,6 +956,217 @@ fn primed_full_cache(p: &str) -> SessionCache {
         "fixture must deliver full content"
     );
     cache
+}
+
+/// Regression: an `auto` re-read of an unchanged, already-fully-delivered file
+/// must collapse to the cheap `[unchanged]` stub — not re-deliver the whole body.
+/// The auto path used to resolve modes with `cache: None`, so the resolver's
+/// `("full","cache_hit")` short-circuit was dead and every `auto` re-read re-sent
+/// the file ("re-reads aren't cached"). The cache-aware resolver restores it.
+#[test]
+fn auto_reread_of_fully_delivered_file_serves_unchanged_stub() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    // Body big enough that a full re-delivery dwarfs the ~13-token stub.
+    let body = (0..48)
+        .map(|i| format!("fn function_number_{i}() {{ let value_{i} = {i} * 2; }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, format!("{body}\n")).unwrap();
+
+    // Cost of a full delivery, measured on a cold cache.
+    let mut cold = SessionCache::new();
+    let full = handle_with_task_resolved(&mut cold, &p, "full", CrpMode::Off, None);
+    assert!(
+        !full.content.contains("[unchanged"),
+        "cold full read must deliver the body, not a stub"
+    );
+
+    // Warm cache: full body already delivered, file unchanged on disk.
+    let mut cache = primed_full_cache(&p);
+    let reread = handle_with_task_resolved(&mut cache, &p, "auto", CrpMode::Off, None);
+    assert!(
+        reread.content.contains("[unchanged"),
+        "auto re-read of an unchanged fully-delivered file must serve the stub, got: {}",
+        reread.content
+    );
+    assert!(
+        reread.output_tokens.saturating_mul(4) < full.output_tokens,
+        "stub ({} tok) must be far cheaper than a full re-delivery ({} tok)",
+        reread.output_tokens,
+        full.output_tokens
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Conversation scoping (#954): the `[unchanged]` stub is only valid for a
+// re-read from the *same* conversation that received the full content. The
+// current conversation is injected via `try_stub_hit_readonly_scoped` so these
+// assertions are deterministic regardless of the host's `active_transcript.json`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conversation_scoped_stub_served_for_same_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    let cache = primed_full_cache(&p);
+    // Re-reading from the very conversation the fixture delivered under must
+    // collapse to the cheap stub.
+    let delivered = cache.get(&p).unwrap().delivered_conversation.clone();
+    let out = try_stub_hit_readonly_scoped(&cache, &p, delivered.as_deref());
+    assert!(
+        out.is_some_and(|o| o.content.contains("[unchanged")),
+        "same-conversation re-read must serve the stub"
+    );
+}
+
+#[test]
+fn conversation_scoped_stub_withheld_for_other_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    let cache = primed_full_cache(&p);
+    let foreign = "conversation-that-never-read-this-file";
+    // Guard against the fixture (improbably) using this exact id.
+    assert_ne!(
+        cache.get(&p).unwrap().delivered_conversation.as_deref(),
+        Some(foreign),
+        "test fixture id collided with the foreign id"
+    );
+    let out = try_stub_hit_readonly_scoped(&cache, &p, Some(foreign));
+    assert!(
+        out.is_none(),
+        "a foreign conversation must get a full re-read, never a misleading [unchanged] stub"
+    );
+}
+
+#[test]
+fn conversation_scoped_stub_served_when_no_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    let cache = primed_full_cache(&p);
+    // current = None (hooks absent) preserves legacy process-scoped behavior.
+    let out = try_stub_hit_readonly_scoped(&cache, &p, None);
+    assert!(
+        out.is_some_and(|o| o.content.contains("[unchanged")),
+        "absent conversation context must keep legacy stub behavior"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Persistent cold stub (#955): after a daemon restart / idle clear the live
+// cache is empty, so an unchanged re-read must be served from the persisted
+// index — but only for the SAME known conversation and an unchanged file. The
+// record is forged directly (modelling one that outlived the restart) and the
+// current conversation is injected, so the assertions are host-independent.
+// ---------------------------------------------------------------------------
+
+/// Primes a real full delivery to capture authentic (hash, mtime, line_count,
+/// file_ref), then forges a persisted record under `conv`. Clears the global
+/// index before priming (so the prime isn't short-circuited by a stale record)
+/// and after (to drop the prime's own write-through) — leaving exactly the one
+/// forged record.
+fn seed_cold_record(p: &str, conv: &str) {
+    crate::core::read_stub_index::clear_for_test();
+    let primed = primed_full_cache(p);
+    let entry = primed.get(p).unwrap();
+    let rec = crate::core::read_stub_index::StubRecord::new(
+        crate::core::pathutil::normalize_tool_path(p),
+        entry.hash.clone(),
+        entry.stored_mtime,
+        entry.line_count,
+        primed.get_file_ref_readonly(p).unwrap_or_default(),
+        Some(conv.to_string()),
+    );
+    crate::core::read_stub_index::clear_for_test();
+    crate::core::read_stub_index::record(rec);
+}
+
+#[test]
+#[serial_test::serial(stub_index)]
+fn cold_fallback_serves_stub_for_same_conversation_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    seed_cold_record(&p, "conv-a");
+    // Empty cache models a fresh daemon: the warm path misses, cold fallback fires.
+    let cold = SessionCache::new();
+    let out = try_stub_hit_readonly_scoped(&cold, &p, Some("conv-a"));
+    crate::core::read_stub_index::clear_for_test();
+    assert!(
+        out.is_some_and(|o| o.content.contains("[unchanged")),
+        "same-conversation re-read after restart must serve the persisted stub"
+    );
+}
+
+#[test]
+#[serial_test::serial(stub_index)]
+fn cold_fallback_withheld_for_other_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    seed_cold_record(&p, "conv-a");
+    let cold = SessionCache::new();
+    let out = try_stub_hit_readonly_scoped(&cold, &p, Some("conv-b"));
+    crate::core::read_stub_index::clear_for_test();
+    assert!(
+        out.is_none(),
+        "a different conversation must get a cold full read, never a persisted stub"
+    );
+}
+
+#[test]
+#[serial_test::serial(stub_index)]
+fn cold_fallback_withheld_without_conversation_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    seed_cold_record(&p, "conv-a");
+    let cold = SessionCache::new();
+    // Unlike the WARM path, an absent conversation cannot prove the content is in
+    // the new process's context → no cold stub (the stricter gate keeps #954's
+    // cross-chat hazard closed across restarts).
+    let out = try_stub_hit_readonly_scoped(&cold, &p, None);
+    crate::core::read_stub_index::clear_for_test();
+    assert!(
+        out.is_none(),
+        "absent conversation context must NOT serve a cold persisted stub"
+    );
+}
+
+#[test]
+#[serial_test::serial(stub_index)]
+fn cold_fallback_withheld_when_file_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warm.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "fn main() { let x = 1; }\n").unwrap();
+
+    seed_cold_record(&p, "conv-a");
+    // Content changed during downtime → mtime/md5 mismatch → no stub.
+    std::fs::write(&path, "fn main() { let x = 2; let y = 3; }\n").unwrap();
+    let cold = SessionCache::new();
+    let out = try_stub_hit_readonly_scoped(&cold, &p, Some("conv-a"));
+    crate::core::read_stub_index::clear_for_test();
+    assert!(
+        out.is_none(),
+        "a file changed on disk must get a cold full read, never a stale stub"
+    );
 }
 
 #[test]

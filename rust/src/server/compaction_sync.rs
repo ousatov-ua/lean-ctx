@@ -42,6 +42,12 @@ pub fn sync_if_compacted(cache: &mut SessionCache, data_dir: &Path) -> bool {
     LAST_COMPACTION_TS.store(latest_compaction_ts, Ordering::Relaxed);
     crate::core::search_delta::reset();
     let reset_count = cache.reset_delivery_flags();
+    crate::core::cache_telemetry::record_compaction(reset_count as u64);
+    // Drop the persistent stub index too (#955): the conversation's context was
+    // summarised away, so neither a warm nor a cold stub may claim "you already
+    // have this". Writes the emptied index synchronously so a restart in the
+    // crash window can't resurrect a pre-compaction stub.
+    crate::core::read_stub_index::reset_in_dir(data_dir);
     if reset_count > 0 {
         eprintln!(
             "[lean-ctx] compaction detected — reset {reset_count} delivery flags for re-read"

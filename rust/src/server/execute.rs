@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::process::Stdio;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 const READER_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -73,50 +73,15 @@ pub(crate) fn execute_command_with_env(
     }
     let cap = crate::core::limits::max_shell_bytes();
 
-    fn read_bounded<R: Read>(mut r: R, cap: usize) -> (Vec<u8>, bool, usize) {
-        let mut kept: Vec<u8> = Vec::with_capacity(cap.min(8192));
-        let mut buf = [0u8; 8192];
-        let mut total = 0usize;
-        let mut truncated = false;
-        loop {
-            match r.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    total = total.saturating_add(n);
-                    if kept.len() < cap {
-                        let remaining = cap - kept.len();
-                        let take = remaining.min(n);
-                        kept.extend_from_slice(&buf[..take]);
-                        if take < n {
-                            truncated = true;
-                        }
-                    } else {
-                        truncated = true;
-                    }
-                }
-            }
-        }
-        (kept, truncated, total)
-    }
-
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (format!("ERROR: {e}"), 1),
     };
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let (out_tx, out_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = stdout.map_or_else(|| (Vec::new(), false, 0), |s| read_bounded(s, cap));
-        let _ = out_tx.send(result);
-    });
-
-    let (err_tx, err_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let result = stderr.map_or_else(|| (Vec::new(), false, 0), |s| read_bounded(s, cap));
-        let _ = err_tx.send(result);
-    });
+    // Stream each pipe into a shared, cap-bounded buffer that the main thread can
+    // read at any time. Crucially this lets a timed-out wait recover the bytes
+    // captured so far instead of discarding all output (#945).
+    let (out_buf, out_done) = spawn_capture(child.stdout.take(), cap);
+    let (err_buf, err_done) = spawn_capture(child.stderr.take(), cap);
 
     let timeout = command_timeout(command);
     let start = Instant::now();
@@ -135,12 +100,16 @@ pub(crate) fn execute_command_with_env(
         }
     };
 
-    let (out_bytes, out_trunc, _out_total) = out_rx
-        .recv_timeout(READER_RESULT_TIMEOUT)
-        .unwrap_or_default();
-    let (err_bytes, err_trunc, _err_total) = err_rx
-        .recv_timeout(READER_RESULT_TIMEOUT)
-        .unwrap_or_default();
+    // Bounded grace period for the readers to reach EOF, but always read the
+    // shared buffers afterwards so output is never silently lost (#945). A reader
+    // that misses the deadline means something still holds the pipe open; we then
+    // surface the partial capture plus an explicit note rather than nothing.
+    let reader_deadline = Instant::now() + READER_RESULT_TIMEOUT;
+    let out_complete = wait_for_reader(&out_done, reader_deadline);
+    let err_complete = wait_for_reader(&err_done, reader_deadline);
+    let (out_bytes, out_trunc) = snapshot(&out_buf);
+    let (err_bytes, err_trunc) = snapshot(&err_buf);
+    let reader_incomplete = !out_complete || !err_complete;
 
     let stdout = crate::shell::decode_output(&out_bytes);
     let stderr = crate::shell::decode_output(&err_bytes);
@@ -156,6 +125,20 @@ pub(crate) fn execute_command_with_env(
             err_bytes.len()
         ));
     }
+    // The command finished but a reader never hit EOF: a leftover process is
+    // holding the pipe open. We still return what was captured; flag it so the
+    // agent knows the tail may be missing instead of seeing a bare exit code
+    // (#945). Suppressed on timeout, which carries its own message below.
+    if reader_incomplete && !timed_out {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&format!(
+            "[lean-ctx: output reader still draining after {}s — a background process is likely \
+             holding the pipe open; output above may be partial]",
+            READER_RESULT_TIMEOUT.as_secs()
+        ));
+    }
     if timed_out {
         if !text.ends_with('\n') && !text.is_empty() {
             text.push('\n');
@@ -167,6 +150,73 @@ pub(crate) fn execute_command_with_env(
     }
 
     (text, code)
+}
+
+/// Shared, cap-bounded capture buffer for one child pipe. The reader thread
+/// appends here as bytes arrive — not only at EOF — so the caller can recover
+/// whatever was read so far even if the reader never reaches EOF, e.g. when a
+/// backgrounded or otherwise-inherited process keeps the pipe's write-end open
+/// after the direct child exits (#945).
+#[derive(Default)]
+struct CaptureBuf {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+/// Spawn a reader that streams `pipe` into a shared [`CaptureBuf`] (bounded to
+/// `cap` bytes) and signals completion (EOF or read error) over the returned
+/// channel. The buffer is readable at any time via [`snapshot`], so a timed-out
+/// wait yields partial output instead of nothing.
+fn spawn_capture<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    cap: usize,
+) -> (Arc<Mutex<CaptureBuf>>, mpsc::Receiver<()>) {
+    let shared = Arc::new(Mutex::new(CaptureBuf::default()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let writer = Arc::clone(&shared);
+    std::thread::spawn(move || {
+        if let Some(mut r) = pipe {
+            let mut buf = [0u8; 8192];
+            loop {
+                match r.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut s = writer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if s.bytes.len() < cap {
+                            let remaining = cap - s.bytes.len();
+                            let take = remaining.min(n);
+                            s.bytes.extend_from_slice(&buf[..take]);
+                            if take < n {
+                                s.truncated = true;
+                            }
+                        } else {
+                            s.truncated = true;
+                        }
+                    }
+                }
+            }
+        }
+        let _ = done_tx.send(());
+    });
+    (shared, done_rx)
+}
+
+/// Snapshot a capture buffer (clone bytes + truncation flag) under its lock.
+/// Safe to call while the reader is still writing — yields a consistent prefix.
+fn snapshot(buf: &Arc<Mutex<CaptureBuf>>) -> (Vec<u8>, bool) {
+    let s = buf
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (s.bytes.clone(), s.truncated)
+}
+
+/// Block until the reader signals completion or `deadline` passes. Returns true
+/// iff the reader completed (reached EOF) within the deadline.
+fn wait_for_reader(done: &mpsc::Receiver<()>, deadline: Instant) -> bool {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    done.recv_timeout(remaining).is_ok()
 }
 
 fn ensure_utf8_locale(
@@ -278,6 +328,26 @@ mod tests {
         assert!(
             output.contains("12345"),
             "child process should receive EOF on stdin, got: {output}"
+        );
+    }
+
+    /// #945: a command that finishes but leaves a process holding the stdout
+    /// pipe open (here a backgrounded `sleep`) must NOT lose the foreground
+    /// output. The old `recv_timeout(...).unwrap_or_default()` discarded
+    /// everything on the reader timeout; now the captured prefix survives and
+    /// the still-draining reader is flagged instead of returning a bare exit.
+    #[test]
+    #[cfg_attr(windows, ignore)] // POSIX backgrounding (`&`) + sleep
+    fn background_pipe_holder_keeps_foreground_output() {
+        let (output, code) = execute_command_in("echo REPRO_CANARY_945; sleep 4 &", ".");
+        assert_eq!(code, 0, "command should succeed: {output:?}");
+        assert!(
+            output.contains("REPRO_CANARY_945"),
+            "foreground stdout must survive a lingering background pipe holder, got: {output:?}"
+        );
+        assert!(
+            output.contains("output reader still draining"),
+            "an incomplete reader must be flagged, got: {output:?}"
         );
     }
 
