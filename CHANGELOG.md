@@ -41,6 +41,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   JSON handling on **one** implementation (`docker inspect` and the `aws`
   resource summarizers stay intentionally domain-specific). `PATTERN_ENGINE_VERSION`
   is bumped (1→2) so determinism consumers detect the new output shape.
+- **`ctx_read` aggressive mode compacts JSON structurally (gitlab #936).** Reading
+  a `.json` file in `aggressive` mode (the auto-resolved mode for large non-code
+  data files) now routes redundant array-of-object payloads through the lossless
+  `json_crush` core instead of generic text pruning, which mangles JSON structure.
+  It fires only when the crush at least halves the file and shrinks the token
+  count; the exact bytes stay recoverable with a `full`/`raw` re-read. `map` mode
+  stays a compact structural overview (unchanged). The "must at least halve"
+  gate is centralized in `json_crush::{crush_value_if_beneficial,
+  crush_text_if_beneficial}` (one `KEEP_DATA_DIVISOR`), so the shell (`json_schema`,
+  `curl`) and read paths can never drift.
 
 ### Fixed
 - **`ctx_impact` missed Go and Kotlin same-package blast radius (#398 bug class).**

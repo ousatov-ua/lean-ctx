@@ -1,11 +1,5 @@
 use crate::core::json_crush;
 
-/// Crushed output is only preferred over the (lossy) schema outline when it at
-/// least halves the payload — i.e. the array is redundant enough that keeping
-/// every datum in a compact, reconstructible shape is affordable. Heterogeneous
-/// or genuinely large arrays fall through to the structure-only outline.
-const CRUSH_KEEP_DATA_DIVISOR: usize = 2;
-
 pub fn compress(output: &str) -> Option<String> {
     let trimmed = output.trim();
 
@@ -21,7 +15,7 @@ pub fn compress(output: &str) -> Option<String> {
     // Prefer the lossless crusher when the payload is redundant: it keeps all
     // data (reconstructible via `json_crush::reconstruct`) instead of the
     // schema outline that drops every value (#934 / #936).
-    if let Some(text) = crush_if_beneficial(&val, trimmed.len()) {
+    if let Some(text) = json_crush::crush_value_if_beneficial(&val, trimmed.len()) {
         return Some(text);
     }
 
@@ -35,17 +29,7 @@ pub fn compress(output: &str) -> Option<String> {
 /// pays — and never loses a datum. Returns `None` for non-JSON or low-redundancy
 /// output (the caller then keeps it verbatim).
 pub fn crush_verbatim(output: &str) -> Option<String> {
-    let trimmed = output.trim();
-    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
-        return None;
-    }
-    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-    crush_if_beneficial(&val, trimmed.len())
-}
-
-fn crush_if_beneficial(val: &serde_json::Value, raw_len: usize) -> Option<String> {
-    let crushed = json_crush::crush_lossless(val)?;
-    (crushed.text.len().saturating_mul(CRUSH_KEEP_DATA_DIVISOR) <= raw_len).then_some(crushed.text)
+    json_crush::crush_text_if_beneficial(output)
 }
 
 fn extract_schema(val: &serde_json::Value, depth: usize) -> String {

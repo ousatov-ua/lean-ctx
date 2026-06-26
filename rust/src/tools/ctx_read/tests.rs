@@ -459,6 +459,50 @@ fn aggressiveness_is_deterministic_and_monotonic() {
 }
 
 #[test]
+fn aggressive_json_uses_lossless_crush_core() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    crate::test_env::set_var("LEAN_CTX_SHOW_SAVINGS", "0");
+
+    // A redundant array-of-objects JSON file: aggressive mode compacts it through
+    // the shared json_crush core (#936) instead of generic text pruning, which
+    // would mangle the structure. Constant columns + many rows so it halves.
+    let items: Vec<String> = (0..40)
+        .map(|i| {
+            format!(r#"{{"status":"active","region":"eu-central-1","tier":"standard","id":{i}}}"#)
+        })
+        .collect();
+    let content = format!("[{}]", items.join(","));
+    let original = count_tokens(&content);
+
+    let (out, sent) = process_mode_tuned(
+        &content,
+        "aggressive",
+        "F1",
+        "data.json",
+        "json",
+        original,
+        CrpMode::Off,
+        "/tmp/data.json",
+        None,
+        ReadTuning {
+            aggressiveness: None,
+            protect: &[],
+        },
+    );
+
+    assert!(
+        out.contains("_lc_crush"),
+        "aggressive json must compact via the crush core: {out}"
+    );
+    assert!(
+        sent < original,
+        "crush must reduce tokens ({sent} >= {original})"
+    );
+
+    crate::test_env::remove_var("LEAN_CTX_SHOW_SAVINGS");
+}
+
+#[test]
 fn map_mode_includes_signature_line_ranges() {
     // Map formatting is rendered by `process_mode`; assert it directly so the
     // structure check stays independent of the handle-level #361 cap, which

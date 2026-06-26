@@ -92,10 +92,10 @@ fn compress_json(output: &str) -> Option<String> {
     // (secret keys, short-string previews) — the crusher is value-preserving and
     // must never be used where redaction is the contract.
     if matches!(val, serde_json::Value::Array(_))
-        && let Some(crushed) = crate::core::json_crush::crush_lossless(&val)
-        && crushed.text.len().saturating_mul(2) <= output.len()
+        && let Some(crushed) =
+            crate::core::json_crush::crush_value_if_beneficial(&val, output.len())
     {
-        return Some(format!("JSON ({} bytes):\n{}", output.len(), crushed.text));
+        return Some(format!("JSON ({} bytes):\n{}", output.len(), crushed));
     }
 
     let schema = extract_schema(&val, 0);

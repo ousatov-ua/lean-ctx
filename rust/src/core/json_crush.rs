@@ -38,6 +38,14 @@ const MIN_ITEMS: usize = 3;
 /// least this fraction of items (constants are the 100% case).
 const MIN_DOMINANCE: f64 = 0.5;
 
+/// Shared "the crush must at least halve the payload" threshold. The lossless
+/// crusher keeps every datum, so reshaping only pays when the array is redundant
+/// enough that the compact form is at most `1/KEEP_DATA_DIVISOR` of the input;
+/// heterogeneous/low-redundancy data falls through to each caller's own outline.
+/// Single source for the shell (`json_schema`, `curl`) and read (`structured_read`)
+/// paths so the gate can never drift (#936).
+pub const KEEP_DATA_DIVISOR: usize = 2;
+
 /// Result of a crush pass.
 #[derive(Debug, Clone)]
 pub struct CrushResult {
@@ -95,6 +103,27 @@ pub fn crush_lossless(value: &Value) -> Option<CrushResult> {
 /// Lossy crush: lossless factoring plus high-entropy column dropping.
 pub fn crush_lossy(value: &Value, opts: &CrushOpts) -> Option<CrushResult> {
     crush_with(value, opts)
+}
+
+/// Lossless crush of `value`, returning the compact text only when it at least
+/// halves `raw_len` ([`KEEP_DATA_DIVISOR`]). The shared gate for callers that
+/// already hold a parsed `Value` plus its source length (`json_schema`, `curl`).
+pub fn crush_value_if_beneficial(value: &Value, raw_len: usize) -> Option<String> {
+    let crushed = crush_lossless(value)?;
+    (crushed.text.len().saturating_mul(KEEP_DATA_DIVISOR) <= raw_len).then_some(crushed.text)
+}
+
+/// Parse `text` as JSON and losslessly crush it, returning the compact form only
+/// when it at least halves the input ([`KEEP_DATA_DIVISOR`]). The shared gate for
+/// callers that start from raw text (`structured_read`, `ctx_read` aggressive).
+/// `None` for non-JSON or low-redundancy input — the caller keeps its own path.
+pub fn crush_text_if_beneficial(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
+        return None;
+    }
+    let val: Value = serde_json::from_str(trimmed).ok()?;
+    crush_value_if_beneficial(&val, trimmed.len())
 }
 
 /// Rebuild a `Value` from crushed text. Exact for lossless forms; for lossy
@@ -471,6 +500,33 @@ mod tests {
         let opts = CrushOpts::lossy(0.9);
         let run = || crush_lossy(&v, &opts).unwrap().text;
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn beneficial_helpers_share_one_core_and_threshold() {
+        // Redundant array -> both gates return the compact, reconstructible form.
+        // Enough rows + constant columns that the compact form clearly halves it.
+        let items: Vec<Value> = (0..16)
+            .map(|i| {
+                json!({"status": "active", "region": "eu-central-1", "tier": "standard", "id": i})
+            })
+            .collect();
+        let v = Value::Array(items);
+        let raw = serde_json::to_string(&v).unwrap();
+        let by_value = crush_value_if_beneficial(&v, raw.len()).expect("value gate crushes");
+        let by_text = crush_text_if_beneficial(&raw).expect("text gate crushes");
+        assert_eq!(by_value, by_text, "both gates use one core + threshold");
+        assert!(by_text.len() * KEEP_DATA_DIVISOR <= raw.len());
+        assert_eq!(reconstruct(&by_text).unwrap(), v);
+
+        // Low-redundancy -> None (caller keeps its own outline/verbatim form).
+        let hetero = r#"[{"id":1,"k":"aaa"},{"id":2,"k":"bbb"},{"id":3,"k":"ccc"}]"#;
+        assert!(crush_text_if_beneficial(hetero).is_none());
+
+        // Non-JSON and bare scalars -> None.
+        assert!(crush_text_if_beneficial("not json").is_none());
+        assert!(crush_text_if_beneficial("\"just a string\"").is_none());
+        assert!(crush_text_if_beneficial("").is_none());
     }
 
     #[test]

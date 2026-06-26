@@ -354,6 +354,26 @@ pub(crate) fn process_mode_tuned(
             )
         }
         "aggressive" => {
+            // Structured JSON (#936): a redundant array-of-objects compacts far
+            // better — and losslessly — through the shared `json_crush` core than
+            // generic text pruning, which mangles structure. Fires only when it
+            // at least halves the file and shrinks the token count; the exact
+            // bytes stay recoverable via a `full`/`raw` re-read.
+            if ext == "json"
+                && let Some(crushed) = crate::core::json_crush::crush_text_if_beneficial(content)
+            {
+                let header = build_header(file_ref, short, ext, content, line_count, true);
+                let body = format!("{header}\n{crushed}");
+                let sent = count_tokens(&body);
+                if sent < original_tokens {
+                    let savings = protocol::format_savings(original_tokens, sent);
+                    return (
+                        append_compressed_hint(&format!("{body}\n{savings}"), file_path),
+                        sent,
+                    );
+                }
+            }
+
             #[cfg(feature = "tree-sitter")]
             let ast_pruned = crate::core::signatures_ts::ast_prune(content, ext);
             #[cfg(not(feature = "tree-sitter"))]
