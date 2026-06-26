@@ -427,6 +427,7 @@ pub mod protocol;
 pub mod provider_bandit;
 pub mod provider_cache;
 pub mod providers;
+pub mod read_stub_index;
 pub mod redaction;
 pub mod reference_docs;
 pub mod roles;

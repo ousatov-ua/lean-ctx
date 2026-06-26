@@ -503,17 +503,6 @@ fn try_stub_hit_readonly_scoped(
     path: &str,
     current_conversation: Option<&str>,
 ) -> Option<ReadOutput> {
-    let file_ref = cache.get_file_ref_readonly(path)?;
-    let (cached_mtime, cached_hash, line_count, delivered_conv) = {
-        let entry = cache.get(path)?;
-        (
-            entry.stored_mtime,
-            entry.hash.clone(),
-            entry.line_count,
-            entry.delivered_conversation.clone(),
-        )
-    };
-
     let no_deg = crate::core::config::Config::load().no_degrade_effective();
     let prof = crate::core::profiles::active_profile();
     let force_full = no_deg
@@ -521,47 +510,84 @@ fn try_stub_hit_readonly_scoped(
             && prof.compression.crp_mode_effective() == "off");
     let policy_allows_stub =
         crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full;
-    if !policy_allows_stub
-        || crate::core::cache::is_cache_entry_stale_verified(path, cached_mtime, &cached_hash)
-        || !cache.is_full_delivered(path)
-    {
+    if !policy_allows_stub {
         return None;
     }
 
-    // Conversation scoping (#954): the `[unchanged]` stub asserts the content is
-    // already in *this* conversation's context. If the entry was delivered to a
-    // different (or unknown) conversation, re-deliver in full rather than emit a
-    // misleading stub. `current == None` (hooks absent) preserves legacy
-    // process-scoped behavior, so single-chat hit rates are unchanged.
-    if !crate::core::conversation::conversation_allows_stub(
+    // Warm path: a live in-memory entry is the freshest source of truth.
+    if let Some(file_ref) = cache.get_file_ref_readonly(path) {
+        let (cached_mtime, cached_hash, line_count, delivered_conv) = {
+            let entry = cache.get(path)?;
+            (
+                entry.stored_mtime,
+                entry.hash.clone(),
+                entry.line_count,
+                entry.delivered_conversation.clone(),
+            )
+        };
+        if crate::core::cache::is_cache_entry_stale_verified(path, cached_mtime, &cached_hash)
+            || !cache.is_full_delivered(path)
+        {
+            return None;
+        }
+        // Conversation scoping (#954): only stub when THIS conversation received
+        // the content. A different (or unknown) conversation re-delivers in full
+        // rather than emit a misleading stub. `current == None` (hooks absent)
+        // preserves legacy process-scoped behavior, so single-chat hit rates are
+        // unchanged.
+        if !crate::core::conversation::conversation_allows_stub(
+            current_conversation,
+            delivered_conv.as_deref(),
+        ) {
+            crate::core::cache_telemetry::record_conversation_mismatch();
+            return None;
+        }
+        cache.record_cache_hit(path);
+        return Some(render_unchanged_stub(&file_ref, path, line_count));
+    }
+
+    // Cold fallback (#955): no live entry (e.g. after a daemon restart or idle
+    // clear). Serve the stub from the persisted index iff the file is unchanged
+    // AND the *same known* conversation is asking — a stricter gate than the warm
+    // path, because a cold stub crosses a process boundary (no "no context →
+    // legacy" escape; see `conversation_allows_cold_stub`).
+    let rec = crate::core::read_stub_index::lookup(path)?;
+    if crate::core::cache::is_cache_entry_stale_verified(path, rec.stored_mtime(), &rec.hash) {
+        return None;
+    }
+    if !crate::core::conversation::conversation_allows_cold_stub(
         current_conversation,
-        delivered_conv.as_deref(),
+        rec.delivered_conversation.as_deref(),
     ) {
         crate::core::cache_telemetry::record_conversation_mismatch();
         return None;
     }
+    Some(render_unchanged_stub(&rec.file_ref, path, rec.line_count))
+}
 
-    cache.record_cache_hit(path);
+/// Renders the `[unchanged …]` stub body shared by the warm and cold stub paths.
+///
+/// #498 determinism: the stub is a pure function of (file_ref, path, line_count),
+/// so identical re-reads stay byte-stable and provider prompt caching applies.
+/// The `fresh=true` escape is a *static* suffix (no rotating proof lines or
+/// read-count notes), so a re-reader in non-meta mode still sees how to force the
+/// content (#513) without breaking byte-stability.
+fn render_unchanged_stub(file_ref: &str, path: &str, line_count: usize) -> ReadOutput {
     let short = protocol::shorten_path(path);
     let out = if crate::core::protocol::meta_visible() {
         format!(
             "{file_ref}={short} [unchanged {line_count}L]\nUnchanged on disk. Use fresh=true to force re-read.",
         )
     } else {
-        // #498 determinism: the cache-hit stub is a pure function of (content,
-        // path) so identical re-reads stay byte-stable and provider prompt
-        // caching applies. The `fresh=true` escape is a *static* suffix (no
-        // rotating proof lines or read-count notes), so determinism holds while
-        // a re-reader in non-meta mode still sees how to force the content (#513).
         format!("{file_ref}={short} [unchanged {line_count}L · fresh=true to re-read]")
     };
     let out = crate::core::redaction::redact_text_if_enabled(&out);
     let sent = count_tokens(&out);
-    Some(ReadOutput {
+    ReadOutput {
         content: out,
         resolved_mode: "full".into(),
         output_tokens: sent,
-    })
+    }
 }
 
 /// Outcome of [`resolve_explicit_delta_mode`]: the (possibly rewritten) read

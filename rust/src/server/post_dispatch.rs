@@ -79,6 +79,9 @@ impl LeanCtxServer {
                 {
                     ir_guard.save();
                 }
+                // Flush the persistent stub index on the same batch cadence so
+                // recent full deliveries survive a restart as cheap stubs (#955).
+                crate::core::read_stub_index::persist();
             });
         }
 

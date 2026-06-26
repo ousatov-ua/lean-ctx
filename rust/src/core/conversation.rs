@@ -99,6 +99,20 @@ pub fn conversation_allows_stub(current: Option<&str>, delivered: Option<&str>) 
     }
 }
 
+/// Whether a *cold* `[unchanged]` stub may be served — i.e. one backed only by
+/// the persisted index ([`crate::core::read_stub_index`]) after a daemon
+/// restart, with no live in-memory entry.
+///
+/// Stricter than [`conversation_allows_stub`]: a cold stub crosses a process
+/// boundary, so we serve it **only** when both sides name the *same, known*
+/// conversation. Unlike the warm path there is no "no context → legacy" escape,
+/// because without a current conversation id we cannot prove the content is in
+/// the new process's context, and a wrong cold stub would resurrect exactly the
+/// cross-chat hazard #954 closed.
+pub fn conversation_allows_cold_stub(current: Option<&str>, delivered: Option<&str>) -> bool {
+    matches!((current, delivered), (Some(c), Some(d)) if c == d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +138,15 @@ mod tests {
     fn unknown_delivering_conversation_blocks_stub() {
         // Entry delivered before scoping existed → cannot prove it is in context.
         assert!(!conversation_allows_stub(Some("conv-a"), None));
+    }
+
+    #[test]
+    fn cold_stub_requires_both_known_and_matching() {
+        assert!(conversation_allows_cold_stub(Some("c"), Some("c")));
+        assert!(!conversation_allows_cold_stub(Some("c"), Some("d")));
+        // No "legacy" escape for the cold path: unknown either side → blocked.
+        assert!(!conversation_allows_cold_stub(None, Some("c")));
+        assert!(!conversation_allows_cold_stub(Some("c"), None));
+        assert!(!conversation_allows_cold_stub(None, None));
     }
 }

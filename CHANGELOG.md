@@ -14,6 +14,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   as a `re-deliveries forced:` line in `ctx_cache status`. The counters live only
   in that diagnostic, never in a cacheable tool-output body, so output
   determinism (#498) is preserved. Pure measurement — no behavioral change.
+- **Persistent, conversation-scoped `[unchanged]` stub index — survives daemon
+  restarts and idle clears (gitlab #955).** The in-memory read cache is wiped on
+  every daemon restart and emptied by the idle-TTL clear, so until now the first
+  unchanged re-read afterwards re-delivered the *whole* file — the single biggest
+  remaining source of the "re-reads aren't reliable" feeling. A new focused
+  module `core::read_stub_index` persists the *minimal bookkeeping* needed to emit
+  the ~13-token stub — `{path, md5, mtime, line_count, file_ref,
+  delivered_conversation}`, **never the content** — to
+  `{data_dir}/read_cache/stub_index.json` (atomic tmp+rename, LRU-capped at 1024
+  records). It is write-through on every full delivery, flushed on the
+  batch/idle/shutdown save cadence, and rehydrated at startup, so a re-read of an
+  unchanged file *in the same conversation* now collapses to the stub even across
+  a restart. Correctness is gated harder than the warm path: a cold stub (no live
+  entry) is served only when the file's mtime **and** md5 still match disk **and**
+  the current conversation equals the delivering one
+  (`conversation::conversation_allows_cold_stub` — no "no-context → legacy"
+  escape, because across a process boundary an unknown conversation cannot prove
+  the content is in context; this keeps #954's cross-chat hazard closed). A host
+  compaction drops the whole index synchronously (the conversation's context was
+  summarised away), mirroring `SessionCache::reset_delivery_flags`. Content is
+  always re-read from disk — only delivery bookkeeping persists — so tool-output
+  determinism (#498) is untouched. Side benefit: because the index outlives the
+  idle clear, same-conversation re-reads after idle no longer re-deliver either.
+  Kill-switch `LEAN_CTX_STUB_PERSIST=0`.
 - **Deterministic JSON crusher core — `core::json_crush` (gitlab #934/#935,
   Headroom "Smart Crusher" port).** Real JSON payloads (API responses, `kubectl
   get -o json`, DB dumps, RAG chunks) are dominated by arrays of objects that

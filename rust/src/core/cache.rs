@@ -759,8 +759,21 @@ impl SessionCache {
     /// [`crate::core::conversation`]).
     pub fn mark_full_delivered(&mut self, path: &str) {
         let conversation = crate::core::conversation::current_conversation_id();
-        if let Some(entry) = self.entries.get_mut(&normalize_key(path)) {
-            entry.mark_full_delivered(conversation);
+        let key = normalize_key(path);
+        let file_ref = self.file_refs.get(&key).cloned();
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.mark_full_delivered(conversation.clone());
+            // Write-through to the persistent stub index so an unchanged re-read
+            // in the same conversation survives a daemon restart / idle clear
+            // (#955). `record` ignores None-conversation deliveries.
+            crate::core::read_stub_index::record(crate::core::read_stub_index::StubRecord::new(
+                key.clone(),
+                entry.hash.clone(),
+                entry.stored_mtime,
+                entry.line_count,
+                file_ref.unwrap_or_default(),
+                conversation,
+            ));
         }
     }
 
