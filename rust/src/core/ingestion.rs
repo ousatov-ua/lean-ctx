@@ -21,6 +21,9 @@ pub enum IngestKind {
     Data,
     /// Other UTF-8 text (unknown extension but verified textual).
     Text,
+    /// Auto-generated content excluded from every index regardless of its
+    /// (often textual) extension — currently dependency lockfiles (#585).
+    Generated,
     /// Not ingestible as text (images, media, archives, binary documents).
     Binary,
 }
@@ -29,7 +32,7 @@ impl IngestKind {
     /// Whether content of this kind should be fed to the index.
     #[must_use]
     pub fn is_ingestible(self) -> bool {
-        !matches!(self, IngestKind::Binary)
+        !matches!(self, IngestKind::Binary | IngestKind::Generated)
     }
 
     /// Stable lowercase label (for capabilities / diagnostics).
@@ -40,6 +43,7 @@ impl IngestKind {
             IngestKind::Document => "document",
             IngestKind::Data => "data",
             IngestKind::Text => "text",
+            IngestKind::Generated => "generated",
             IngestKind::Binary => "binary",
         }
     }
@@ -86,7 +90,7 @@ const BINARY_EXTS: &[&str] = &[
     // compiled / binary artifacts
     "exe", "dll", "so", "dylib", "o", "a", "class", "wasm", "bin", "dat", //
     // fonts / db / images-vector-binary
-    "ttf", "otf", "woff", "woff2", "db", "sqlite", "lock",
+    "ttf", "otf", "woff", "woff2", "db", "sqlite",
 ];
 
 /// Binary document formats that have a dedicated byte-level extractor
@@ -98,12 +102,46 @@ const EXTRACTABLE_DOC_EXTS: &[&str] = &["pdf"];
 /// Max bytes inspected when sniffing an unknown-extension file.
 const SNIFF_BYTES: usize = 8192;
 
+/// Auto-generated dependency lockfiles. These are pinned dependency manifests —
+/// never useful for code understanding, often huge, and a token sink whenever a
+/// retrieval surface (`ctx_compose`, BM25 search) inlines them, so every index
+/// walker skips them via [`IngestKind::Generated`]. An explicit
+/// `ctx_read`/`ctx_tree`/`ctx_glob` of a lockfile still works — those paths
+/// never consult the ingestion gate.
+///
+/// Detection is by file *name*, independent of directory depth (so a monorepo's
+/// `frontend/package-lock.json` is caught too) and of extension: `*.lock` /
+/// `*.lockb` (Cargo, yarn, bun, poetry, Gemfile, flake, …) plus the JSON/YAML
+/// npm/pnpm lockfiles that would otherwise ingest as structured data (#585).
+fn is_generated_lockfile(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if matches!(
+        name,
+        "package-lock.json" | "npm-shrinkwrap.json" | "pnpm-lock.yaml"
+    ) {
+        return true;
+    }
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("lock" | "lockb")
+    )
+}
+
 /// Classify a path into an [`IngestKind`].
 ///
 /// Fast path is extension-based; files with an unknown extension are sniffed
 /// (bounded read) so textual content is still picked up and binaries rejected.
 #[must_use]
 pub fn classify_path(path: &Path) -> IngestKind {
+    // Auto-generated lockfiles are excluded before any extension routing — their
+    // .json/.yaml variants would otherwise pass as ingestible data (#585).
+    if is_generated_lockfile(path) {
+        return IngestKind::Generated;
+    }
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -245,5 +283,30 @@ mod tests {
         let readme = dir.path().join("LICENSE");
         std::fs::write(&readme, "MIT License\n\nPermission is hereby granted\n").unwrap();
         assert_eq!(classify_path(&readme), IngestKind::Text);
+    }
+
+    #[test]
+    fn generated_lockfiles_are_excluded() {
+        // npm/pnpm lockfiles carry ingestible .json/.yaml extensions; the rest
+        // are caught by the .lock/.lockb extension — at any directory depth.
+        for f in [
+            "package-lock.json",
+            "npm-shrinkwrap.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "Cargo.lock",
+            "bun.lock",
+            "bun.lockb",
+            "poetry.lock",
+            "frontend/package-lock.json",
+            "crates/foo/Cargo.lock",
+        ] {
+            assert_eq!(classify_path(&p(f)), IngestKind::Generated, "{f}");
+            assert!(!is_ingestible(&p(f)), "{f} must not ingest");
+        }
+        // Lookalikes that are real content must still ingest.
+        assert!(is_ingestible(&p("src/lock.rs")));
+        assert!(is_ingestible(&p("docs/locking-notes.md")));
+        assert!(is_ingestible(&p("config/settings.json")));
     }
 }
