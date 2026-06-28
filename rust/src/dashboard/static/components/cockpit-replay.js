@@ -395,12 +395,14 @@ class CockpitReplay extends HTMLElement {
     var id = shortId(s.snapshot_id);
     return (
       '<div class="card"><div class="card-header"><h3>Reproduce, continue or share</h3></div>' +
-      '<p class="hs">Inspect or verify this exact state from the CLI:</p>' +
+      '<p class="hs">Inspect, verify, then resume this exact state from the CLI:</p>' +
       '<pre class="mono" style="background:var(--bg-elev,#0d1117);padding:10px;border-radius:8px;overflow:auto">' +
       'lean-ctx snapshot show ' + this._esc(id) + '\n' +
-      'lean-ctx snapshot verify ' + this._esc(id) + '</pre>' +
-      '<p class="hs" style="color:var(--muted)">Restore &amp; share land as dedicated verbs ' +
-      '(<span class="mono">snapshot restore</span> / <span class="mono">snapshot publish</span>).</p>' +
+      'lean-ctx snapshot verify ' + this._esc(id) + '\n' +
+      'lean-ctx snapshot restore ' + this._esc(id) + ' --git</pre>' +
+      '<p class="hs" style="color:var(--muted)"><span class="mono">restore</span> resumes this ' +
+      'snapshot\u2019s task &amp; decisions (and, with <span class="mono">--git</span>, checks out its ' +
+      'commit). Sharing lands as <span class="mono">snapshot publish</span> (Phase 4).</p>' +
       '</div>'
     );
   }

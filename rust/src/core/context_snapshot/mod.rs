@@ -20,12 +20,14 @@
 
 pub mod builder;
 pub mod digest;
+pub mod restore;
 pub mod signing;
 pub mod timeline;
 pub mod types;
 
 pub use builder::{SnapshotOptions, build, create};
 pub use digest::{canonical_body, compute_id, finalize_id};
+pub use restore::{GitRestore, RestoreOptions, RestoreOutcome, SessionMerge, restore};
 pub use signing::{sign_snapshot, verify_snapshot};
 pub use timeline::{
     TimelineEntry, head_id, load_entries, read_snapshot, resolve_id, snapshots_dir, write_snapshot,

@@ -3,7 +3,9 @@
 //! Headless surface of the Context Time Machine: capture the current context
 //! state as a git-anchored, signed snapshot and browse the append-only timeline.
 
-use crate::core::context_snapshot::{self, ContextSnapshotV1, SnapshotOptions};
+use crate::core::context_snapshot::{
+    self, ContextSnapshotV1, GitRestore, RestoreOptions, RestoreOutcome, SnapshotOptions,
+};
 
 pub(crate) fn cmd_snapshot(args: &[String]) {
     let subcommand = args
@@ -16,6 +18,7 @@ pub(crate) fn cmd_snapshot(args: &[String]) {
         "list" | "ls" => cmd_list(args),
         "show" => cmd_show(args),
         "verify" => cmd_verify(args),
+        "restore" => cmd_restore(args),
         other => {
             eprintln!("unknown snapshot subcommand: {other}");
             usage();
@@ -26,11 +29,12 @@ pub(crate) fn cmd_snapshot(args: &[String]) {
 
 fn usage() {
     eprintln!(
-        "Usage: lean-ctx snapshot <create|list|show|verify> [options]\n\
+        "Usage: lean-ctx snapshot <create|list|show|verify|restore> [options]\n\
          \n  create [--sign]      build + store a snapshot of the current context state\
          \n  list [--json]        list this project's snapshot timeline\
          \n  show <id> [--json]   print a stored snapshot\
          \n  verify <id>          check a snapshot's signature + integrity\
+         \n  restore <id> [--git] resume the snapshot's session (and, with --git, check out its commit)\
          \n\nCommon: [--root <path>] selects the project (default: cwd)."
     );
 }
@@ -148,6 +152,79 @@ fn cmd_verify(args: &[String]) {
         }
         Err(e) => fail(&e),
     }
+}
+
+fn cmd_restore(args: &[String]) {
+    let project_root = super::common::detect_project_root(args);
+    let Some(id) = id_arg(args) else {
+        fail_usage("snapshot id required: lean-ctx snapshot restore <id>");
+        return;
+    };
+    let id = match context_snapshot::resolve_id(&project_root, &id) {
+        Ok(full) => full,
+        Err(e) => {
+            fail(&e);
+            return;
+        }
+    };
+    let snap = match context_snapshot::read_snapshot(&project_root, &id) {
+        Ok(s) => s,
+        Err(e) => {
+            fail(&e);
+            return;
+        }
+    };
+    let opts = RestoreOptions {
+        project_root,
+        checkout_git: has_flag(args, "--git"),
+    };
+    match context_snapshot::restore(&snap, &opts) {
+        Ok(outcome) => print!("{}", render_restore(&snap, &outcome)),
+        Err(e) => fail(&e),
+    }
+}
+
+fn render_restore(s: &ContextSnapshotV1, o: &RestoreOutcome) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "restored from snapshot {}", short(&s.snapshot_id));
+
+    if o.had_session_slice {
+        if let Some(task) = o.session.task.as_deref() {
+            let pct = o
+                .session
+                .progress_pct
+                .map_or_else(String::new, |p| format!(" ({p}%)"));
+            let _ = writeln!(out, "  session  task: {task}{pct}");
+        }
+        let _ = writeln!(
+            out,
+            "  session  +{} decision(s), +{} file(s) resumed",
+            o.session.decisions_added, o.session.files_added
+        );
+    } else {
+        let _ = writeln!(out, "  session  (snapshot carried no session slice)");
+    }
+
+    let git_line = match &o.git {
+        GitRestore::Skipped => s.git.commit.as_deref().map_or_else(
+            || "not touched".to_string(),
+            |c| {
+                format!(
+                    "not touched — rerun with --git to check out {}",
+                    short_commit(c)
+                )
+            },
+        ),
+        GitRestore::NoAnchor => "no commit anchor to check out".to_string(),
+        GitRestore::DirtyTree => {
+            "SKIPPED — working tree has uncommitted changes (commit or stash first)".to_string()
+        }
+        GitRestore::CheckedOut(c) => format!("checked out {}", short_commit(c)),
+        GitRestore::Failed(e) => format!("checkout failed: {e}"),
+    };
+    let _ = writeln!(out, "  git      {git_line}");
+    out
 }
 
 fn render_summary(s: &ContextSnapshotV1) -> String {
