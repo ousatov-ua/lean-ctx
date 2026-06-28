@@ -7,9 +7,8 @@ use axum::{
 use serde_json::Value;
 
 use super::ProxyState;
-use super::compress::compress_tool_result;
 use super::forward;
-use super::tool_kind::{self, ToolResultKind, should_protect};
+use super::tool_kind::{self, ToolResultKind};
 use super::{cache_safety, prose};
 use crate::core::config::{HistoryMode, ProseRole};
 
@@ -313,33 +312,14 @@ fn compress_content_field(
     kind: ToolResultKind,
 ) -> bool {
     match content {
-        Value::String(s) => {
-            if should_protect(kind, s) {
-                return false;
-            }
-            let compressed = compress_tool_result(s, tool_name);
-            if compressed.len() < s.len() {
-                *s = compressed;
-                return true;
-            }
-            false
-        }
+        Value::String(s) => super::tool_output::compress_text(s, tool_name, kind),
         Value::Array(arr) => {
             let mut modified = false;
             for item in arr.iter_mut() {
                 if item.get("type").and_then(|t| t.as_str()) == Some("text")
-                    && let Some(text) = item
-                        .get_mut("text")
-                        .and_then(|t| t.as_str().map(String::from))
+                    && let Some(Value::String(text)) = item.get_mut("text")
                 {
-                    if should_protect(kind, &text) {
-                        continue;
-                    }
-                    let compressed = compress_tool_result(&text, tool_name);
-                    if compressed.len() < text.len() {
-                        item["text"] = Value::String(compressed);
-                        modified = true;
-                    }
+                    modified |= super::tool_output::compress_text(text, tool_name, kind);
                 }
             }
             modified
@@ -350,6 +330,7 @@ fn compress_content_field(
 
 #[cfg(test)]
 mod tests {
+    use super::super::compress::compress_tool_result;
     use super::*;
 
     fn source_file_body() -> Vec<u8> {
@@ -710,6 +691,54 @@ mod tests {
         let bytes = serde_json::to_vec(&body).unwrap();
         let (_out, orig, comp) = compress_request_body(body, bytes.len());
         assert!(comp < orig, "shell output must still be compressed");
+    }
+
+    #[test]
+    fn json_envelope_tool_result_is_compressed() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let log = long_git_status();
+        let expected = compress_tool_result(&log, Some("Bash"));
+        let envelope = serde_json::to_string(&serde_json::json!({
+            "content": [{"type": "text", "text": log}],
+            "isError": false,
+        }))
+        .unwrap();
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "Bash",
+                    "input": {}
+                }]},
+                {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": envelope
+                }]}
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+
+        assert!(comp < orig, "JSON envelope tool result should shrink");
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        let content = parsed["messages"][1]["content"][0]["content"]
+            .as_str()
+            .unwrap();
+        let envelope: Value = serde_json::from_str(content).unwrap();
+        assert_eq!(envelope["content"][0]["text"].as_str().unwrap(), expected);
+    }
+
+    fn long_git_status() -> String {
+        let mut s = String::from(
+            "$ git status\nOn branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n",
+        );
+        for i in 0..80 {
+            s.push_str(&format!("\tmodified:   src/module_{i}/file_{i}.rs\n"));
+        }
+        s.push_str("\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n");
+        s
     }
 
     /// A client-cached message anchors the prefix; `system` precedes it, so the

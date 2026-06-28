@@ -7,9 +7,8 @@ use axum::{
 use serde_json::Value;
 
 use super::ProxyState;
-use super::compress::compress_tool_result;
 use super::forward;
-use super::tool_kind::{self, ToolResultKind, should_protect};
+use super::tool_kind::{self, ToolResultKind};
 use super::{cache_safety, prose};
 use crate::core::config::{HistoryMode, ProseRole};
 
@@ -200,50 +199,7 @@ pub(super) fn prune_responses_input(doc: &mut Value) -> bool {
 /// handling both the JSON-string and array-of-content-parts shapes — the
 /// pruning analogue of [`compress_output_field`].
 fn prune_output_field(output: &mut Value, kind: ToolResultKind) -> bool {
-    match output {
-        Value::String(s) => match rewrite_json_payload_text(s, kind, |text| {
-            super::history_prune::prune_output_text(text, kind)
-        }) {
-            JsonRewrite::Changed(pruned) => {
-                *s = pruned;
-                true
-            }
-            JsonRewrite::Unchanged => false,
-            JsonRewrite::NotJson => match super::history_prune::prune_output_text(s, kind) {
-                Some(pruned) => {
-                    *s = pruned;
-                    true
-                }
-                None => false,
-            },
-        },
-        Value::Array(parts) => {
-            let mut changed = false;
-            for part in parts.iter_mut() {
-                if let Some(Value::String(text)) = part.get_mut("text") {
-                    match rewrite_json_payload_text(text, kind, |inner| {
-                        super::history_prune::prune_output_text(inner, kind)
-                    }) {
-                        JsonRewrite::Changed(pruned) => {
-                            *text = pruned;
-                            changed = true;
-                        }
-                        JsonRewrite::Unchanged => {}
-                        JsonRewrite::NotJson => {
-                            if let Some(pruned) =
-                                super::history_prune::prune_output_text(text, kind)
-                            {
-                                *text = pruned;
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-            }
-            changed
-        }
-        _ => false,
-    }
+    super::tool_output::prune_value(output, kind)
 }
 
 /// Compresses the `function_call_output.output` entries of a Responses-API body
@@ -301,147 +257,12 @@ fn compress_output_field(
     tool_name: Option<&str>,
     kind: ToolResultKind,
 ) -> bool {
-    match output {
-        Value::String(s) => {
-            match rewrite_json_payload_text(s, kind, |text| {
-                if should_protect(kind, text) {
-                    return None;
-                }
-                let compressed = compress_tool_result(text, tool_name);
-                (compressed.len() < text.len()).then_some(compressed)
-            }) {
-                JsonRewrite::Changed(compressed) => {
-                    *s = compressed;
-                    return true;
-                }
-                JsonRewrite::Unchanged => return false,
-                JsonRewrite::NotJson => {}
-            }
-            if should_protect(kind, s) {
-                return false;
-            }
-            let compressed = compress_tool_result(s, tool_name);
-            if compressed.len() < s.len() {
-                *s = compressed;
-                return true;
-            }
-            false
-        }
-        Value::Array(parts) => {
-            let mut changed = false;
-            for part in parts.iter_mut() {
-                if let Some(Value::String(text)) = part.get_mut("text") {
-                    match rewrite_json_payload_text(text, kind, |inner| {
-                        if should_protect(kind, inner) {
-                            return None;
-                        }
-                        let compressed = compress_tool_result(inner, tool_name);
-                        (compressed.len() < inner.len()).then_some(compressed)
-                    }) {
-                        JsonRewrite::Changed(compressed) => {
-                            *text = compressed;
-                            changed = true;
-                            continue;
-                        }
-                        JsonRewrite::Unchanged => continue,
-                        JsonRewrite::NotJson => {}
-                    }
-                    if should_protect(kind, text) {
-                        continue;
-                    }
-                    let compressed = compress_tool_result(text, tool_name);
-                    if compressed.len() < text.len() {
-                        *text = compressed;
-                        changed = true;
-                    }
-                }
-            }
-            changed
-        }
-        _ => false,
-    }
-}
-
-enum JsonRewrite {
-    NotJson,
-    Unchanged,
-    Changed(String),
-}
-
-/// Rewrites text payloads inside a JSON-encoded tool-result envelope — the common
-/// case where a `function_call_output.output` string is itself JSON (e.g. an MCP
-/// `{"content":[{"type":"text","text":…}]}` envelope).
-///
-/// Returns [`JsonRewrite::NotJson`] when `text` is not a JSON object/array so the
-/// caller can fall back to the plain-text path. On a successful rewrite the value is
-/// re-emitted in compact/canonical form (whitespace and `serde_json::Value` key
-/// order), matching how the proxy already re-serializes the outer request body — so
-/// it is deterministic and semantically neutral. The rewrite is only adopted when it
-/// is strictly smaller than the original (shrink-only); it can never grow a payload.
-fn rewrite_json_payload_text(
-    text: &str,
-    kind: ToolResultKind,
-    mut rewrite: impl FnMut(&str) -> Option<String>,
-) -> JsonRewrite {
-    let trimmed = text.trim();
-    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
-        return JsonRewrite::NotJson;
-    }
-    let Ok(mut value) = serde_json::from_str::<Value>(trimmed) else {
-        return JsonRewrite::NotJson;
-    };
-    let mut touched = false;
-    let mut changed = false;
-    rewrite_json_text_values(&mut value, kind, &mut rewrite, &mut touched, &mut changed);
-    if !touched || !changed {
-        return JsonRewrite::Unchanged;
-    }
-    match serde_json::to_string(&value) {
-        Ok(serialized) if serialized.len() < text.len() => JsonRewrite::Changed(serialized),
-        _ => JsonRewrite::Unchanged,
-    }
-}
-
-fn rewrite_json_text_values(
-    value: &mut Value,
-    kind: ToolResultKind,
-    rewrite: &mut impl FnMut(&str) -> Option<String>,
-    touched: &mut bool,
-    changed: &mut bool,
-) {
-    match value {
-        Value::Object(map) => {
-            let is_text_part = map
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| matches!(t, "text" | "input_text" | "output_text"));
-            let rewrite_all_strings =
-                matches!(kind, ToolResultKind::Shell | ToolResultKind::Search);
-            for (key, child) in map.iter_mut() {
-                if let Value::String(s) = child
-                    && (rewrite_all_strings || (is_text_part && key == "text"))
-                {
-                    *touched = true;
-                    if let Some(next) = rewrite(s) {
-                        *s = next;
-                        *changed = true;
-                    }
-                    continue;
-                }
-                rewrite_json_text_values(child, kind, rewrite, touched, changed);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                rewrite_json_text_values(item, kind, rewrite, touched, changed);
-            }
-        }
-        _ => {}
-    }
+    super::tool_output::compress_value(output, tool_name, kind)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::compress::compress_tool_result;
     use super::*;
 
     /// A long `git status` is a known-compressible fixture: `has_structural_output`

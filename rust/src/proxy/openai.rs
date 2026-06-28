@@ -7,9 +7,8 @@ use axum::{
 use serde_json::Value;
 
 use super::ProxyState;
-use super::compress::compress_tool_result;
 use super::forward;
-use super::tool_kind::{self, ToolResultKind, should_protect};
+use super::tool_kind::{self, ToolResultKind};
 use super::{cache_safety, prose};
 use crate::core::config::{HistoryMode, ProseRole};
 
@@ -114,18 +113,13 @@ fn compress_request_body(parsed: Value, original_size: usize) -> (Vec<u8>, usize
             if !live_compress || name.is_some_and(|n| cfg.proxy.is_tool_live_compress_excluded(n)) {
                 continue;
             }
-            if let Some(content) = msg
+            if let Some(mut content) = msg
                 .get_mut("content")
                 .and_then(|c| c.as_str().map(String::from))
+                && super::tool_output::compress_text(&mut content, name, kind)
             {
-                if should_protect(kind, &content) {
-                    continue;
-                }
-                let compressed = compress_tool_result(&content, name);
-                if compressed.len() < content.len() {
-                    msg["content"] = Value::String(compressed);
-                    modified = true;
-                }
+                msg["content"] = Value::String(content);
+                modified = true;
             }
         }
 
@@ -198,6 +192,7 @@ fn inject_usage_reporting(doc: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::compress::compress_tool_result;
     use super::*;
 
     #[test]
@@ -225,10 +220,52 @@ mod tests {
     }
 
     #[test]
+    fn json_envelope_tool_output_is_compressed() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let raw = long_git_status();
+        let expected = compress_tool_result(&raw, Some("Bash"));
+        let envelope = serde_json::to_string(&serde_json::json!({
+            "content": [{"type": "text", "text": raw}],
+            "isError": false,
+        }))
+        .unwrap();
+        let body = serde_json::json!({
+            "model": "gpt-5",
+            "messages": [
+                {"role": "assistant", "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "Bash"}
+                }]},
+                {"role": "tool", "tool_call_id": "call_1", "content": envelope}
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len());
+
+        assert!(comp < orig, "JSON envelope tool output should shrink");
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        let content = parsed["messages"][1]["content"].as_str().unwrap();
+        let envelope: Value = serde_json::from_str(content).unwrap();
+        assert_eq!(envelope["content"][0]["text"].as_str().unwrap(), expected);
+    }
+
+    #[test]
     fn injects_include_usage_for_streaming() {
         let mut doc = serde_json::json!({"model": "gpt-5.4", "stream": true, "messages": []});
         inject_usage_reporting(&mut doc);
         assert_eq!(doc["stream_options"]["include_usage"], Value::Bool(true));
+    }
+
+    fn long_git_status() -> String {
+        let mut s = String::from(
+            "$ git status\nOn branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n",
+        );
+        for i in 0..80 {
+            s.push_str(&format!("\tmodified:   src/module_{i}/file_{i}.rs\n"));
+        }
+        s.push_str("\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n");
+        s
     }
 
     #[test]

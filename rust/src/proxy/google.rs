@@ -7,9 +7,8 @@ use axum::{
 use serde_json::Value;
 
 use super::ProxyState;
-use super::compress::compress_tool_result;
 use super::forward;
-use super::tool_kind::{self, ToolResultKind, should_protect};
+use super::tool_kind::{self, ToolResultKind};
 use super::{cache_safety, prose};
 use crate::core::config::{HistoryMode, ProseRole};
 
@@ -193,12 +192,9 @@ fn compress_string_field(
         .get_mut(field)
         .and_then(|v| v.as_str().map(String::from))
     {
-        if should_protect(kind, &val) {
-            return false;
-        }
-        let compressed = compress_tool_result(&val, tool_name);
-        if compressed.len() < val.len() {
-            obj[field] = Value::String(compressed);
+        let mut val = val;
+        if super::tool_output::compress_text(&mut val, tool_name, kind) {
+            obj[field] = Value::String(val);
             return true;
         }
     }
@@ -209,17 +205,22 @@ fn compress_string_field(
 /// reads collapse to a re-read stub, everything else head/tail summarizes.
 /// Content-deterministic, so the cached prefix stays byte-stable across turns.
 fn prune_string_field(obj: &mut Value, field: &str, kind: ToolResultKind) -> bool {
-    if let Some(val) = obj.get(field).and_then(|v| v.as_str())
-        && let Some(pruned) = super::history_prune::prune_output_text(val, kind)
+    if let Some(val) = obj
+        .get_mut(field)
+        .and_then(|v| v.as_str().map(String::from))
     {
-        obj[field] = Value::String(pruned);
-        return true;
+        let mut val = val;
+        if super::tool_output::prune_text(&mut val, kind) {
+            obj[field] = Value::String(val);
+            return true;
+        }
     }
     false
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::compress::compress_tool_result;
     use super::*;
 
     /// `pairs` Gemini turns: a `model` `functionCall` then the `user`
@@ -282,6 +283,36 @@ mod tests {
     }
 
     #[test]
+    fn json_envelope_function_response_is_compressed() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let raw = long_git_status();
+        let expected = compress_tool_result(&raw, Some("Bash"));
+        let envelope = serde_json::to_string(&serde_json::json!({
+            "content": [{"type": "text", "text": raw}],
+            "isError": false,
+        }))
+        .unwrap();
+        let body = serde_json::json!({
+            "contents": [
+                {"role": "user", "parts": [{"functionResponse": {
+                    "name": "Bash",
+                    "response": {"result": envelope}
+                }}]}
+            ]
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let (out, orig, comp) = compress_request_body(body, bytes.len(), None);
+
+        assert!(comp < orig, "JSON envelope function response should shrink");
+        let parsed: Value = serde_json::from_slice(&out).unwrap();
+        let result = parsed["contents"][0]["parts"][0]["functionResponse"]["response"]["result"]
+            .as_str()
+            .unwrap();
+        let envelope: Value = serde_json::from_str(result).unwrap();
+        assert_eq!(envelope["content"][0]["text"].as_str().unwrap(), expected);
+    }
+
+    #[test]
     fn cache_aware_prune_stubs_old_reads_keeps_recent() {
         let _iso = crate::core::data_dir::isolated_data_dir();
         // 13 pairs = 26 contents → staircase boundary 16.
@@ -311,6 +342,17 @@ mod tests {
             recent.contains("v39"),
             "recent read must be protected, got: {recent}"
         );
+    }
+
+    fn long_git_status() -> String {
+        let mut s = String::from(
+            "$ git status\nOn branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n",
+        );
+        for i in 0..80 {
+            s.push_str(&format!("\tmodified:   src/module_{i}/file_{i}.rs\n"));
+        }
+        s.push_str("\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n");
+        s
     }
 
     #[test]
