@@ -17,7 +17,9 @@ impl LeanCtxServer {
             .await;
     }
 
-    /// Records a tool call like `record_call`, but includes an optional file path for observability.
+    /// Records a tool call like `record_call`, but includes an optional file
+    /// path for observability and the measured handler duration (#1020 — the
+    /// duration is what makes the row land in `tool-calls.log`).
     pub async fn record_call_with_path(
         &self,
         tool: &str,
@@ -25,8 +27,9 @@ impl LeanCtxServer {
         saved: usize,
         mode: Option<String>,
         path: Option<&str>,
+        duration_ms: u64,
     ) {
-        self.record_call_with_timing_inner(tool, original, saved, mode, 0, path)
+        self.record_call_with_timing_inner(tool, original, saved, mode, duration_ms, path)
             .await;
     }
 
@@ -69,7 +72,11 @@ impl LeanCtxServer {
             calls.drain(..excess);
         }
 
-        if duration_ms > 0 {
+        // #1020: persist whenever we have a duration OR real metrics. The old
+        // `duration_ms > 0` gate dropped every read/search row (they record with
+        // measured metrics but were previously logged via a separate zero-filled
+        // path), so `tool-calls.log` only ever showed `orig=0 saved=0 mode=-`.
+        if duration_ms > 0 || original > 0 {
             Self::append_tool_call_log(tool, duration_ms, original, saved, mode.as_deref(), &ts);
         }
 

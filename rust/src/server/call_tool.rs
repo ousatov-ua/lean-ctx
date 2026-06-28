@@ -949,17 +949,10 @@ impl LeanCtxServer {
             }
         }
 
-        let tool_duration_ms = tool_start.elapsed().as_millis() as u64;
-        if tool_duration_ms > 100 {
-            LeanCtxServer::append_tool_call_log(
-                name,
-                tool_duration_ms,
-                0,
-                0,
-                None,
-                &chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            );
-        }
+        // #1020: tool-calls.log is now written on the dispatch path
+        // (record_call_with_path / record_call_with_timing) with the real
+        // original/saved/mode and the measured handler duration. The previous
+        // zero-filled append here overwrote every row with `orig=0 saved=0 mode=-`.
 
         let current_count = self.call_count.load(std::sync::atomic::Ordering::Relaxed);
         if current_count > 0 && current_count.is_multiple_of(100) {

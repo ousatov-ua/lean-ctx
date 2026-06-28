@@ -263,7 +263,9 @@ impl LeanCtxServer {
             // would crash with "Cannot read properties of undefined (reading
             // 'invoke')". `spawn_blocking` keeps the core workers free and lets
             // the watchdog always return a response.
+            let handler_started = std::time::Instant::now();
             let output = self.run_tool_handler(name, tool, args_map, ctx).await?;
+            let handler_ms = handler_started.elapsed().as_millis() as u64;
 
             if output.changed
                 && let Some(peer) = self.peer.read().await.as_ref()
@@ -308,14 +310,16 @@ impl LeanCtxServer {
                     output.saved_tokens,
                     output.mode,
                     Some(path),
+                    handler_ms,
                 )
                 .await;
             } else {
-                self.record_call(
+                self.record_call_with_timing(
                     name,
                     output.original_tokens,
                     output.saved_tokens,
                     output.mode,
+                    handler_ms,
                 )
                 .await;
             }
