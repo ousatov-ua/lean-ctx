@@ -381,8 +381,9 @@ pub fn handle(cache: &SessionCache, tool_calls: &[ToolCallRecord], crp_mode: Crp
             ));
         }
         out.push(format!(
-            "  Read escalations served after edit-fails: {escalations} (pending: {})",
-            eq["pending_escalations"].as_u64().unwrap_or(0)
+            "  Read escalations served after edit-fails: {escalations} (pending: {} full, {} anchored)",
+            eq["pending_escalations"].as_u64().unwrap_or(0),
+            eq["pending_anchored_escalations"].as_u64().unwrap_or(0)
         ));
     }
 

@@ -71,6 +71,11 @@ fn search_deadline() -> Option<Duration> {
 }
 
 /// Searches files for a regex pattern with compressed output and monorepo scope hints.
+///
+/// `anchored` (opt-in, #1008) appends a `:hh` line-hash to every match
+/// (`path:line:hh content`) so a hit can be edited directly with `ctx_patch`
+/// without a separate `ctx_read(mode="anchored")`. Default output is byte-for-byte
+/// unchanged (#498).
 pub fn handle(
     pattern: &str,
     dir: &str,
@@ -79,6 +84,7 @@ pub fn handle(
     _crp_mode: CrpMode,
     respect_gitignore: bool,
     allow_secret_paths: bool,
+    anchored: bool,
 ) -> SearchOutcome {
     // `include` is a glob matched against each file's path *relative to* `dir`
     // (e.g. `*.ts`, `*.{rs,ts}`, `src/**/*.tsx`). Bare globs without `/` match
@@ -272,7 +278,19 @@ pub fn handle(
                     shown.truncate(shown.floor_char_boundary(MAX_MATCH_LINE_WIDTH));
                     shown.push_str("...");
                 }
-                matches.push(format!("{short_path}:{} {}", i + 1, shown));
+                // The anchor hash is over the RAW line (matching ctx_read/ctx_patch
+                // which both hash `content.lines()`), never the trimmed/truncated
+                // display text — otherwise ctx_patch would always see a mismatch.
+                if anchored {
+                    matches.push(format!(
+                        "{short_path}:{}:{} {}",
+                        i + 1,
+                        crate::core::anchor::line_hash(line),
+                        shown
+                    ));
+                } else {
+                    matches.push(format!("{short_path}:{} {}", i + 1, shown));
+                }
                 if matches.len() >= max_results {
                     break;
                 }
@@ -336,6 +354,10 @@ pub fn handle(
         }
     }
     result.push_str(":\n");
+    // Self-describing output (GL #580): the anchor notation ships its own legend.
+    if anchored {
+        result.push_str("[anchored: path:line:hh → edit via ctx_patch]\n");
+    }
     result.push_str(&matches.join("\n"));
 
     if files_skipped_size > 0 {
@@ -625,8 +647,68 @@ mod tests {
             .unwrap();
         }
         let root = dir.path().to_string_lossy().into_owned();
-        let run = || handle("target", &root, Some("*.rs"), 20, CrpMode::Off, true, true).text;
+        let run = || {
+            handle(
+                "target",
+                &root,
+                Some("*.rs"),
+                20,
+                CrpMode::Off,
+                true,
+                true,
+                false,
+            )
+            .text
+        };
         assert_eq!(run(), run(), "search output must be deterministic");
+    }
+
+    /// #1008: opt-in anchored search tags each hit with `:hh` (matching
+    /// `ctx_read`/`ctx_patch`'s line hash) and ships a legend; the default
+    /// (anchored=false) output stays byte-identical so #498 is preserved.
+    #[test]
+    fn anchored_search_emits_line_hash_per_hit_opt_in_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "let needle = 1;\nother\n").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+
+        let plain = handle(
+            "needle",
+            &root,
+            Some("*.rs"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+            false,
+        )
+        .text;
+        assert!(
+            !plain.contains("[anchored:"),
+            "default must carry no legend"
+        );
+        assert!(
+            plain.contains("a.rs:1 "),
+            "default keeps path:line content: {plain}"
+        );
+
+        let anchored = handle(
+            "needle",
+            &root,
+            Some("*.rs"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+            true,
+        )
+        .text;
+        let hh = crate::core::anchor::line_hash("let needle = 1;");
+        assert!(anchored.contains("[anchored: path:line:hh → edit via ctx_patch]"));
+        assert!(
+            anchored.contains(&format!("a.rs:1:{hh} ")),
+            "anchored hit must carry the line hash: {anchored}"
+        );
     }
 
     #[test]
@@ -645,6 +727,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -690,7 +773,17 @@ mod tests {
             "index should warm for a small clean corpus"
         );
 
-        let out = handle("authenticate", &root, None, 10, CrpMode::Off, true, false).text;
+        let out = handle(
+            "authenticate",
+            &root,
+            None,
+            10,
+            CrpMode::Off,
+            true,
+            false,
+            false,
+        )
+        .text;
         assert!(
             out.contains("a.rs"),
             "warm-index + cache search must find the match: {out}"
@@ -725,6 +818,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -757,6 +851,7 @@ mod tests {
             10,
             CrpMode::Off,
             true,
+            false,
             false,
         )
         .text;
@@ -795,7 +890,17 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             // Fresh temp dir → no warm index yet, so this exercises the walk path.
-            let out = handle("needle_here", &dir_path, None, 10, CrpMode::Off, true, true).text;
+            let out = handle(
+                "needle_here",
+                &dir_path,
+                None,
+                10,
+                CrpMode::Off,
+                true,
+                true,
+                false,
+            )
+            .text;
             let _ = tx.send(out);
         });
         let out = rx
@@ -870,6 +975,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -896,6 +1002,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -915,6 +1022,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -939,6 +1047,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
 
@@ -962,6 +1071,7 @@ mod tests {
             CrpMode::Off,
             true,
             true,
+            false,
         )
         .text;
         assert!(

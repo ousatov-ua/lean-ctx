@@ -365,6 +365,7 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
             crp_mode,
             true,
             allow_secret,
+            false,
         )
         .text;
         out.push_str(&format!("\n## Exact matches: '{primary}'\n"));

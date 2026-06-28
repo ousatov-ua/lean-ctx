@@ -80,6 +80,7 @@ pub const INTENT: &str = "\
 Tool selection by intent:\n\
 • Understand code / find answers / before editing -> ctx_compose (call FIRST)\n\
 • Read a file -> ctx_read(path, mode=signatures|map|full)\n\
+• Edit code you've read -> ctx_patch (hash-anchored, no exact-recall; read mode=anchored first)\n\
 • Find a symbol by name (exact) -> ctx_symbol\n\
 • Search code by pattern (fuzzy) -> ctx_search\n\
 • Search by meaning (concepts) -> ctx_semantic_search\n\

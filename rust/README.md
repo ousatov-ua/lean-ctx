@@ -1,6 +1,6 @@
 # lean-ctx
 
-**Context Engineering for AI Agents with CCP + TDD. Shell Hook + MCP Server. 79 MCP tools, 10 read modes, 95+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 18 languages. Single Rust binary.**
+**Context Engineering for AI Agents with CCP + TDD. Shell Hook + MCP Server. 80 MCP tools, 10 read modes, 95+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 18 languages. Single Rust binary.**
 
 [![CI](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml)
 [![Security Check](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml)
@@ -17,7 +17,7 @@
 lean-ctx reduces LLM token consumption by **up to 99%** through two complementary strategies in a single binary:
 
 1. **Shell Hook** — Transparently compresses CLI output (95+ patterns) before it reaches the LLM. Works without LLM cooperation.
-2. **MCP Server** — 79 tools for cached file reads, adaptive mode selection, incremental deltas, dependency maps, intent detection, cross-file dedup, project graph, cross-session memory (CCP), multi-agent coordination, semantic caching, and session metrics. Works with Cursor, GitHub Copilot, Claude Code, CodeBuddy, Windsurf, OpenAI Codex, Google Antigravity, OpenCode, and any MCP-compatible editor.
+2. **MCP Server** — 80 tools for cached file reads, adaptive mode selection, incremental deltas, dependency maps, intent detection, cross-file dedup, project graph, cross-session memory (CCP), multi-agent coordination, semantic caching, and session metrics. Works with Cursor, GitHub Copilot, Claude Code, CodeBuddy, Windsurf, OpenAI Codex, Google Antigravity, OpenCode, and any MCP-compatible editor.
 3. **AI Tool Hooks** — One-command integration for Claude Code, CodeBuddy, Cursor, Gemini CLI, Codex, Crush, Windsurf, and Cline via `lean-ctx init --agent <tool>`.
 
 ## Token Savings (Typical Cursor/Claude Code Session)
@@ -362,9 +362,9 @@ $ lean-ctx gain
   lean-ctx v3.6.10  |  leanctx.com  |  lean-ctx dashboard
 ```
 
-## 79+ MCP Tools
+## 80+ MCP Tools
 
-When configured as an MCP server, lean-ctx provides 79 tools that replace or augment your editor's built-in tools:
+When configured as an MCP server, lean-ctx provides 80 tools that replace or augment your editor's built-in tools:
 
 ### Core Tools
 

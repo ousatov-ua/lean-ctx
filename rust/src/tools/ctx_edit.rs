@@ -1,8 +1,15 @@
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::core::cache::SessionCache;
 use crate::core::tokens::count_tokens;
+// Shared TOCTOU-safe read→verify→atomic-write primitives (epic #1008): the same
+// audited boundary `ctx_patch` (anchored editing) builds on, so a fix protects
+// both tools. `verify_expected_preimage` stays here — it is `ctx_edit`-specific
+// (keyed on `EditParams`).
+use crate::tools::edit_io::{
+    FileFingerprint, FilePreimage, default_backup_path, ensure_preimage_still_matches,
+    read_preimage, system_time_to_millis, write_atomic_bytes_with_permissions,
+};
 
 /// Parameters for a file edit operation: path, old/new strings, and flags.
 pub struct EditParams {
@@ -35,135 +42,6 @@ struct ReplaceArgs<'a> {
     new_tokens: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FileFingerprint {
-    size: u64,
-    mtime_ms: u64,
-    md5: String,
-}
-
-#[derive(Clone, Debug)]
-struct FilePreimage {
-    fp: FileFingerprint,
-    permissions: std::fs::Permissions,
-    bytes: Vec<u8>,
-    text: String,
-    uses_crlf: bool,
-}
-
-fn system_time_to_millis(t: SystemTime) -> u64 {
-    t.duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
-}
-
-/// Rejects symlinks at `path` (TOCTOU protection, same boundary as
-/// `core::io_boundary::read_file_nofollow`): a symlink planted inside the jail
-/// after the jail check could otherwise read or overwrite files outside it.
-fn reject_symlink(path: &Path) -> Result<(), String> {
-    if let Ok(meta) = std::fs::symlink_metadata(path) {
-        // Windows: also covers NTFS junctions/reparse points (GL#442).
-        if crate::core::pathutil::is_symlink_or_reparse(&meta) {
-            return Err(format!(
-                "ERROR: {} is a symlink — refusing to edit through it (TOCTOU protection). \
-                 Edit the symlink target directly via its real path.",
-                path.display()
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn read_file_bytes_limited(
-    path: &Path,
-    cap: usize,
-) -> Result<(Vec<u8>, std::fs::Metadata), String> {
-    reject_symlink(path)?;
-
-    if let Ok(meta) = std::fs::metadata(path)
-        && meta.len() > cap as u64
-    {
-        return Err(format!(
-            "ERROR: file too large ({} bytes, cap {} via LCTX_MAX_READ_BYTES): {}",
-            meta.len(),
-            cap,
-            path.display()
-        ));
-    }
-
-    let mut opts = std::fs::OpenOptions::new();
-    opts.read(true);
-    #[cfg(unix)]
-    {
-        // Defense in depth alongside `reject_symlink`: O_NOFOLLOW closes the
-        // race between the lstat check and the open.
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = opts.open(path).map_err(|e| {
-        #[cfg(unix)]
-        if e.raw_os_error() == Some(libc::ELOOP) {
-            return format!(
-                "ERROR: {} is a symlink — refusing to edit through it (TOCTOU protection).",
-                path.display()
-            );
-        }
-        format!("ERROR: cannot open {}: {e}", path.display())
-    })?;
-
-    use std::io::Read;
-    let mut raw: Vec<u8> = Vec::new();
-    let mut limited = (&mut file).take((cap as u64).saturating_add(1));
-    limited
-        .read_to_end(&mut raw)
-        .map_err(|e| format!("ERROR: cannot read {}: {e}", path.display()))?;
-    if raw.len() > cap {
-        return Err(format!(
-            "ERROR: file too large (cap {} via LCTX_MAX_READ_BYTES): {}",
-            cap,
-            path.display()
-        ));
-    }
-
-    let meta = file
-        .metadata()
-        .map_err(|e| format!("ERROR: cannot stat {}: {e}", path.display()))?;
-    Ok((raw, meta))
-}
-
-fn fingerprint_from_bytes(bytes: &[u8], meta: &std::fs::Metadata) -> FileFingerprint {
-    FileFingerprint {
-        size: bytes.len() as u64,
-        mtime_ms: meta.modified().map_or(0, system_time_to_millis),
-        md5: crate::core::hasher::hash_hex(bytes),
-    }
-}
-
-fn read_preimage(path: &Path, cap: usize, allow_lossy_utf8: bool) -> Result<FilePreimage, String> {
-    let (bytes, meta) = read_file_bytes_limited(path, cap)?;
-    let permissions = meta.permissions();
-    let fp = fingerprint_from_bytes(&bytes, &meta);
-
-    let text = if allow_lossy_utf8 {
-        String::from_utf8_lossy(&bytes).into_owned()
-    } else {
-        String::from_utf8(bytes.clone()).map_err(|_| {
-            format!(
-                "ERROR: file is not valid UTF-8 (binary/encoding). Refusing to edit: {}",
-                path.display()
-            )
-        })?
-    };
-    let uses_crlf = text.contains("\r\n");
-
-    Ok(FilePreimage {
-        fp,
-        permissions,
-        bytes,
-        text,
-        uses_crlf,
-    })
-}
-
 fn verify_expected_preimage(pre: &FilePreimage, params: &EditParams) -> Result<(), String> {
     if let Some(expected) = params.expected_size
         && expected != pre.fp.size
@@ -192,197 +70,9 @@ fn verify_expected_preimage(pre: &FilePreimage, params: &EditParams) -> Result<(
     Ok(())
 }
 
-fn ensure_preimage_still_matches(
-    path: &Path,
-    expected: &FileFingerprint,
-    cap: usize,
-) -> Result<(), String> {
-    let (bytes, meta) = read_file_bytes_limited(path, cap)?;
-    let now = fingerprint_from_bytes(&bytes, &meta);
-    if &now != expected {
-        return Err(format!(
-            "ERROR: file changed since read (TOCTOU guard). Re-read and retry: {}\nexpected: size={}, mtime_ms={}, md5={}\nactual:   size={}, mtime_ms={}, md5={}",
-            path.display(),
-            expected.size,
-            expected.mtime_ms,
-            expected.md5,
-            now.size,
-            now.mtime_ms,
-            now.md5
-        ));
-    }
-    Ok(())
-}
-
-fn default_backup_path(path: &Path) -> Option<PathBuf> {
-    let parent = path.parent()?;
-    let filename = path.file_name()?.to_string_lossy();
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    Some(parent.join(format!("{filename}.lean-ctx.bak.{pid}.{nanos}")))
-}
-
-fn write_atomic_bytes_with_permissions(
-    path: &Path,
-    bytes: &[u8],
-    permissions: Option<&std::fs::Permissions>,
-) -> Result<(), String> {
-    // Read-only-roots choke point (#475). Every ctx_edit write — edit, create,
-    // and the pre-edit backup — funnels here, including the backup whose raw
-    // `backup_path` bypasses the dispatch jail, so this single guard makes the
-    // whole tool default-deny inside a read-only root before any byte is written
-    // or temp/dir created.
-    crate::core::pathjail::enforce_writable(path)?;
-
-    // The rename below would *replace* a symlink at `path` (safe), but the edit
-    // pipeline read through this path moments ago — a symlink here means the
-    // read/write pair straddles two different files. Reject for consistency
-    // with the read-side O_NOFOLLOW boundary.
-    reject_symlink(path)?;
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
-    match try_atomic_write(path, bytes, permissions) {
-        Ok(()) => Ok(()),
-        // Read-only *directory* holding a writable *file* inode — common in
-        // sandboxes/containers that bind-mount individual files rw on top of a
-        // read-only directory subvolume (e.g. ~/.config/opencode ro,
-        // opencode.jsonc rw). The same-dir tempfile + rename dance needs
-        // directory write permission, which the ro mount denies, but the
-        // existing inode is writable, so overwrite it in place. Not
-        // crash-atomic, yet ctx_edit's preimage guard (size/mtime/hash) already
-        // gates the write, so a torn write is caught on the next read instead of
-        // being silently accepted. (GH #459)
-        Err(e) if is_readonly_dir_error(&e) && path.is_file() => {
-            in_place_overwrite(path, bytes, permissions).map_err(|fallback_err| {
-                format!(
-                    "ERROR: atomic write failed ({e}); in-place fallback also failed: {fallback_err} ({})",
-                    path.display()
-                )
-            })
-        }
-        Err(e) => Err(format!("ERROR: atomic write failed: {e} ({})", path.display())),
-    }
-}
-
-/// Durable, crash-atomic write: a temp file in the **same directory** followed by
-/// `rename` over the target. Requires write permission on the *parent
-/// directory*; the caller handles the read-only-directory fallback.
-fn try_atomic_write(
-    path: &Path,
-    bytes: &[u8],
-    permissions: Option<&std::fs::Permissions>,
-) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "invalid path (no parent directory)",
-        )
-    })?;
-    let filename = path
-        .file_name()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "invalid path (no filename)",
-            )
-        })?
-        .to_string_lossy();
-
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let tmp = parent.join(format!(".{filename}.lean-ctx.tmp.{pid}.{nanos}"));
-
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        let _ = f.flush();
-        let _ = f.sync_all();
-    }
-
-    if let Some(perms) = permissions {
-        let _ = std::fs::set_permissions(&tmp, perms.clone());
-    }
-
-    #[cfg(windows)]
-    {
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        // Don't leave a half-written temp behind before the caller decides
-        // whether to fall back.
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// In-place overwrite of an existing file inode (`O_WRONLY|O_TRUNC`). Works when
-/// the parent directory is read-only but the file itself is writable. Not
-/// crash-atomic — used only as a fallback when the atomic path is impossible.
-fn in_place_overwrite(
-    path: &Path,
-    bytes: &[u8],
-    permissions: Option<&std::fs::Permissions>,
-) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // O_NOFOLLOW: a symlink swapped in after reject_symlink must never be
-        // followed (mirrors the read-side O_NOFOLLOW boundary).
-        opts.custom_flags(libc::O_NOFOLLOW);
-    }
-
-    let mut f = opts.open(path)?;
-    f.write_all(bytes)?;
-    let _ = f.flush();
-    let _ = f.sync_all();
-
-    if let Some(perms) = permissions {
-        let _ = std::fs::set_permissions(path, perms.clone());
-    }
-    Ok(())
-}
-
-/// True for errors that mean "this directory won't accept create/rename" even
-/// though the target file may be writable: `EROFS` (read-only fs) plus
-/// `EACCES`/`EPERM` (directory write denied).
-fn is_readonly_dir_error(e: &std::io::Error) -> bool {
-    if e.kind() == std::io::ErrorKind::PermissionDenied {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        matches!(
-            e.raw_os_error(),
-            Some(libc::EROFS | libc::EACCES | libc::EPERM)
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
-}
-
-fn build_diff_evidence(old: &str, new: &str, label: &str, max_lines: usize) -> String {
+/// Bounded, secret-redacted unified diff for edit evidence. `pub(crate)` so the
+/// anchored editor (`ctx_patch`) reuses the identical evidence format (#1008).
+pub(crate) fn build_diff_evidence(old: &str, new: &str, label: &str, max_lines: usize) -> String {
     let diff = similar::TextDiff::from_lines(old, new)
         .unified_diff()
         .context_radius(3)
@@ -1186,38 +876,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn readonly_dir_error_classification() {
-        assert!(is_readonly_dir_error(&std::io::Error::from(
-            std::io::ErrorKind::PermissionDenied
-        )));
-        assert!(!is_readonly_dir_error(&std::io::Error::from(
-            std::io::ErrorKind::NotFound
-        )));
-        #[cfg(unix)]
-        {
-            assert!(is_readonly_dir_error(&std::io::Error::from_raw_os_error(
-                libc::EROFS
-            )));
-            assert!(is_readonly_dir_error(&std::io::Error::from_raw_os_error(
-                libc::EACCES
-            )));
-            assert!(is_readonly_dir_error(&std::io::Error::from_raw_os_error(
-                libc::EPERM
-            )));
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn in_place_overwrite_truncates_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.jsonc");
-        std::fs::write(&path, b"longer original content").unwrap();
-        in_place_overwrite(&path, b"short", None).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"short");
-    }
-
     // GH #459: parent dir read-only, file inode writable (the bind-mount
     // sandbox shape). The atomic tempfile + rename needs *directory* write
     // permission and fails; the in-place fallback overwrites the existing inode
@@ -1455,16 +1113,6 @@ mod tests {
             out.contains("postimage:"),
             "expected postimage metadata, got: {out}"
         );
-    }
-
-    #[test]
-    fn detects_toctou_via_preimage_guard() {
-        let f = make_temp("aaa\n");
-        let cap = crate::core::limits::max_read_bytes();
-        let pre = read_preimage(f.path(), cap, false).unwrap();
-        std::fs::write(f.path(), "bbb\n").unwrap();
-        let err = ensure_preimage_still_matches(f.path(), &pre.fp, cap).unwrap_err();
-        assert!(err.contains("TOCTOU guard"), "unexpected error: {err}");
     }
 
     /// Issue #320: run_io performs the full edit without any cache handle, so the

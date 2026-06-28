@@ -162,6 +162,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(registered::ctx_smart_read::CtxSmartReadTool));
     registry.register(Box::new(registered::ctx_delta::CtxDeltaTool));
     registry.register(Box::new(registered::ctx_edit::CtxEditTool));
+    registry.register(Box::new(registered::ctx_patch::CtxPatchTool));
     registry.register(Box::new(registered::ctx_fill::CtxFillTool));
     registry.register(Box::new(registered::ctx_glob::CtxGlobTool));
     registry.register(Box::new(registered::ctx_shell::CtxShellTool));

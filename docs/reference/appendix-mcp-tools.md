@@ -1,4 +1,4 @@
-# Appendix — MCP Tool Map (all 79 tools)
+# Appendix — MCP Tool Map (all 80 tools)
 
 Every tool lean-ctx registers via `rust/src/server/registry.rs`. Your AI editor
 calls these instead of its native file/search tools. The **Profile** column
@@ -14,11 +14,11 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 |---------|-------|--------------|
 | **minimal** | 10 | Lowest context overhead; the absolute essentials |
 | **standard** | 19 | Balanced default for most coding workflows |
-| **power** | 75 | Everything (default for existing installs) |
+| **power** | 76 | Everything (default for existing installs) |
 
 - **minimal (10):** `ctx_read`, `ctx_shell`, `shell`, `ctx_search`, `ctx_glob`, `ctx_tree`, `ctx_session`, `ctx_compose`, `ctx_knowledge`, `ctx_symbol`
 - **standard (+10):** + `ctx_callgraph`, `ctx_graph`, `ctx_semantic_search`, `ctx_explore`, `ctx_delta`, `ctx_execute`, `ctx_expand`, `ctx_overview`, `ctx_multi_read`, `ctx_url_read`
-- **power (+47):** all remaining tools.
+- **power (+48):** all remaining tools.
 
 ---
 
@@ -31,6 +31,7 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 | `ctx_smart_read` | Auto-pick the optimal read mode for a file | `path`* | P |
 | `ctx_delta` | Incremental diff — only lines changed since last read | `path`* | S |
 | `ctx_edit` | Search-and-replace edit (no native read/edit); preimage guards, backup | `path`*, `new_string`*, `old_string`, `replace_all`, `create` | S |
+| `ctx_patch` | Hash-anchored line edits — `LINE:HASH` anchors from `ctx_read mode=anchored`; no exact-recall, batch-atomic, tree-sitter gate | `path`*, `ops[]` (set_line\|replace_lines\|insert_after\|delete\|replace_symbol), `validate_syntax` | P |
 | `ctx_fill` | Budget-aware context fill within a token limit | `paths[]`, `budget`*, `task` | P |
 | `ctx_symbol` | Read just one named symbol block (fn/struct/class) | `name`*, `file`, `kind` | P |
 | `ctx_outline` | List all symbols of a file with signatures | `path`*, `kind` | P |
@@ -139,7 +140,7 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 
 ## Notes
 
-1. `power` enables all 79 tools; `ToolProfile::is_tool_enabled()` returns `true`
+1. `power` enables all 80 tools; `ToolProfile::is_tool_enabled()` returns `true`
    for everything under power.
 2. `ctx_load_tools` controls *dynamic* categories (`arch`, `debug`, `memory`,
    `metrics`, `session`) independently of the static profile filter.

@@ -4,7 +4,7 @@
 
 Source of truth: `rust/src/server/registry.rs` and the tool definitions it registers.
 
-lean-ctx registers **79 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
+lean-ctx registers **80 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
 
 ## `ctx_agent`
 
@@ -199,9 +199,10 @@ Parameters: `query`
 ## `ctx_edit`
 
 Search-and-replace edit with race-condition guards — for simple text replacement in a single file.
+For editing code you've read, prefer ctx_patch (hash-anchored): it never makes you reproduce old text byte-for-byte. Read with ctx_read(mode="anchored") first.
 old_string must be unique unless replace_all=true. create=true writes new files.
 backup creates .bak. MD5/size/mtime pre-guards prevent race conditions.
-ANTIPATTERN: Do NOT loop on failures — verify file content and adjust old_string, or use native Edit with prior Read.
+ANTIPATTERN: Do NOT loop on failures — switch to ctx_patch (anchored), or verify file content and adjust old_string.
 For LSP-aware refactoring (rename, move, inline), use ctx_refactor.
 
 Parameters: `create`, `new_string`*, `old_string`, `path`*, `replace_all`
@@ -437,6 +438,17 @@ Saves tokens: portable across sessions/agents.
 
 Parameters: `action`, `description`, `path`
 
+## `ctx_patch`
+
+Hash-anchored edit — edit by line ANCHOR, not by reproducing old text.
+First read with ctx_read(mode="anchored") to get N:hh|line anchors, then patch by (line, hash).
+op=set_line replaces one line; replace_lines a range; insert_after adds after a line (line 0 = top); delete removes.
+op=replace_symbol rewrites a whole symbol body by name (or path+line) via ctx_refactor — pass new_body.
+new_text="" deletes the line. Batch many line edits via ops:[…] — all validated against the same file, applied all-or-nothing.
+A stale anchor is REJECTED with fresh anchors to retry — no partial writes. Prefer this over native str_replace/Edit for reliability.
+
+Parameters: `backup`, `end_hash`, `end_line`, `evidence`, `expected_md5`, `hash`, `line`, `name`, `new_body`, `new_text`, `op`, `ops`, `path`*, `start_hash`, `start_line`, `validate_syntax`
+
 ## `ctx_plan`
 
 WORKFLOW: set task+profile -> ctx_plan -> use results with ctx_read/ctx_compose.
@@ -509,12 +521,10 @@ Parameters: `format`
 
 ## `ctx_read`
 
-Read source files. mode REQUIRED — choose by intent.
+Read source files. mode REQUIRED — choose by intent (see `mode` below).
 WORKFLOW: after ctx_compose identified relevant files.
 ANTIPATTERN: not for understanding code — use ctx_compose FIRST (saves tokens).
-full=verbatim (edit-ready), raw=exact bytes (no framing), signatures=API,
-map=structure, auto=smart (learns from task context), diff=git delta,
-lines:N-M=window. fresh=true bypasses cache; raw=true=verbatim+fresh.
+anchored → edit by reference via ctx_patch (no exact-recall).
 
 Parameters: `aggressiveness`, `fresh`, `limit`, `mode`, `offset`, `path`, `paths`, `protect`, `raw`, `start_line`
 
@@ -591,11 +601,12 @@ Parameters: `action`*, `agent`
 
 Search code; `action` picks the engine. regex (default): exact pattern, `pattern`
 required, include='*.rs', paths=[..] multi-root. semantic: by meaning (BM25+embeddings),
-`query`, mode=bm25|dense|hybrid. symbol: one symbol's body by `name` (AST-precise),
-file/kind narrow. reindex / find_related(file_path,line). For end-to-end understanding,
+`query`, mode=bm25|dense|hybrid.              symbol: one symbol's body by `name` (AST-precise),
+file/kind narrow. reindex / find_related(file_path,line).
+anchored=true tags hits path:line:hh for ctx_patch. For end-to-end understanding,
 use ctx_compose FIRST.
 
-Parameters: `action`, `file`, `file_path`, `include`, `kind`, `line`, `max_results`, `mode`, `name`, `path`, `paths`, `pattern`, `query`, `top_k`
+Parameters: `action`, `anchored`, `file`, `file_path`, `include`, `kind`, `line`, `max_results`, `mode`, `name`, `path`, `paths`, `pattern`, `query`, `top_k`
 
 ## `ctx_semantic_search`
 

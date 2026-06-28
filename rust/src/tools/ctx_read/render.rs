@@ -75,6 +75,34 @@ pub(crate) fn format_full_output(
     (protocol::append_savings(&output, tokens, sent), sent)
 }
 
+/// Render `content` with per-line `N:hh|` hash anchors for `ctx_patch`
+/// (mode=anchored, epic #1008). The body is verbatim source prefixed with a
+/// stable, self-describing one-line legend so a vanilla agent can read the
+/// format without prior knowledge (GL#580 self-describing-output philosophy).
+///
+/// #498 determinism: the output is a pure function of `(file_ref, short,
+/// content, line_count)` — no savings footer, timestamps or counters — so
+/// identical re-reads stay byte-stable and provider prompt caching applies. No
+/// `append_savings`: anchors are lossless *additions*, so a savings line would
+/// always be negative and misleading.
+pub(crate) fn format_anchored_output(
+    file_ref: &str,
+    short: &str,
+    content: &str,
+    line_count: usize,
+) -> (String, usize) {
+    let _mode_guard = crate::core::savings_footer::ModeGuard::new("anchored");
+    let header = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {
+        format!("{file_ref}={short} {line_count}L [anchored: N:hh|line → edit via ctx_patch]")
+    } else {
+        format!("{short} {line_count}L [anchored: N:hh|line → edit via ctx_patch]")
+    };
+    let annotated = crate::core::anchor::annotate(content, 1);
+    let output = format!("{header}\n{annotated}");
+    let sent = count_tokens(&output);
+    (output, sent)
+}
+
 pub(crate) fn build_header(
     file_ref: &str,
     short: &str,
@@ -193,6 +221,7 @@ pub(crate) fn process_mode_tuned(
             line_count,
             task,
         ),
+        "anchored" => format_anchored_output(file_ref, short, content, line_count),
         "signatures" => {
             let sigs = signatures::extract_signatures(content, ext);
             let dep_info = deps::extract_deps(content, ext);

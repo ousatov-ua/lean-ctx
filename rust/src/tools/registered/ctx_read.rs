@@ -35,12 +35,10 @@ impl McpTool for CtxReadTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_read",
-            "Read source files. mode REQUIRED — choose by intent.\n\
+            "Read source files. mode REQUIRED — choose by intent (see `mode` below).\n\
              WORKFLOW: after ctx_compose identified relevant files.\n\
              ANTIPATTERN: not for understanding code — use ctx_compose FIRST (saves tokens).\n\
-             full=verbatim (edit-ready), raw=exact bytes (no framing), signatures=API,\n\
-             map=structure, auto=smart (learns from task context), diff=git delta,\n\
-             lines:N-M=window. fresh=true bypasses cache; raw=true=verbatim+fresh.",
+             anchored → edit by reference via ctx_patch (no exact-recall).",
             json!({
                 "type": "object",
                 "properties": {
@@ -48,7 +46,7 @@ impl McpTool for CtxReadTool {
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Batch-read many files (replaces ctx_multi_read)" },
                     "mode": {
                         "type": "string",
-                        "description": "REQUIRED. full=verbatim(edit-ready) raw=exact-bytes signatures=API map=structure auto=smart diff=git-delta lines:N-M=window reference=quotes task=focus"
+                        "description": "REQUIRED. full=verbatim(edit-ready) anchored=full+N:hh|anchors(edit via ctx_patch) raw=exact-bytes signatures=API map=structure auto=smart diff=git-delta lines:N-M=window reference=quotes task=focus"
                     },
                     "raw": { "type": "boolean", "description": "Verbatim, no compression (= mode=\"raw\" + fresh)" },
                     "start_line": { "type": "integer", "description": "1-based first line (offset alias)" },

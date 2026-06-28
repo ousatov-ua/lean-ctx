@@ -327,6 +327,7 @@ pub mod verification_observability;
 // ---------------------------------------------------------------------------
 pub mod active_inference;
 pub mod agent_budget;
+pub mod anchor;
 pub mod ann_cache;
 pub mod audit_trail;
 pub mod binary_detect;
@@ -469,6 +470,7 @@ pub mod startup_guard;
 pub mod stats;
 pub mod structural_diff;
 pub mod symbol_map;
+pub mod syntax_validate;
 pub mod task_briefing;
 /// macOS Seatbelt self-sandbox (#356): wraps launchd-owned daemon/proxy/updater
 /// in a `sandbox-exec` profile that denies `~/Documents`/`~/Desktop`/

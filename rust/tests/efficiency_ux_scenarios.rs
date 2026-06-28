@@ -202,6 +202,7 @@ mod error_data {
             CrpMode::Off,
             true,
             false,
+            false,
         )
         .text;
         assert!(
@@ -328,6 +329,7 @@ mod search_early_abort {
             CrpMode::Off,
             false,
             false,
+            false,
         )
         .text;
         let match_lines: Vec<&str> = result
@@ -355,6 +357,7 @@ mod search_early_abort {
             None,
             50,
             CrpMode::Off,
+            false,
             false,
             false,
         )
@@ -778,6 +781,7 @@ mod integration_workflow {
             Some("*.rs"),
             50,
             CrpMode::Off,
+            false,
             false,
             false,
         )

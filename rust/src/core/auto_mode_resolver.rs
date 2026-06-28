@@ -100,6 +100,14 @@ pub struct ResolvedMode {
 /// Single entry point for auto-mode resolution.
 /// Merges Pipeline A (select_mode_with_task) and Pipeline B (resolve_auto_mode).
 pub fn resolve(ctx: &AutoModeContext) -> ResolvedMode {
+    // Quality loop (#1008): a ctx_patch anchor went stale — hand back fresh line
+    // anchors (not `full`) so the agent retries by reference, one-shot. Checked
+    // before the `full` escalation: it is the strictly better recovery for a
+    // model already editing via anchors.
+    if crate::core::edit_quality::take_pending_anchored_escalation(ctx.path) {
+        return resolved("anchored", "anchored_edit_fail_escalation");
+    }
+
     // Quality loop (#494), signal 1: an edit on this file just failed after a
     // compressed read — the agent needs the real body now, one-shot.
     if crate::core::edit_quality::take_pending_escalation(ctx.path) {

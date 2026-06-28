@@ -65,6 +65,9 @@ impl fmt::Display for LineRange {
 pub(crate) enum ReadMode {
     /// Verbatim, edit-ready (framed) — `"full"`.
     Full,
+    /// Verbatim + per-line `N:hh|` hash anchors, edit-ready for `ctx_patch`
+    /// (epic #1008) — `"anchored"`. Lossless (a strict superset of `full`).
+    Anchored,
     /// Exact bytes, no framing — `"raw"`.
     Raw,
     /// API surface — `"signatures"`.
@@ -130,6 +133,7 @@ impl FromStr for ReadMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "full" => ReadMode::Full,
+            "anchored" => ReadMode::Anchored,
             "raw" => ReadMode::Raw,
             "signatures" => ReadMode::Signatures,
             "map" => ReadMode::Map,
@@ -160,6 +164,7 @@ impl fmt::Display for ReadMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let keyword = match self {
             ReadMode::Full => "full",
+            ReadMode::Anchored => "anchored",
             ReadMode::Raw => "raw",
             ReadMode::Signatures => "signatures",
             ReadMode::Map => "map",
@@ -192,7 +197,14 @@ impl ReadMode {
     pub(crate) fn allows_raw_cap(&self) -> bool {
         !matches!(
             self,
-            ReadMode::Lines(_) | ReadMode::Reference | ReadMode::Diff | ReadMode::Raw
+            ReadMode::Lines(_)
+                | ReadMode::Reference
+                | ReadMode::Diff
+                | ReadMode::Raw
+                // Anchored carries per-line anchors the agent edits against;
+                // collapsing to bare bytes on a small file would strip them and
+                // defeat the mode, so it opts out of the #361 raw cap.
+                | ReadMode::Anchored
         )
     }
 
@@ -218,7 +230,9 @@ impl ReadMode {
     /// bare `"lines"`, so that arm was dead and `Lines` stays compressed here.
     #[must_use]
     pub(crate) fn counts_as_compressed(&self) -> bool {
-        !matches!(self, ReadMode::Full | ReadMode::Diff)
+        // `anchored` is lossless (verbatim + anchors), so like `full` it must not
+        // count as a "compressed" read for bounce/quality tracking.
+        !matches!(self, ReadMode::Full | ReadMode::Diff | ReadMode::Anchored)
     }
 }
 
@@ -229,6 +243,7 @@ mod tests {
     /// Every canonical mode string the handler/`render.rs` produce or accept.
     const CANONICAL: &[&str] = &[
         "full",
+        "anchored",
         "raw",
         "signatures",
         "map",
@@ -251,7 +266,7 @@ mod tests {
     }
 
     fn legacy_allows_raw_cap(mode: &str) -> bool {
-        !(mode.starts_with("lines:") || matches!(mode, "reference" | "diff" | "raw"))
+        !(mode.starts_with("lines:") || matches!(mode, "reference" | "diff" | "raw" | "anchored"))
     }
 
     fn legacy_is_lossy_summary(mode: &str) -> bool {
@@ -262,7 +277,7 @@ mod tests {
     }
 
     fn legacy_counts_as_compressed(mode: &str) -> bool {
-        !matches!(mode, "full" | "diff" | "lines")
+        !matches!(mode, "full" | "diff" | "lines" | "anchored")
     }
 
     #[test]

@@ -82,6 +82,12 @@ pub struct EditQualityStore {
     pub pairs: HashMap<String, PairStats>,
     /// Normalized path -> unix time of the compression-correlated edit fail.
     pub pending_escalations: HashMap<String, u64>,
+    /// Normalized path -> unix time of an anchored-edit (`ctx_patch`) staleness
+    /// miss. The next auto read of that path resolves to `anchored` (not `full`),
+    /// so the model gets fresh line anchors to retry by reference (#1008).
+    /// `#[serde(default)]` keeps stores written before anchored editing loadable.
+    #[serde(default)]
+    pub pending_anchored_escalations: HashMap<String, u64>,
     /// All-time counter of consumed escalations (observability).
     #[serde(default)]
     pub escalations_served: u64,
@@ -91,6 +97,22 @@ pub struct EditQualityStore {
 
 fn pair_key(ext: &str, mode: &str) -> String {
     format!("{ext}|{mode}")
+}
+
+/// Evict the oldest entries of a `path -> timestamp` pending map down to
+/// [`MAX_PENDING`]; flips `dirty` when anything was dropped. Shared by the
+/// `full` and `anchored` escalation maps.
+fn evict_pending_to_cap(map: &mut HashMap<String, u64>, dirty: &mut bool) {
+    if map.len() <= MAX_PENDING {
+        return;
+    }
+    let mut items: Vec<(String, u64)> = map.iter().map(|(k, ts)| (k.clone(), *ts)).collect();
+    items.sort_by_key(|(_, ts)| *ts);
+    let drop_n = map.len() - MAX_PENDING;
+    for (key, _) in items.into_iter().take(drop_n) {
+        map.remove(&key);
+    }
+    *dirty = true;
 }
 
 impl EditQualityStore {
@@ -104,12 +126,20 @@ impl EditQualityStore {
     }
 
     fn decay(&mut self, now: u64) {
-        let before = self.pairs.len() + self.pending_escalations.len();
+        let before = self.pairs.len()
+            + self.pending_escalations.len()
+            + self.pending_anchored_escalations.len();
         self.pairs
             .retain(|_, s| now.saturating_sub(s.last_fail_unix) <= DECAY_SECS);
         self.pending_escalations
             .retain(|_, ts| now.saturating_sub(*ts) <= ESCALATION_TTL_SECS);
-        if self.pairs.len() + self.pending_escalations.len() != before {
+        self.pending_anchored_escalations
+            .retain(|_, ts| now.saturating_sub(*ts) <= ESCALATION_TTL_SECS);
+        if self.pairs.len()
+            + self.pending_escalations.len()
+            + self.pending_anchored_escalations.len()
+            != before
+        {
             self.dirty = true;
         }
     }
@@ -128,19 +158,8 @@ impl EditQualityStore {
             }
             self.dirty = true;
         }
-        if self.pending_escalations.len() > MAX_PENDING {
-            let mut items: Vec<(String, u64)> = self
-                .pending_escalations
-                .iter()
-                .map(|(k, ts)| (k.clone(), *ts))
-                .collect();
-            items.sort_by_key(|(_, ts)| *ts);
-            let drop_n = self.pending_escalations.len() - MAX_PENDING;
-            for (key, _) in items.into_iter().take(drop_n) {
-                self.pending_escalations.remove(&key);
-            }
-            self.dirty = true;
-        }
+        evict_pending_to_cap(&mut self.pending_escalations, &mut self.dirty);
+        evict_pending_to_cap(&mut self.pending_anchored_escalations, &mut self.dirty);
     }
 
     pub fn record_failure(&mut self, ext: &str, mode: &str, now: u64) {
@@ -167,14 +186,50 @@ impl EditQualityStore {
 
     /// Consumes the escalation for this path if present and not expired.
     pub fn take_pending_escalation(&mut self, norm_path: &str, now: u64) -> bool {
-        match self.pending_escalations.remove(norm_path) {
+        Self::take_from(
+            &mut self.pending_escalations,
+            norm_path,
+            now,
+            &mut self.escalations_served,
+            &mut self.dirty,
+        )
+    }
+
+    pub fn set_pending_anchored_escalation(&mut self, norm_path: &str, now: u64) {
+        self.pending_anchored_escalations
+            .insert(norm_path.to_string(), now);
+        self.dirty = true;
+        self.evict_to_caps();
+    }
+
+    /// Consumes the anchored escalation for this path if present and not expired.
+    pub fn take_pending_anchored_escalation(&mut self, norm_path: &str, now: u64) -> bool {
+        Self::take_from(
+            &mut self.pending_anchored_escalations,
+            norm_path,
+            now,
+            &mut self.escalations_served,
+            &mut self.dirty,
+        )
+    }
+
+    /// Shared one-shot consume: remove `norm_path`, count it served when still
+    /// within [`ESCALATION_TTL_SECS`], else drop it silently.
+    fn take_from(
+        map: &mut HashMap<String, u64>,
+        norm_path: &str,
+        now: u64,
+        served: &mut u64,
+        dirty: &mut bool,
+    ) -> bool {
+        match map.remove(norm_path) {
             Some(ts) if now.saturating_sub(ts) <= ESCALATION_TTL_SECS => {
-                self.escalations_served += 1;
-                self.dirty = true;
+                *served += 1;
+                *dirty = true;
                 true
             }
             Some(_) => {
-                self.dirty = true;
+                *dirty = true;
                 false
             }
             None => false,
@@ -229,6 +284,40 @@ fn ext_of(path: &str) -> String {
 /// Compression-correlated failures additionally arm the one-shot per-path
 /// escalation so the next auto read of `path` resolves to `full`.
 pub fn record_edit_outcome(path: &str, last_mode: &str, success: bool) {
+    record_outcome_with(path, last_mode, success, Escalation::Full);
+}
+
+/// Like [`record_edit_outcome`], but a failure is a `ctx_patch` anchor-staleness
+/// miss: the recovery is a *fresh anchored read* (the model edits by reference),
+/// so the next auto read escalates to `anchored` instead of `full` (#1008).
+pub fn record_anchored_edit_outcome(path: &str, last_mode: &str, success: bool) {
+    record_outcome_with(path, last_mode, success, Escalation::Anchored);
+}
+
+/// Which read mode the *next* auto read escalates to after a correlated edit
+/// failure. Both are high-signal "the context the model edited against was
+/// wrong" events; they differ only in the recovery view handed back.
+#[derive(Clone, Copy)]
+enum Escalation {
+    /// str_replace miss → give the real body (`full`).
+    Full,
+    /// anchored miss → give fresh line anchors (`anchored`).
+    Anchored,
+}
+
+impl Escalation {
+    /// The read mode that fully neutralizes this failure class, hence the value
+    /// to *not* re-arm against (escalating `full→full` / `anchored→anchored` is a
+    /// no-op).
+    fn target_mode(self) -> &'static str {
+        match self {
+            Escalation::Full => "full",
+            Escalation::Anchored => "anchored",
+        }
+    }
+}
+
+fn record_outcome_with(path: &str, last_mode: &str, success: bool, esc: Escalation) {
     if last_mode.is_empty() {
         return;
     }
@@ -241,17 +330,21 @@ pub fn record_edit_outcome(path: &str, last_mode: &str, success: bool) {
     } else {
         let now = now_unix();
         store.record_failure(&ext, last_mode, now);
-        if last_mode != "full" {
+        if last_mode != esc.target_mode() {
             let norm = crate::core::pathutil::normalize_tool_path(path);
-            store.set_pending_escalation(&norm, now);
-            // Quality signal (#538): edit failures after compressed reads are
-            // the strongest "compressed too much" evidence we have — they also
+            match esc {
+                Escalation::Full => store.set_pending_escalation(&norm, now),
+                Escalation::Anchored => store.set_pending_anchored_escalation(&norm, now),
+            }
+            // Quality signal (#538): edit failures after a stale read are the
+            // strongest "the model's view was wrong" evidence we have — they also
             // penalize the bandit arm that produced the read (#593).
             crate::core::adaptive_thresholds::record_quality_signal(
                 path,
                 crate::core::threshold_learning::QualitySignal::EditFail,
             );
-            // Stigmergy (#540): edit failures mark the path as Stuck.
+            // Stigmergy (#540): edit failures mark the path as Stuck ("context
+            // drifted"), the explicit anchor-miss signal called for in #1008.
             let scent_path = norm.clone();
             std::thread::spawn(move || {
                 crate::core::scent_field::deposit(
@@ -266,13 +359,28 @@ pub fn record_edit_outcome(path: &str, last_mode: &str, success: bool) {
     maybe_flush(&mut store);
 }
 
-/// Process-global: one-shot check-and-consume of the per-path escalation.
+/// Process-global: one-shot check-and-consume of the per-path `full` escalation.
 pub fn take_pending_escalation(path: &str) -> bool {
+    consume_escalation(path, false)
+}
+
+/// Process-global: one-shot check-and-consume of the per-path `anchored`
+/// escalation (armed by [`record_anchored_edit_outcome`]).
+pub fn take_pending_anchored_escalation(path: &str) -> bool {
+    consume_escalation(path, true)
+}
+
+fn consume_escalation(path: &str, anchored: bool) -> bool {
     let norm = crate::core::pathutil::normalize_tool_path(path);
     let Ok(mut store) = global().lock() else {
         return false;
     };
-    let hit = store.take_pending_escalation(&norm, now_unix());
+    let now = now_unix();
+    let hit = if anchored {
+        store.take_pending_anchored_escalation(&norm, now)
+    } else {
+        store.take_pending_escalation(&norm, now)
+    };
     if hit {
         maybe_flush(&mut store);
     }
@@ -311,6 +419,7 @@ pub fn metrics_snapshot() -> serde_json::Value {
     serde_json::json!({
         "pairs": pairs,
         "pending_escalations": store.pending_escalations.len(),
+        "pending_anchored_escalations": store.pending_anchored_escalations.len(),
         "escalations_served": store.escalations_served,
     })
 }
@@ -393,6 +502,45 @@ mod tests {
             "expired escalations are dropped, not served"
         );
         assert_eq!(s.escalations_served, 1);
+    }
+
+    #[test]
+    fn anchored_escalation_is_independent_and_one_shot() {
+        // #1008: the anchored map is separate from the `full` map — arming one
+        // must never consume the other, so str_replace and ctx_patch recoveries
+        // don't cross-talk.
+        let mut s = EditQualityStore::default();
+        s.set_pending_anchored_escalation("src/a.rs", 1000);
+        assert!(
+            !s.take_pending_escalation("src/a.rs", 1100),
+            "anchored arming must not satisfy a full escalation"
+        );
+        assert!(s.take_pending_anchored_escalation("src/a.rs", 1100));
+        assert!(
+            !s.take_pending_anchored_escalation("src/a.rs", 1101),
+            "anchored escalation is one-shot"
+        );
+        assert_eq!(s.escalations_served, 1);
+    }
+
+    #[test]
+    fn anchored_outcome_arms_anchored_not_full() {
+        // A miss after an anchored read arms only the anchored escalation.
+        let mut s = EditQualityStore::default();
+        s.record_failure("rs", "anchored", 1000);
+        s.set_pending_anchored_escalation("src/x.rs", 1000);
+        assert!(s.pending_escalations.is_empty());
+        assert_eq!(s.pending_anchored_escalations.len(), 1);
+    }
+
+    #[test]
+    fn store_without_anchored_field_deserializes() {
+        // Back-compat (#1008): a store written before anchored editing has no
+        // `pending_anchored_escalations` key; `#[serde(default)]` must fill it.
+        let legacy = r#"{"pairs":{},"pending_escalations":{"old.rs":42}}"#;
+        let s: EditQualityStore = serde_json::from_str(legacy).unwrap();
+        assert!(s.pending_anchored_escalations.is_empty());
+        assert!(s.pending_escalations.contains_key("old.rs"));
     }
 
     #[test]

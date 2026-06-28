@@ -18,9 +18,10 @@ impl McpTool for CtxEditTool {
         tool_def(
             "ctx_edit",
             "Search-and-replace edit with race-condition guards — for simple text replacement in a single file.\n\
+             For editing code you've read, prefer ctx_patch (hash-anchored): it never makes you reproduce old text byte-for-byte. Read with ctx_read(mode=\"anchored\") first.\n\
              old_string must be unique unless replace_all=true. create=true writes new files.\n\
              backup creates .bak. MD5/size/mtime pre-guards prevent race conditions.\n\
-             ANTIPATTERN: Do NOT loop on failures — verify file content and adjust old_string, or use native Edit with prior Read.\n\
+             ANTIPATTERN: Do NOT loop on failures — switch to ctx_patch (anchored), or verify file content and adjust old_string.\n\
              For LSP-aware refactoring (rename, move, inline), use ctx_refactor.",
             json!({
                 "type": "object",

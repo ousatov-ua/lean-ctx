@@ -73,7 +73,7 @@ fn map_tool(
     match tool {
         "ctx_shell" | "ctx_execute" => Some(("bash", get("command"))),
         "ctx_read" | "ctx_multi_read" | "ctx_smart_read" => Some(("read", get("path"))),
-        "ctx_edit" => Some(("edit", get("path"))),
+        "ctx_edit" | "ctx_patch" => Some(("edit", get("path"))),
         "ctx_search" => Some(("grep", get("pattern").or_else(|| get("query")))),
         _ => None,
     }
@@ -262,6 +262,8 @@ mod tests {
         assert_eq!(map_tool("ctx_execute", Some(map)).unwrap().0, "bash");
         assert_eq!(map_tool("ctx_read", Some(map)).unwrap().0, "read");
         assert_eq!(map_tool("ctx_edit", Some(map)).unwrap().0, "edit");
+        // ctx_patch (anchored editing) inherits the same "edit" permission key.
+        assert_eq!(map_tool("ctx_patch", Some(map)).unwrap().0, "edit");
         assert_eq!(map_tool("ctx_search", Some(map)).unwrap().0, "grep");
         assert!(map_tool("ctx_knowledge", Some(map)).is_none());
     }

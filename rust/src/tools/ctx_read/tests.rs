@@ -636,6 +636,58 @@ fn resolve_auto_mode_returns_full_for_instruction_files() {
     assert_eq!(mode, "full", ".cursorrules must always be read in full");
 }
 
+/// Phase 1a (epic #1008): `mode=anchored` returns each source line as a
+/// `N:hh|content` anchor the model can edit against via `ctx_patch`, plus a
+/// self-describing legend. End-to-end through the real read pipeline.
+#[test]
+fn anchored_mode_emits_line_hash_anchors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("anc.rs");
+    let p = path.to_string_lossy().to_string();
+    let content = "fn main() {\n    let x = 1;\n}\n";
+    std::fs::write(&path, content).unwrap();
+
+    let mut cache = SessionCache::new();
+    let r = handle_with_task_resolved(&mut cache, &p, "anchored", CrpMode::Off, None);
+    assert_eq!(r.resolved_mode, "anchored");
+    assert!(
+        r.content.contains("[anchored:"),
+        "anchored output must carry the self-describing legend: {}",
+        r.content
+    );
+
+    // Every source line appears as `N:hh|<line>` with the SSOT anchor hash.
+    for (i, line) in content.lines().enumerate() {
+        let n = i + 1;
+        let expected = format!("{n}:{}|{line}", crate::core::anchor::line_hash(line));
+        assert!(
+            r.content.contains(&expected),
+            "missing anchor for line {n}: expected `{expected}` in:\n{}",
+            r.content
+        );
+    }
+}
+
+/// Anchored mode is lossless, so the #361 raw cap must never strip the anchors
+/// on a small file (it opts out of the cap) — the agent always gets editable
+/// anchors back.
+#[test]
+fn anchored_mode_is_not_capped_to_raw_on_small_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tiny.rs");
+    let p = path.to_string_lossy().to_string();
+    std::fs::write(&path, "a\n").unwrap();
+
+    let mut cache = SessionCache::new();
+    let r = handle_with_task_resolved(&mut cache, &p, "anchored", CrpMode::Off, None);
+    assert!(
+        r.content.contains("|a"),
+        "anchored output must keep anchors even on a tiny file: {}",
+        r.content
+    );
+    assert!(r.content.contains("[anchored:"), "legend must survive");
+}
+
 #[test]
 fn raw_mode_returns_exact_file_content() {
     let _lock = crate::core::data_dir::test_env_lock();
@@ -695,6 +747,7 @@ fn process_mode_output_is_byte_stable_across_calls() {
         "entropy",
         "raw",
         "lines:5-20",
+        "anchored",
     ] {
         let run = || {
             render::process_mode(

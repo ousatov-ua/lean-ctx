@@ -55,8 +55,8 @@ We believe in transparent, fact-based comparisons. Every page below includes rea
 | Comparison | Key Distinction | Read More |
 |------------|----------------|-----------|
 | [**lean-ctx vs Repomix**](vs-repomix.md) | Live context layer vs snapshot packer — 99% vs 70% compression | [Full comparison →](vs-repomix.md) |
-| [**lean-ctx vs codebase-memory**](vs-codebase-memory.md) | Broad context layer vs deep code intelligence — 79 tools vs 14 | [Full comparison →](vs-codebase-memory.md) |
-| [**lean-ctx vs claude-context**](vs-claude-context.md) | 100% local vs cloud-dependent — 79 tools vs 3 | [Full comparison →](vs-claude-context.md) |
+| [**lean-ctx vs codebase-memory**](vs-codebase-memory.md) | Broad context layer vs deep code intelligence — 80 tools vs 14 | [Full comparison →](vs-codebase-memory.md) |
+| [**lean-ctx vs claude-context**](vs-claude-context.md) | 100% local vs cloud-dependent — 80 tools vs 3 | [Full comparison →](vs-claude-context.md) |
 | [**lean-ctx vs Aider repo-map**](vs-aider-repomap.md) | MCP-available vs CLI-locked — PageRank for 31 agents | [Full comparison →](vs-aider-repomap.md) |
 | [**lean-ctx vs Mem0**](vs-mem0.md) | Code-specific vs general-purpose — local vs cloud | [Full comparison →](vs-mem0.md) |
 | [**lean-ctx vs The Token Company**](vs-token-company.md) | Local deterministic code compression vs cloud ML prose compression | [Full comparison →](vs-token-company.md) |

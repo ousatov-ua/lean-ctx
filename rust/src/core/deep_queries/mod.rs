@@ -62,8 +62,11 @@ fn analyze_with_tree_sitter(content: &str, ext: &str) -> Option<DeepAnalysis> {
     })
 }
 
+/// Map a file extension to its tree-sitter [`Language`], or `None` when
+/// unsupported. `pub(crate)` so the post-edit syntax gate
+/// ([`crate::core::syntax_validate`]) reuses the exact same grammar set (#1008).
 #[cfg(feature = "tree-sitter")]
-fn get_language(ext: &str) -> Option<Language> {
+pub(crate) fn get_language(ext: &str) -> Option<Language> {
     match ext {
         "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
         "ts" | "tsx" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),

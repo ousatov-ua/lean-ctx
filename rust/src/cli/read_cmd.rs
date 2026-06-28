@@ -426,6 +426,7 @@ pub fn cmd_grep(args: &[String]) {
         crate::tools::CrpMode::effective(),
         true,
         roles::active_role().io.allow_secret_paths,
+        false,
     );
     let out = outcome.text;
     println!("{out}");

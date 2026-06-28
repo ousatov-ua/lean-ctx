@@ -60,8 +60,9 @@ impl McpTool for CtxSearchTool {
             "ctx_search",
             "Search code; `action` picks the engine. regex (default): exact pattern, `pattern`\n\
              required, include='*.rs', paths=[..] multi-root. semantic: by meaning (BM25+embeddings),\n\
-             `query`, mode=bm25|dense|hybrid. symbol: one symbol's body by `name` (AST-precise),\n\
-             file/kind narrow. reindex / find_related(file_path,line). For end-to-end understanding,\n\
+             `query`, mode=bm25|dense|hybrid.              symbol: one symbol's body by `name` (AST-precise),\n\
+             file/kind narrow. reindex / find_related(file_path,line).\n\
+             anchored=true tags hits path:line:hh for ctx_patch. For end-to-end understanding,\n\
              use ctx_compose FIRST.",
             json!({
                 "type": "object",
@@ -80,6 +81,7 @@ impl McpTool for CtxSearchTool {
                         "description": "Multi-root regex"
                     },
                     "include": { "type": "string", "description": "Glob: *.ts, src/**/*.rs" },
+                    "anchored": { "type": "boolean", "description": "Tag hits path:line:hh for ctx_patch (regex action)" },
                     "max_results": { "type": "integer" },
                     "top_k": { "type": "integer" },
                     "mode": { "type": "string", "enum": ["bm25", "dense", "hybrid"] },
@@ -119,6 +121,8 @@ fn handle_regex(args: &Map<String, Value>, ctx: &ToolContext) -> Result<ToolOutp
         get_str(args, "include").or_else(|| get_str(args, "ext").map(|e| ext_to_include(&e)));
     let max = (get_int(args, "max_results").unwrap_or(20) as usize).min(500);
     let no_gitignore = get_bool(args, "ignore_gitignore").unwrap_or(false);
+    // #1008: opt-in N:hh line anchors on each hit for direct ctx_patch edits.
+    let anchored = get_bool(args, "anchored").unwrap_or(false);
 
     if no_gitignore
         && let Err(e) = crate::core::io_boundary::ensure_ignore_gitignore_allowed("ctx_search")
@@ -139,6 +143,7 @@ fn handle_regex(args: &Map<String, Value>, ctx: &ToolContext) -> Result<ToolOutp
             crp,
             respect,
             allow_secret_paths,
+            anchored,
         );
     }
 
@@ -159,6 +164,7 @@ fn handle_regex(args: &Map<String, Value>, ctx: &ToolContext) -> Result<ToolOutp
                     crp,
                     respect,
                     allow_secret_paths,
+                    anchored,
                 )
             }))
             .ok()
@@ -344,6 +350,7 @@ fn semantic_output(text: String) -> ToolOutput {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn search_single(
     pattern: &str,
     path: &str,
@@ -352,6 +359,7 @@ fn search_single(
     crp: crate::tools::CrpMode,
     respect_gitignore: bool,
     allow_secret_paths: bool,
+    anchored: bool,
 ) -> Result<ToolOutput, ErrorData> {
     let _mode_guard = crate::core::savings_footer::ModeGuard::new("search");
 
@@ -365,6 +373,7 @@ fn search_single(
                 crp,
                 respect_gitignore,
                 allow_secret_paths,
+                anchored,
             )
         }));
         match result {
