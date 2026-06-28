@@ -723,12 +723,12 @@ pub fn handle_redirect() {
 /// Safe because `mark_hook_environment()` sets LEAN_CTX_HOOK_CHILD=1 which
 /// prevents daemon auto-start. The subprocess uses the fast local-only path.
 fn redirect_read(tool_input: Option<&serde_json::Value>) {
-    let path = tool_input
-        .and_then(|ti| ti.get("path"))
-        .and_then(|p| p.as_str())
-        .unwrap_or("");
-
-    if path.is_empty() {
+    // Hosts disagree on the path field: Cursor/Claude send `file_path`, some MCP
+    // schemas use `path`. Resolve across all of them and remember WHICH field
+    // matched so the redirect rewrites the same field the host reads back.
+    let Some((path_field, path)) =
+        payload::resolve_path_field(tool_input, payload::READ_PATH_FIELDS)
+    else {
         debug_log::log_hook_decision(
             "redirect",
             "Read",
@@ -738,13 +738,13 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) {
         );
         print!("{}", build_dual_allow_output());
         return;
-    }
-    if should_passthrough(path) {
+    };
+    if should_passthrough(&path) {
         debug_log::log_hook_decision(
             "redirect",
             "Read",
             Route::Native,
-            path,
+            &path,
             "passthrough path (sensitive/binary/excluded)",
         );
         print!("{}", build_dual_allow_output());
@@ -760,10 +760,10 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) {
     }
 
     let binary = resolve_binary();
-    let temp_path = redirect_temp_path(path);
+    let temp_path = redirect_temp_path(&path);
 
     if let Some(mut output) =
-        run_with_timeout(&binary, &["read", path], REDIRECT_SUBPROCESS_TIMEOUT)
+        run_with_timeout(&binary, &["read", &path], REDIRECT_SUBPROCESS_TIMEOUT)
     {
         if shadow {
             let header = format!(
@@ -779,11 +779,14 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) {
                 "redirect",
                 "Read",
                 Route::LeanCtx,
-                path,
+                &path,
                 "redirected to ctx_read",
             );
-            print!("{}", build_redirect_output(tool_input, "path", temp_str));
-            log_shadow_intercept("Read", path);
+            print!(
+                "{}",
+                build_redirect_output(tool_input, path_field, temp_str)
+            );
+            log_shadow_intercept("Read", &path);
             return;
         }
     }
@@ -792,7 +795,7 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) {
         "redirect",
         "Read",
         Route::Native,
-        path,
+        &path,
         "lean-ctx read produced no output",
     );
     print!("{}", build_dual_allow_output());

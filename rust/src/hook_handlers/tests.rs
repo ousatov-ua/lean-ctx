@@ -490,6 +490,35 @@ fn redirect_output_carries_copilot_modified_args() {
     assert_eq!(p["updated_input"]["path"], "/tmp/x.lctx");
 }
 
+#[test]
+fn read_redirect_resolves_and_rewrites_cursor_file_path() {
+    // The Cursor/Claude Read fix end-to-end: the path arrives in `file_path`, so
+    // the handler must (1) resolve it via READ_PATH_FIELDS and (2) echo the SAME
+    // field back in updated_input — otherwise Cursor keeps reading the original
+    // file instead of the lean-ctx temp file. Before the fix the handler read
+    // `path`, found nothing, and every native Read fell back to the editor.
+    let tool_input = serde_json::json!({ "file_path": "/repo/src/main.rs" });
+
+    let (field, path) = payload::resolve_path_field(Some(&tool_input), payload::READ_PATH_FIELDS)
+        .expect("Cursor file_path must resolve");
+    assert_eq!(field, "file_path");
+    assert_eq!(path, "/repo/src/main.rs");
+
+    let out = build_redirect_output(Some(&tool_input), field, "/tmp/x.lctx");
+    let p: serde_json::Value = serde_json::from_str(&out).expect("valid hook JSON");
+    // The redirect rewrites file_path (what Cursor reads), not the absent `path`.
+    assert_eq!(p["updated_input"]["file_path"], "/tmp/x.lctx");
+    assert_eq!(
+        p["hookSpecificOutput"]["updatedInput"]["file_path"],
+        "/tmp/x.lctx"
+    );
+    assert_eq!(p["modifiedArgs"]["file_path"], "/tmp/x.lctx");
+    assert!(
+        p["updated_input"].get("path").is_none(),
+        "must not invent a `path` field Cursor never sent"
+    );
+}
+
 // --- build_rewrite_compound: wrap-whole for gate-clean compounds (#589) ---
 // A gate-clean compound is wrapped ENTIRELY in one `lean-ctx -c "…"`: the
 // pipe/chain runs inside lean-ctx's profile-free shell (fixes the Windows

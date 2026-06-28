@@ -49,6 +49,35 @@ pub(crate) fn resolve_command(v: &Value, args: Option<&Value>) -> Option<String>
         .map(str::to_string)
 }
 
+/// Field names hosts use to carry a single file path in read-style tool input,
+/// in priority order. Cursor and Claude Code send `file_path`; some MCP / older
+/// schemas use `path`; Cursor's edit/apply tools use `target_file`.
+///
+/// The redirect handler previously read only `path`, so every Cursor/Claude
+/// native `Read` resolved to an empty path ("no path in tool input") and fell
+/// back to the editor's own tool — the single biggest interception gap, since
+/// `Read` is the hottest native tool.
+pub(crate) const READ_PATH_FIELDS: &[&str] = &["file_path", "path", "target_file"];
+
+/// Resolve the `(field_name, value)` of the first present, non-empty string
+/// field in `candidates`.
+///
+/// Returning the *field name* (not just the value) lets the redirect echo the
+/// SAME field back in `updated_input`, so the host swaps the path it actually
+/// reads from — Cursor reads `file_path`, so writing `path` would be ignored.
+pub(crate) fn resolve_path_field<'a>(
+    args: Option<&Value>,
+    candidates: &[&'a str],
+) -> Option<(&'a str, String)> {
+    let obj = args?;
+    candidates.iter().find_map(|&field| {
+        obj.get(field)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| (field, s.to_string()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +148,59 @@ mod tests {
         // Top-level fallback when args carry no command.
         let v2 = json!({ "toolName": "bash", "command": "pwd" });
         assert_eq!(resolve_command(&v2, None).as_deref(), Some("pwd"));
+    }
+
+    #[test]
+    fn resolve_path_field_reads_cursor_file_path() {
+        // The real Cursor/Claude Read shape: the path lives in `file_path`, which
+        // the redirect handler must recognise (the bug: it only read `path`).
+        let args = json!({ "file_path": "/repo/src/main.rs" });
+        assert_eq!(
+            resolve_path_field(Some(&args), READ_PATH_FIELDS),
+            Some(("file_path", "/repo/src/main.rs".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_path_field_reads_legacy_path() {
+        let args = json!({ "path": "src/lib.rs" });
+        assert_eq!(
+            resolve_path_field(Some(&args), READ_PATH_FIELDS),
+            Some(("path", "src/lib.rs".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_path_field_reads_target_file() {
+        let args = json!({ "target_file": "Cargo.toml" });
+        assert_eq!(
+            resolve_path_field(Some(&args), READ_PATH_FIELDS),
+            Some(("target_file", "Cargo.toml".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_path_field_prefers_file_path_over_path() {
+        // Priority order matters: the returned field is echoed back in
+        // updated_input, so it must match what the host actually reads.
+        let args = json!({ "path": "/legacy", "file_path": "/cursor" });
+        assert_eq!(
+            resolve_path_field(Some(&args), READ_PATH_FIELDS),
+            Some(("file_path", "/cursor".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_path_field_skips_empty_and_missing() {
+        assert_eq!(resolve_path_field(None, READ_PATH_FIELDS), None);
+        assert_eq!(
+            resolve_path_field(Some(&json!({ "other": "x" })), READ_PATH_FIELDS),
+            None
+        );
+        // An empty string is not a usable path → keep scanning / None.
+        assert_eq!(
+            resolve_path_field(Some(&json!({ "file_path": "" })), READ_PATH_FIELDS),
+            None
+        );
     }
 }
