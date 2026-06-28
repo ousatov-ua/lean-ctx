@@ -943,11 +943,16 @@ fn redirect_grep(tool_input: Option<&serde_json::Value>) -> String {
 ///
 /// Glob differs from Read/Grep: its result is a list of paths matched against
 /// the filesystem, not file content, so `build_redirect_output` (which swaps a
-/// field to a temp file the host then *reads*) cannot carry it. We therefore
-/// only act when shadow or harden mode is active — warm lean-ctx's own glob
-/// path (parity with `ctx_glob`) and record the intercept in shadow.log — then
-/// allow the native call through unchanged. Outside those modes there is nothing
-/// to gain, so we pass through immediately without spawning a subprocess.
+/// field to a temp file the host then *reads*) cannot carry it.
+///
+/// Won't-fix (#1033): a true Read/Grep-style redirect is impossible *by
+/// construction*, not merely unimplemented. The host consumes the path list
+/// directly and never re-reads a file we could substitute, so there is no
+/// redirectable result to rewrite. We therefore only act when shadow or harden
+/// mode is active — warm lean-ctx's own glob path (parity with `ctx_glob`) and
+/// record the intercept in shadow.log — then allow the native call through
+/// unchanged. Outside those modes there is nothing to gain, so we pass through
+/// immediately without spawning a subprocess.
 fn redirect_glob(tool_input: Option<&serde_json::Value>) -> String {
     let allow = build_dual_allow_output();
     let shadow = is_shadow_mode_active();
