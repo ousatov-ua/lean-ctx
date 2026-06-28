@@ -627,6 +627,7 @@ pub fn init_posix(is_zsh: bool, binary: &str) {
         qprintln!("  Binary: {binary}");
 
         write_env_sh_for_containers(&hook_content);
+        write_lc_path_shims(binary);
         print_docker_env_hints(is_zsh);
 
         let _ = hook_path;
@@ -754,6 +755,71 @@ fi
     }
 }
 
+/// Directory for the `_lc`/`_lc_compress` PATH shims: the directory of the
+/// running `lean-ctx` executable, which is necessarily on `PATH` (the hook
+/// resolves the binary from there).
+fn lc_shim_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+}
+
+/// Body of a `_lc`/`_lc_compress` PATH shim. Mirrors the hook's shell function
+/// of the same name: honor the disable switches, pass through raw for a
+/// non-TTY non-agent shell, otherwise route through the binary and fall back to
+/// running the command directly if the binary itself cannot exec (126/127).
+fn shim_script(name: &str, binary: &str, flag: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # lean-ctx PATH fallback for the `{name}` shell function -- DO NOT EDIT.\n\
+         # Shell resolves alias -> function -> PATH, so the hook's shell function\n\
+         # shadows this whenever it is loaded (identical behavior there). This runs\n\
+         # only where the function is absent: non-interactive subshells, scripts,\n\
+         # xargs/find -exec, a pipeline's outer shell, and agent harnesses that\n\
+         # snapshot+replay the shell and drop the function but keep the aliases\n\
+         # that call it. Without it those contexts fail `{name}: command not found`.\n\
+         if [ -n \"${{LEAN_CTX_DISABLED:-}}\" ] || [ -n \"${{LEAN_CTX_NO_HOOK:-}}\" ]; then\n\
+         \texec \"$@\"\n\
+         fi\n\
+         if [ ! -t 1 ] && [ -z \"${{LEAN_CTX_AGENT:-}}\" ] && [ -z \"${{CODEX_CLI_SESSION:-}}\" ] \\\n\
+         \t&& [ -z \"${{CLAUDECODE:-}}\" ] && [ -z \"${{CODEBUDDY:-}}\" ] && [ -z \"${{GEMINI_SESSION:-}}\" ]; then\n\
+         \texec \"$@\"\n\
+         fi\n\
+         '{binary}' {flag} \"$@\"\n\
+         _lc_rc=$?\n\
+         if [ \"$_lc_rc\" -eq 127 ] || [ \"$_lc_rc\" -eq 126 ]; then\n\
+         \texec \"$@\"\n\
+         fi\n\
+         exit \"$_lc_rc\"\n"
+    )
+}
+
+/// Write the `_lc`/`_lc_compress` PATH shims into `dir` (executable on Unix).
+fn write_lc_path_shims_in(dir: &std::path::Path, binary: &str) {
+    for (name, flag) in [("_lc", "-t"), ("_lc_compress", "-c")] {
+        let path = dir.join(name);
+        if let Err(e) = std::fs::write(&path, shim_script(name, binary, flag)) {
+            tracing::warn!("could not write shim {}: {e}", path.display());
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+/// Install `_lc`/`_lc_compress` fallback executables on `PATH` so aliases never
+/// break when the shell function is unavailable (see [`shim_script`]).
+/// Self-contained: depends on no env wiring (BASH_ENV/env.sh) or snapshot
+/// fidelity, and the same-named function shadows it where the hook is loaded.
+fn write_lc_path_shims(binary: &str) {
+    if let Some(dir) = lc_shim_dir() {
+        write_lc_path_shims_in(&dir, binary);
+    }
+}
+
 fn print_docker_env_hints(is_zsh: bool) {
     if is_zsh || !crate::shell::is_container() {
         return;
@@ -844,6 +910,31 @@ fn remove_lean_ctx_block_legacy(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lc_shim_script_is_self_contained_fallback() {
+        let s = shim_script("_lc", "/usr/bin/lean-ctx", "-t");
+        assert!(s.starts_with("#!/bin/sh\n"), "needs a shebang: {s}");
+        assert!(s.contains("'/usr/bin/lean-ctx' -t \"$@\""), "{s}");
+        assert!(s.contains("exec \"$@\""), "{s}");
+        assert!(s.contains("CLAUDECODE"), "{s}");
+        assert!(s.contains("LEAN_CTX_DISABLED"), "{s}");
+    }
+
+    #[test]
+    fn lc_compress_shim_uses_compress_flag() {
+        let s = shim_script("_lc_compress", "/usr/bin/lean-ctx", "-c");
+        assert!(s.contains("'/usr/bin/lean-ctx' -c \"$@\""), "{s}");
+    }
+
+    #[test]
+    fn write_lc_path_shims_writes_both_executables() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_lc_path_shims_in(tmp.path(), "/usr/bin/lean-ctx");
+        for name in ["_lc", "_lc_compress"] {
+            assert!(tmp.path().join(name).exists(), "missing shim {name}");
+        }
+    }
 
     #[test]
     fn test_remove_lean_ctx_block_posix() {
