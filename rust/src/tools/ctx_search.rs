@@ -131,6 +131,9 @@ pub fn handle(
     let mut files_skipped_boundary = 0u32;
     let mut files_skipped_special = 0u32;
     let mut deadline_hit = false;
+    // Set when any hit gained an `∈name@Lstart` enclosing tag, so the
+    // self-describing legend is emitted only when it is actually needed (#580).
+    let mut any_enclosing = false;
 
     // Fast path: a warm resident trigram index narrows the candidate files in
     // memory, eliminating the per-call directory walk + full-corpus read. The
@@ -262,6 +265,9 @@ pub fn handle(
             };
 
         files_searched += 1;
+        // Enclosing-symbol spans for this file, computed lazily on the first hit
+        // (never for non-matching files) and reused for every later hit here.
+        let mut file_enclosing: Option<EnclosingIndex> = None;
 
         for (i, line) in content.lines().enumerate() {
             if re.is_match(line) {
@@ -278,18 +284,30 @@ pub fn handle(
                     shown.truncate(shown.floor_char_boundary(MAX_MATCH_LINE_WIDTH));
                     shown.push_str("...");
                 }
+                // grep-ast enrichment (#608): name the enclosing symbol + its
+                // handle anchor so the hit is actionable without a follow-up
+                // read. Appended after `shown`, so the `path:line content` prefix
+                // every caller/test relies on is untouched.
+                let tag = file_enclosing
+                    .get_or_insert_with(|| EnclosingIndex::for_file(path, content.as_ref()))
+                    .tag_for(i + 1);
+                if tag.is_some() {
+                    any_enclosing = true;
+                }
+                let tag = tag.unwrap_or_default();
                 // The anchor hash is over the RAW line (matching ctx_read/ctx_patch
                 // which both hash `content.lines()`), never the trimmed/truncated
                 // display text — otherwise ctx_patch would always see a mismatch.
                 if anchored {
                     matches.push(format!(
-                        "{short_path}:{}:{} {}",
+                        "{short_path}:{}:{} {}{}",
                         i + 1,
                         crate::core::anchor::line_hash(line),
-                        shown
+                        shown,
+                        tag
                     ));
                 } else {
-                    matches.push(format!("{short_path}:{} {}", i + 1, shown));
+                    matches.push(format!("{short_path}:{} {}{}", i + 1, shown, tag));
                 }
                 if matches.len() >= max_results {
                     break;
@@ -357,6 +375,13 @@ pub fn handle(
     // Self-describing output (GL #580): the anchor notation ships its own legend.
     if anchored {
         result.push_str("[anchored: path:line:hh → edit via ctx_patch]\n");
+    }
+    // Self-describing output (GL #580 / #608): explain the `∈` enclosing tag and
+    // how to turn it into a handle. Emitted only when at least one hit carries it.
+    if any_enclosing {
+        result.push_str(
+            "[∈ enclosing symbol → ctx_search(action=symbol, handle=\"path#name@Lstart\")]\n",
+        );
     }
     result.push_str(&matches.join("\n"));
 
@@ -480,6 +505,50 @@ pub(crate) fn is_generated_file(path: &Path) -> bool {
         || name.ends_with(".d.ts")
         || name.ends_with(".js.map")
         || name.ends_with(".css.map")
+}
+
+/// Per-file map from a line number to its narrowest enclosing symbol, built
+/// once per matched file from the signature spans. Powers the `∈name@Lstart`
+/// tag on each `ctx_search` hit (grep-ast pattern): the agent sees which
+/// function/class a match lives in — and the handle to fetch it — without a
+/// follow-up read. Tree-sitter-gated by construction: the regex-fallback
+/// extractor yields single-line spans (`end == start`), which are filtered out
+/// here, so a non-tree-sitter build emits byte-identical output (#498).
+struct EnclosingIndex {
+    /// `(start_line, end_line, name)` for multi-line symbols, sorted by start.
+    spans: Vec<(usize, usize, String)>,
+}
+
+impl EnclosingIndex {
+    fn for_file(path: &Path, content: &str) -> Self {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let mut spans: Vec<(usize, usize, String)> =
+            crate::core::signatures::extract_signatures(content, ext)
+                .into_iter()
+                .filter_map(|s| match (s.start_line, s.end_line) {
+                    (Some(a), Some(b)) if b > a => Some((a, b, s.name)),
+                    _ => None,
+                })
+                .collect();
+        spans.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.cmp(&y.1)));
+        Self { spans }
+    }
+
+    /// The narrowest span containing `line`, rendered as the compact
+    /// ` ∈name@Lstart` tag, or `None` when no multi-line symbol encloses it.
+    fn tag_for(&self, line: usize) -> Option<String> {
+        let mut best: Option<&(usize, usize, String)> = None;
+        for sp in &self.spans {
+            if line >= sp.0 && line <= sp.1 {
+                match best {
+                    None => best = Some(sp),
+                    Some(b) if (sp.1 - sp.0) < (b.1 - b.0) => best = Some(sp),
+                    _ => {}
+                }
+            }
+        }
+        best.map(|(start, _, name)| format!(" ∈{name}@L{start}"))
+    }
 }
 
 /// Upper bound on the number of globs a single `include` may expand to, so a
@@ -709,6 +778,58 @@ mod tests {
             anchored.contains(&format!("a.rs:1:{hh} ")),
             "anchored hit must carry the line hash: {anchored}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "tree-sitter")]
+    fn hits_inside_multiline_symbols_carry_enclosing_tag() {
+        // #608: a hit inside a multi-line function names its enclosing symbol +
+        // the handle anchor, and the output ships a self-describing legend.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("a.rs"),
+            "fn outer() {\n    let needle = 1;\n    needle\n}\nfn tiny() {}\n",
+        )
+        .unwrap();
+        let out = handle(
+            "needle",
+            dir.path().to_string_lossy().as_ref(),
+            Some("*.rs"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+            false,
+        )
+        .text;
+        assert!(
+            out.contains("∈outer@L1"),
+            "hit must name its enclosing fn: {out}"
+        );
+        assert!(
+            out.contains("[∈ enclosing symbol"),
+            "self-describing legend must be present: {out}"
+        );
+    }
+
+    #[test]
+    fn single_line_symbols_get_no_enclosing_tag() {
+        // #498/#608: a match whose only enclosing symbol is single-line gets no
+        // tag, so the default output stays byte-identical (no `∈`, no legend).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "fn one_liner() {}\n").unwrap();
+        let out = handle(
+            "one_liner",
+            dir.path().to_string_lossy().as_ref(),
+            Some("*.rs"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+            false,
+        )
+        .text;
+        assert!(!out.contains('∈'), "single-line symbol → no tag: {out}");
     }
 
     #[test]
