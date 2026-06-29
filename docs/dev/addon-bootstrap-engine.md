@@ -1,9 +1,10 @@
-# Addon Bootstrap Engine — design (Phase 2)
+# Addon Bootstrap Engine — Phase 2 (implemented)
 
-> Status: **design / not implemented**. This document specifies the next step
-> after the Phase-1 "add == install" work for ephemeral runners. It is the
-> reference for the GitLab epic *Addon Bootstrap Engine* (`root/lean-ctx#1105`,
-> subtasks `#1106`–`#1110`).
+> Status: **implemented** in `rust/src/core/addons/bootstrap.rs` (+ manifest,
+> policy, store, CLI wiring). This document is the design of record for the
+> GitLab epic *Addon Bootstrap Engine* (`root/lean-ctx#1105`, subtasks
+> `#1106`–`#1110`). Where the shipped behaviour refines the original plan it is
+> noted inline.
 
 ## Problem
 
@@ -47,35 +48,50 @@ as the rest of the addon system.
 ```toml
 [install]
 manager = "uv"                     # one of: pip | uv | cargo | npm | brew
-package = "headroom-ai[all]"       # the package spec the manager understands
-version = "1.4.2"                  # MANDATORY exact pin (no ranges, no "latest")
-verify  = ["headroom", "--version"]# argv run after install; non-zero ⇒ install failed
-# bin = "headroom"                 # optional: resolved binary the [mcp] command expects
+package = "headroom-ai[mcp]"       # the package spec the manager understands
+version = "0.27.0"                 # MANDATORY exact pin (no ranges, no "latest")
+bin     = "headroom"               # binary the [mcp] command expects (PATH idempotency)
+# verify = ["headroom", "--version"]# optional argv probe; exit 0 ⇒ already installed
 ```
 
-Rules (enforced by the validator, see *Security gates*):
-- `manager` ∈ a fixed allowlist. Each manager maps to a **fixed argv template**
-  the engine owns — the manifest never supplies raw shell.
-- `version` is required and must be an exact pin; reuse the `is_pinned`
-  heuristic from `trust.rs`.
-- `verify` is an **argv array** (never a shell string) and must exit zero.
+Rules (enforced by `AddonInstall::validate()`, called from `manifest.validate()`):
+- `manager` ∈ a fixed allowlist (`uv`/`pip`/`cargo`/`npm`/`brew`). Each manager
+  maps to a **fixed argv template** the engine owns — the manifest never supplies
+  raw shell.
+- `version` is required and must be an exact pin (empty / `latest` / `*` are
+  rejected).
+- `package`, `version`, `bin` and every `verify` element are rejected if they
+  contain shell metacharacters (`| ; & $ \` > <`, newlines) — defence-in-depth,
+  since the engine never uses a shell.
+- **Idempotency check** (shipped refinement): `verify` is *optional*. With no
+  `verify`, the engine checks whether `bin` resolves on `PATH`; `verify` is an
+  escape hatch (argv, exit 0 ⇒ installed) for tools whose presence needs a
+  deeper probe.
 - The block is only meaningful together with a runnable `[mcp]` block whose
   `command` is produced by the install (e.g. `headroom`).
 
 ### Manager → argv templates (engine-owned)
 
-| `manager` | install argv (conceptual)                       | uninstall argv                  |
-|-----------|-------------------------------------------------|---------------------------------|
-| `uv`      | `uv tool install "{package}=={version}"`        | `uv tool uninstall {bin}`       |
-| `pip`     | `pip install --user "{package}=={version}"`     | `pip uninstall -y {package}`    |
-| `cargo`   | `cargo install {package} --version {version}`   | `cargo uninstall {bin}`         |
-| `npm`     | `npm i -g "{package}@{version}"`                | `npm rm -g {package}`           |
-| `brew`    | `brew install {package}` (+ pin)                | `brew uninstall {package}`      |
+| `manager` | install argv                                     | uninstall argv                   |
+|-----------|--------------------------------------------------|----------------------------------|
+| `uv`      | `uv tool install {package}=={version}`           | `uv tool uninstall {base}`       |
+| `pip`     | `pip install --user {package}=={version}`        | `pip uninstall -y {base}`        |
+| `cargo`   | `cargo install {base} --version {version}`       | `cargo uninstall {base}`         |
+| `npm`     | `npm install -g {package}@{version}`             | `npm rm -g {base}`               |
+| `brew`    | `brew install {package}` (formula carries the pin, e.g. `node@22`) | `brew uninstall {base}` |
 
-The manifest chooses a manager + package + pin; it **cannot** influence the flags
-or inject extra argv. This is what keeps the surface auditable.
+`{base}` is `{package}` with extras and any inline version stripped
+(`headroom-ai[mcp]` → `headroom-ai`), keeping an npm scope intact
+(`@scope/pkg`). The manifest chooses a manager + package + pin; it **cannot**
+influence the flags or inject extra argv. Every value is passed as a *discrete*
+argv element via `std::process::Command` — no shell, no interpolation.
 
-## Install lifecycle (in `addons/install.rs`)
+## Install lifecycle
+
+The executor lives in `addons/bootstrap.rs` (`ensure_installed` / `uninstall`)
+and is orchestrated by the CLI (`cli/addon_cmd.rs`) *after* consent and *before*
+the health probe. The core `addons/install.rs` stays pure — it only persists the
+receipt — so its unit tests never spawn a process.
 
 ```mermaid
 flowchart TD
@@ -91,62 +107,78 @@ flowchart TD
   verify -- fail --> rollback["best-effort uninstall + abort, no wiring"]
 ```
 
-- **Idempotency**: run `verify` *first*; if it already succeeds at the pinned
-  version, skip the install and just wire. Re-running `add` is safe.
-- **Receipt**: extend `<data_dir>/addons/installed.json` with an `install`
-  record (manager, package, version, resolved bin, timestamp-free/contentful so
-  it stays determinism-friendly per #498). `remove` reads it to uninstall.
+- **Idempotency**: check presence *first* (`verify` argv, else `bin` on `PATH`);
+  if already satisfied, skip the manager entirely and just wire. Re-running `add`
+  is safe and reports `Already installed — skipped`.
+- **Receipt**: `<data_dir>/addons/installed.json` carries an `install` record
+  (manager, package, version, bin) — content-only, no timestamps, so it stays
+  determinism-friendly (#498). `remove` reads it to uninstall.
 - **Uninstall**: `addon remove` runs the manager's uninstall argv for packages
   *this engine installed* (tracked by receipt) — never something the user had
-  already. Shared/global packages: only remove if the receipt owns them.
-- **Failure**: any non-zero step aborts the whole `add` and leaves no
-  `[[gateway.servers]]` entry; partial installs get a best-effort rollback.
+  already. It is best-effort: a failed uninstall logs a note but never blocks the
+  unwire that already succeeded.
+- **Failure**: a non-zero manager exit aborts `add` before anything is wired. A
+  clean install whose `bin` is not yet on `PATH` is a non-fatal warning (a PATH
+  setup issue, not a failed install), and the subsequent health probe still
+  guards a truly broken wiring.
 
-## Security gates (extend `addons/audit.rs` + `trust.rs`)
+## Security gates
 
-New findings, mirroring the existing wiring audit:
+The bootstrap surface is gated at four layers (shipped):
 
-- `bootstrap_unpinned` (**danger**): `[install].version` missing or not an exact
-  pin → blocks installable/verified.
-- `bootstrap_unknown_manager` (**danger**): `manager` not in the allowlist.
-- `bootstrap_shell_meta` (**danger**): shell metacharacters in `package` /
-  `verify` / `bin` → reject (defends against `package = "x; rm -rf ~"`).
-- `bootstrap_network` capability coherence: a `[install]` block inherently needs
-  outbound network + a writable package cache. If the addon declares
-  `[capabilities] network = "none"`, flag `cap_net_underdeclared` exactly like
-  the runner case in `wiring_uses_network`.
-- Consent: the `add` preview prints the **exact** install + uninstall argv it
-  will run, the manager, the package and the pin — before doing anything — and
-  requires the same yes/no (`--yes` to skip in CI).
-- Policy floor: honour `addons.policy` / `block_risky`; add
-  `addons.allow_bootstrap` (default keeps current behaviour) so teams can forbid
-  any package-manager execution by policy.
+- **Structural validation** (`AddonInstall::validate()`, hard error): unknown
+  manager, missing/floating version, or shell metacharacters in
+  `package`/`version`/`bin`/`verify` reject the manifest. Because it runs from
+  `manifest.validate()`, every path is covered — `addon add`, `addon audit`,
+  `from_path`, and the registry validator (so a bad block fails CI's
+  `bundled_registry_passes_security_validator`).
+- **Capability coherence**: a declared `[install]` block makes
+  `trust::wiring_uses_network` return `true`, so an addon that *also* declares
+  `[capabilities] network = "none"` trips the existing `cap_net_underdeclared`
+  audit — same gate as the `npx`/`uvx` runner case.
+- **Consent**: the `add` preview prints the **exact** install + uninstall argv,
+  the manager, the package and the pin *before anything runs*, then requires the
+  standard yes/no (`--yes` to skip in CI). `add` itself is the user's explicit,
+  consented action.
+- **Policy floor**: `addons.allow_bootstrap` (global-only). Default **on** — the
+  whole point is that `add` installs — but a team that forbids local
+  package-manager execution sets it to `false`, and `policy::gate` refuses any
+  `[install]` addon before a single command runs.
 
-## What this unlocks
+## What this unlocks — and the honest migration status
 
-Once shipped, these flip from *listed* to *installable on add* (each gains an
-`[install]` block + keeps its existing `[mcp]` + `integration` slug):
+The engine is generic across all five managers. Registry entries flip to
+install-on-add **only when the tool actually ships a clean, pinned,
+runnable-out-of-the-box MCP server** — never with fabricated wiring.
 
-- **Headroom** → `manager = "uv"`, `compression` adapter.
-- **Graphify** → `manager = "uv"` (+ a documented `graph.json` build step),
-  `code-graph` adapter.
-- **Cognee**, **Letta** → `memory` adapter (Letta still needs a running server;
-  the receipt installs the client, the user runs the server).
+| Tool      | Status        | Why |
+|-----------|---------------|-----|
+| **Headroom** | ✅ migrated  | `uv tool install "headroom-ai[mcp]"` (pinned `0.27.0`) → `headroom mcp serve`; a local, secret-free stdio MCP server. The flagship install-on-add. |
+| Graphify  | listed        | Package installs cleanly (`graphifyy[mcp]`), but its MCP server needs a **pre-built `graph.json`** (`python -m graphify.serve graph.json`) — no out-of-the-box server to probe. |
+| Cognee    | listed        | MCP server needs a **repo clone + `uv sync`** (upstream issue #1815); no working pinned one-liner yet. |
+| Letta     | listed        | A pinned `letta-mcp-server` package exists, but the server needs `LETTA_API_KEY` + a Letta backend to start — key-gated, not one-click. |
 
-Mem0 and Claude-Context remain key-gated: the engine can install their MCP
-package but cannot provision `MEM0_API_KEY` / `OPENAI_API_KEY` + Milvus — those
-stay documented prerequisites.
+Mem0 and Claude-Context likewise remain key-gated: the engine *could* install
+their package, but cannot provision `MEM0_API_KEY` / `OPENAI_API_KEY` + Milvus —
+those stay documented prerequisites. Each tool above flips to installable with a
+**one-line registry change** (an `[install]` + `[mcp]` block) the moment upstream
+ships a clean server — no further engine work.
 
-## Rollout
+## Rollout — done
 
-1. `[install]` parsing + validator gates (no execution yet) — safe to ship.
-2. Install/uninstall executor behind `addons.allow_bootstrap` (default off).
-3. Migrate Headroom → Graphify → Cognee/Letta registry entries, one MR each,
-   each gated on a green `bundled_registry_passes_security_validator`.
+1. ✅ `[install]` parsing + validator gates.
+2. ✅ Install/uninstall executor (`bootstrap.rs`), gated by `addons.allow_bootstrap`.
+3. ✅ Headroom migrated; the bundled registry stays green on
+   `bundled_registry_passes_security_validator`. Graphify/Cognee/Letta wait on a
+   clean upstream MCP server (see table) rather than shipping broken wiring.
 
-## Open questions
+## Operational notes & open questions
 
-- Per-manager cache/location detection for accurate "already present" checks.
-- Whether to vendor a minimal `uv`/`npm` presence check into `doctor`.
-- Windows support for the manager templates (Phase-1 runners already assume a
-  POSIX-ish `PATH`).
+- **Manager path override** (shipped): set `LEANCTX_BOOTSTRAP_<MANAGER>` (e.g.
+  `LEANCTX_BOOTSTRAP_UV=/opt/uv`) to pin the exact manager binary for locked-down
+  environments; otherwise the manager is resolved from `PATH`.
+- Open: per-manager cache/location detection for richer "already present" checks
+  (today: `verify` argv, else `bin` on `PATH`).
+- Open: a `doctor` check that the managers referenced by installed addons exist.
+- Open: Windows support for the manager templates (the executable probe already
+  falls back to "is a file" off-unix; argv templates assume POSIX managers).

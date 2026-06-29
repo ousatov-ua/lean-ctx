@@ -184,6 +184,7 @@ mod tests {
             gateway_server: "demo".into(),
             granted_capabilities: None,
             content_hash: None,
+            install: None,
         });
         store.save().expect("save");
 

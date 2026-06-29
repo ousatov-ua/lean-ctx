@@ -88,35 +88,53 @@ scripts. Installing an addon enables the MCP gateway (`gateway.enabled = true`);
 its tools become reachable via `ctx_tools` (find/call) — restart your MCP client
 to pick them up.
 
-### Install on add — ephemeral runners
+### Install on add — ephemeral runners & the `[install]` block
 
-`add` only writes the `[[gateway.servers]]` entry; nothing is fetched at install
-time. When the `[mcp]` command is an ephemeral runner — `npx` (Node) or `uvx`
-(uv/Python) — the package is downloaded and run **lazily on the first tool
-call**, then cached. For those tools *adding is installing* (no bootstrap),
-provided the runner is on your `PATH`. Every installable entry pins an exact
-version; an unpinned runner is a warn-level finding the registry validator
-rejects, so upstream can't change under you silently.
+There are two ways `add` makes a tool runnable, both pinned and disclosed:
+
+1. **Ephemeral runner** — when the `[mcp]` command is `npx` (Node) or `uvx`
+   (uv/Python), the package is downloaded and run **lazily on the first tool
+   call**, then cached. `add` only writes the `[[gateway.servers]]` entry;
+   *adding is installing*, provided the runner is on your `PATH`.
+2. **`[install]` block** (#1105, Phase 2) — for tools that need a one-time
+   bootstrap before a runnable command exists, the manifest declares a pinned
+   package-manager install. On `add`, lean-ctx runs it (idempotently); on
+   `remove`, it uninstalls it. The exact commands are shown before anything runs.
+
+```toml
+[install]
+manager = "uv"               # uv | pip | cargo | npm | brew
+package = "headroom-ai[mcp]"  # the package spec the manager understands
+version = "0.27.0"            # mandatory exact pin (no ranges / latest)
+bin     = "headroom"          # binary the [mcp] command needs (PATH idempotency)
+```
+
+The engine never uses a shell: each manager has a fixed argv template, and
+`package`/`version`/`bin` are passed as discrete arguments (and rejected if they
+contain shell metacharacters). A team can forbid all bootstrap execution with
+`lean-ctx config set addons.allow_bootstrap false`. Every installable entry pins
+an exact version; an unpinned runner or `[install]` block is rejected by the
+registry validator, so upstream can't change under you silently.
 
 | Tool | Add = install? | Wiring / bootstrap | Secrets |
 |---|---|---|---|
-| `repomix` | **yes** | `npx -y repomix@1.15.0 --mcp` | — |
-| `serena` | **yes** | `uvx --from serena-agent==1.5.3 serena start-mcp-server` | — |
-| `sequential-thinking` | **yes** | `npx -y @modelcontextprotocol/server-sequential-thinking@…` | — |
-| `everything` | **yes** | `npx -y @modelcontextprotocol/server-everything@…` | — |
-| `headroom` | listed | `uv tool install "headroom-ai[all]"` → `headroom mcp serve` | — |
-| `graphify` | listed | `uv tool install "graphifyy[mcp]"` + a built `graph.json` | — |
-| `cognee` | listed | clone + `uv sync`, run its MCP server | — |
-| `letta` | listed | `npm i -g` + a running Letta server | — |
+| `repomix` | **yes** (runner) | `npx -y repomix@1.15.0 --mcp` | — |
+| `serena` | **yes** (runner) | `uvx --from serena-agent==1.5.3 serena start-mcp-server` | — |
+| `sequential-thinking` | **yes** (runner) | `npx -y @modelcontextprotocol/server-sequential-thinking@…` | — |
+| `everything` | **yes** (runner) | `npx -y @modelcontextprotocol/server-everything@…` | — |
+| `headroom` | **yes** (`[install]`) | `uv tool install headroom-ai[mcp]==0.27.0` → `headroom mcp serve` | — |
+| `graphify` | listed | `uv tool install "graphifyy[mcp]"` **+ a built `graph.json`** (no out-of-the-box server) | — |
+| `cognee` | listed | clone + `uv sync` (upstream #1815); no pinned one-liner | — |
+| `letta` | listed | `npm i -g letta-mcp-server` + a running Letta backend | `LETTA_API_KEY` |
 | `mem0` | listed | official MCP server (hosted) | `MEM0_API_KEY` |
 | `claude-context` | listed | `npx @zilliz/claude-context-mcp` | `OPENAI_API_KEY` + Milvus |
 | `rtk` | listed | shell-output hook; MCP via the `rtk-mcp` bridge | — |
 | `lmd` | listed | Markdown directive layer — no MCP endpoint | — |
 
-*Listed* tools need a one-time manual bootstrap today; a future `[install]`
-manifest block (idempotent, with an uninstall path) will let `addon add` run it
-for you — see the
-[bootstrap-engine design](../dev/addon-bootstrap-engine.md).
+*Listed* tools either need secrets/a backend or don't ship a clean, pinned,
+out-of-the-box MCP server yet. Each flips to install-on-add with a one-line
+registry change (an `[install]` + `[mcp]` block) the moment upstream ships one —
+see the [bootstrap-engine design](../dev/addon-bootstrap-engine.md).
 
 ## Build your own addon
 

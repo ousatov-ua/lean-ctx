@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::core::addons::manifest::AddonManifest;
 use crate::core::addons::revocation::RevocationList;
 use crate::core::addons::store::InstalledStore;
-use crate::core::addons::{install, registry};
+use crate::core::addons::{bootstrap, install, registry};
 
 pub fn cmd_addon(args: &[String]) {
     let action = args.first().map_or("list", String::as_str);
@@ -341,6 +341,35 @@ fn cmd_add(target: &str, args: &[String]) {
         return;
     }
 
+    // Bootstrap (#1105): provision the upstream package via its pinned manager
+    // *before* probing — the [mcp] command depends on it being installed. The
+    // policy floor (addons.allow_bootstrap) was already enforced in preflight.
+    if manifest.install.is_declared() {
+        println!(
+            "\nInstalling `{}` via {} (pinned {})…",
+            manifest.install.package.trim(),
+            manifest.install.manager.trim(),
+            manifest.install.version.trim()
+        );
+        match bootstrap::ensure_installed(&manifest.install) {
+            Ok(outcome) => {
+                match outcome.status {
+                    bootstrap::BootstrapStatus::AlreadyPresent => {
+                        println!("  Already installed — skipped.");
+                    }
+                    bootstrap::BootstrapStatus::Installed => println!("  ✓ Installed."),
+                }
+                if let Some(warning) = outcome.warning {
+                    eprintln!("  ⚠ {warning}");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: bootstrap install failed: {e}\n  Nothing was wired.");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Health probe (#1076): confirm the server actually speaks MCP *before* we
     // wire it, so a broken command/args fails now with a clear message instead
     // of opaquely at first `ctx_tools` use. Skip with `--no-verify`.
@@ -394,10 +423,10 @@ fn cmd_add(target: &str, args: &[String]) {
 }
 
 fn cmd_remove(name: &str, args: &[String]) {
-    if InstalledStore::load().get(name).is_none() {
+    let Some(entry) = InstalledStore::load().get(name).cloned() else {
         eprintln!("Addon `{name}` is not installed.");
         std::process::exit(1);
-    }
+    };
 
     if !super::prompt::confirm(
         &format!("Remove addon `{name}` (unwire its MCP server)?"),
@@ -413,6 +442,22 @@ fn cmd_remove(name: &str, args: &[String]) {
                 "✓ Removed `{}` (gateway server `{}`).",
                 outcome.name, outcome.gateway_server
             );
+            // Uninstall the bootstrapped package (#1105), best-effort — a failed
+            // uninstall must never block the unwire that already succeeded.
+            if let Some(receipt) = entry.install {
+                println!(
+                    "Uninstalling `{}` via {}…",
+                    receipt.package, receipt.manager
+                );
+                match bootstrap::uninstall(&receipt) {
+                    Ok(()) => println!("  ✓ Uninstalled."),
+                    Err(e) => eprintln!(
+                        "  Note: could not uninstall `{}` automatically: {e}\n  \
+                         Remove it manually if you no longer need it.",
+                        receipt.package
+                    ),
+                }
+            }
             if outcome.last_removed {
                 println!(
                     "  No addons remain. The gateway stays enabled — disable it with \
@@ -793,8 +838,33 @@ fn print_install_preview(manifest: &AddonManifest) {
             }
         }
     }
+    print_bootstrap(manifest);
     print_capabilities(manifest);
     print_security_review(manifest);
+}
+
+/// Disclose the bootstrap install a `[install]` block performs on `add` (#1105):
+/// the exact, shell-free package-manager commands the user is consenting to.
+fn print_bootstrap(manifest: &AddonManifest) {
+    let install = &manifest.install;
+    if !install.is_declared() {
+        return;
+    }
+    let prog = install
+        .manager()
+        .map_or_else(|| install.manager.trim().to_string(), |m| m.as_str().into());
+    println!("\n  Install on add — runs a pinned package manager before first use:");
+    println!("    manager:   {}", install.manager.trim());
+    println!(
+        "    package:   {} (pinned {})",
+        install.package.trim(),
+        install.version.trim()
+    );
+    println!("    install:   {prog} {}", install.install_argv().join(" "));
+    println!(
+        "    uninstall: {prog} {}   (run on `addon remove`)",
+        install.uninstall_argv().join(" ")
+    );
 }
 
 /// Show the declared capabilities the user is about to grant (P1). A declared

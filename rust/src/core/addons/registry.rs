@@ -139,8 +139,8 @@ pub fn validate_entries(entries: &[AddonManifest]) -> Vec<String> {
         if !seen.insert(slug) {
             problems.push(format!("duplicate slug `{}`", m.addon.name));
         }
-        if m.validate().is_err() {
-            problems.push(format!("`{}`: invalid slug/metadata", m.addon.name));
+        if let Err(e) = m.validate() {
+            problems.push(format!("`{}`: invalid manifest — {e}", m.addon.name));
         }
 
         if !m.is_installable() {
@@ -317,6 +317,36 @@ mod tests {
                 m.addon.name
             );
         }
+    }
+
+    #[test]
+    fn headroom_is_installable_with_a_pinned_bootstrap() {
+        let h = get("headroom").expect("headroom in registry");
+        assert!(h.is_installable(), "headroom now ships a wired MCP server");
+        assert!(h.install.is_declared(), "and an install-on-add block");
+        assert_eq!(h.install.manager().unwrap(), super::super::Manager::Uv);
+        assert!(
+            h.install.validate().is_ok(),
+            "the bootstrap is pinned + clean"
+        );
+        // Whole bundled registry still clears the bar with the new block.
+        assert!(validate_entries(bundled()).is_empty());
+    }
+
+    #[test]
+    fn validator_rejects_an_unpinned_install_block() {
+        let unpinned = AddonManifest::from_toml(
+            "[addon]\nname = \"boot\"\nauthor = \"a\"\nhomepage = \"https://h\"\nlicense = \"MIT\"\ndescription = \"d\"\n\
+             [mcp]\ntransport = \"stdio\"\ncommand = \"boot\"\n\
+             [install]\nmanager = \"uv\"\npackage = \"boot\"\nversion = \"latest\"\n",
+        )
+        .expect("parse");
+        assert!(
+            validate_entries(&[unpinned])
+                .iter()
+                .any(|p| p.contains("exact pin")),
+            "an unpinned bootstrap must fail the registry bar"
+        );
     }
 
     #[test]

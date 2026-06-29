@@ -127,6 +127,13 @@ pub fn install(
         gateway_server: server_name.clone(),
         granted_capabilities: manifest.capabilities.clone(),
         content_hash: Some(super::integrity::wiring_hash(&server)),
+        // Record what a `[install]` block provisions so `remove` can uninstall
+        // it (#1105). The bootstrap itself runs in the CLI layer before this
+        // call; here we only persist the receipt, keeping `install` pure.
+        install: manifest
+            .install
+            .is_declared()
+            .then(|| manifest.install.to_receipt()),
     });
     store.save()?;
 

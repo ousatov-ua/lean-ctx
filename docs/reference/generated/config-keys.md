@@ -95,6 +95,7 @@ Top-level configuration keys
 
 Addon ecosystem security floor: install policy, signature requirement, per-addon capability sandbox (#863, P1). Global-only.
 
+- `allow_bootstrap` (bool, default `true`) — Allow `addon add` to install an addon's upstream package via a pinned manager (uv/pip/cargo/npm/brew). Off = refuse bootstrap installs
 - `allowlist` (array, default `[]`) — Addon slugs permitted when policy = allowlist
 - `block_risky` (bool, default `false`) — Refuse to install an addon that has a high-risk (Danger) capability
 - `enforce_capabilities` (bool, default `false`) — Fail closed when an addon declares restricted [capabilities] but no OS sandbox launcher is available to enforce them

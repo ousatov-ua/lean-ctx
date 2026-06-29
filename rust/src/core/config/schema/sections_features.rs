@@ -612,6 +612,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "Record per-addon / per-tool gateway usage to <data_dir>/addons/usage.json (analytics + billing base)",
         ),
     );
+    addons.insert(
+        "allow_bootstrap".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.addons.allow_bootstrap),
+            "Allow `addon add` to install an addon's upstream package via a pinned manager (uv/pip/cargo/npm/brew). Off = refuse bootstrap installs",
+        ),
+    );
     sections.insert(
         "addons".into(),
         SectionSchema {

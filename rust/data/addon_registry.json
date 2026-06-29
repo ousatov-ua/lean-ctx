@@ -20,7 +20,7 @@
       "addon": {
         "name": "headroom",
         "display_name": "Headroom",
-        "description": "Reversible context compression for tool outputs, logs, files and RAG chunks — 60–95% fewer tokens, originals retrievable on demand. Ships an MCP server (headroom mcp serve) the lean-ctx gateway can route through.",
+        "description": "Reversible context compression for tool outputs, logs, files and RAG chunks — 60–95% fewer tokens, originals retrievable on demand. Installs on add (uv tool install) and wires its MCP server (headroom mcp serve) into the lean-ctx gateway.",
         "author": "chopratejas",
         "homepage": "https://github.com/chopratejas/headroom",
         "license": "Apache-2.0",
@@ -28,6 +28,17 @@
         "integration": "compression",
         "keywords": ["compression", "tokens", "rag", "reversible", "ccr", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
+      },
+      "mcp": {
+        "transport": "stdio",
+        "command": "headroom",
+        "args": ["mcp", "serve"]
+      },
+      "install": {
+        "manager": "uv",
+        "package": "headroom-ai[mcp]",
+        "version": "0.27.0",
+        "bin": "headroom"
       }
     },
     {

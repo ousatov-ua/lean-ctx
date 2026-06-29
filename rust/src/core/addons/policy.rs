@@ -77,6 +77,12 @@ pub struct AddonsConfig {
     /// `<data_dir>/addons/usage.json` (local-only; basis for analytics + billing,
     /// P5). On by default; set `false` to disable all usage accounting.
     pub metering: bool,
+    /// Allow `addon add` to provision an addon's upstream package via a pinned
+    /// package manager (uv/pip/cargo/npm/brew) — the `[install]` block (#1105).
+    /// On by default: `add` is the user's explicit, consented action, and the
+    /// bootstrap is fully disclosed + pinned + audited before it runs. An org
+    /// that forbids local package-manager execution sets this to `false`.
+    pub allow_bootstrap: bool,
 }
 
 impl Default for AddonsConfig {
@@ -89,6 +95,7 @@ impl Default for AddonsConfig {
             block_risky: false,
             enforce_capabilities: false,
             metering: true,
+            allow_bootstrap: true,
         }
     }
 }
@@ -145,6 +152,19 @@ pub fn gate(
                     .to_string(),
             );
         }
+    }
+
+    // Bootstrap floor (#1105): an addon that runs a package manager on install
+    // is refused when the org disables local bootstrap, before anything runs.
+    if manifest.install.is_declared() && !cfg.allow_bootstrap {
+        return Err(format!(
+            "addons.allow_bootstrap is off: `{name}` installs `{}` via {} on add, but bootstrap \
+             installs are disabled on this machine. Enable with \
+             `lean-ctx config set addons.allow_bootstrap true`, or install `{}` yourself first.",
+            manifest.install.package.trim(),
+            manifest.install.manager.trim(),
+            manifest.install.bin(),
+        ));
     }
 
     if cfg.block_risky
@@ -218,6 +238,29 @@ mod tests {
             ..Default::default()
         };
         assert!(gate(&manifest("v", true), &cfg, &[]).is_err());
+    }
+
+    #[test]
+    fn allow_bootstrap_floor_gates_install_blocks() {
+        let with_install = AddonManifest::from_toml(
+            "[addon]\nname = \"boot\"\n[mcp]\ntransport = \"stdio\"\ncommand = \"boot\"\n\
+             [install]\nmanager = \"uv\"\npackage = \"boot-pkg\"\nversion = \"1.0.0\"\n",
+        )
+        .expect("parse");
+
+        // Default (on) → permitted.
+        assert!(gate(&with_install, &AddonsConfig::default(), &[]).is_ok());
+
+        // Off → refused before anything runs.
+        let locked = AddonsConfig {
+            allow_bootstrap: false,
+            ..Default::default()
+        };
+        let err = gate(&with_install, &locked, &[]).expect_err("bootstrap is off");
+        assert!(err.contains("allow_bootstrap"), "got: {err}");
+
+        // An addon with no [install] block is unaffected by the floor.
+        assert!(gate(&manifest("plain", false), &locked, &[]).is_ok());
     }
 
     #[test]

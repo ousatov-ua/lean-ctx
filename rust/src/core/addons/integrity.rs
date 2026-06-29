@@ -116,6 +116,7 @@ mod tests {
             gateway_server: name.into(),
             granted_capabilities: None,
             content_hash: hash,
+            install: None,
         }
     }
 

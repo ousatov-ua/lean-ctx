@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::bootstrap::InstallReceipt;
 use super::capabilities::AddonCapabilities;
 
 /// One installed addon and the gateway server it owns.
@@ -31,6 +32,11 @@ pub struct InstalledAddon {
     /// [`super::integrity::verify_all`] to detect post-install drift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Bootstrap receipt (#1105): the package a `[install]` block provisioned,
+    /// so `remove` can uninstall exactly what `add` installed. `None` for addons
+    /// with no bootstrap (ephemeral runners or already-present binaries).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<InstallReceipt>,
 }
 
 /// The on-disk installed-addons index.
@@ -99,6 +105,7 @@ mod tests {
             gateway_server: name.to_string(),
             granted_capabilities: None,
             content_hash: None,
+            install: None,
         }
     }
 

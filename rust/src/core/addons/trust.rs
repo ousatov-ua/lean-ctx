@@ -238,6 +238,11 @@ pub fn max_level(findings: &[RiskFinding]) -> Option<RiskLevel> {
 /// but actually needs the network (an under-declared capability).
 #[must_use]
 pub fn wiring_uses_network(manifest: &AddonManifest) -> bool {
+    // A `[install]` block fetches a package from a registry → needs the network,
+    // regardless of how the resulting `[mcp]` server is launched (#1105).
+    if manifest.install.is_declared() {
+        return true;
+    }
     match manifest.mcp.transport {
         TransportKind::Http => true,
         TransportKind::Stdio => {
