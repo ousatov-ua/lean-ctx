@@ -215,9 +215,15 @@ fn bench_total_input_overhead() {
     // the previous 14000 ceiling whose headroom had shrunk below one tool. Per
     // #290 the ceiling must carry "a tool or two" of slack over the actual, so
     // 15000 (actual ~14205) restores that buffer.
+    // Raised 15000 -> 16000 for #1082: registering ctx_quality (80 -> 81 tools)
+    // lifted the actual to ~15116 (instr ~502 + desc ~5905 + schemas ~8709), over
+    // the previous 15000 ceiling. Per #290 the ceiling must carry "a tool or two"
+    // of slack over the actual, so 16000 (actual ~15116, ~2 tools headroom)
+    // restores that buffer. The lazy default surface users actually pay is
+    // unaffected (bench_lazy_default_vs_full_overhead).
     assert!(
-        total < 15000,
-        "Total input overhead should be <15000 tokens, got {total}"
+        total < 16000,
+        "Total input overhead should be <16000 tokens, got {total}"
     );
 }
 
