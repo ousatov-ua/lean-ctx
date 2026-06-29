@@ -33,27 +33,35 @@ lean-ctx supports two integration styles (auto-detected per agent):
 
 ## When to use lean-ctx
 
-Always prefer `lean-ctx -c <command>` over running commands directly when:
+Prefer the current shell's configured compression over nested wrappers. In agent
+shells, run commands normally unless the user explicitly asks for
+`lean-ctx -c <command>` or task setup/docs explicitly say the shell is not
+wrapped. Do not inspect env vars just to decide; users may forbid env access.
+
+Use `lean-ctx -c <command>` over running commands directly only when:
 - The command produces verbose output (build logs, git diffs, dependency trees, test results)
 - You are reading files and only need the structure or API surface
 - You want to check token savings for the current session
 
-## Shell commands (use instead of raw exec)
+## Shell commands
 
 ```bash
-lean-ctx -c git status          # Compressed git output
-lean-ctx -c git diff            # Only meaningful diff lines
-lean-ctx -c git log --oneline -10
-lean-ctx -c npm install         # Strips progress bars, noise
-lean-ctx -c cargo build
-lean-ctx -c cargo test
-lean-ctx -c docker ps
-lean-ctx -c kubectl get pods
-lean-ctx -c aws ec2 describe-instances
-lean-ctx -c helm list
-lean-ctx -c prisma migrate dev
-lean-ctx -c curl -s <url>       # JSON schema extraction
-lean-ctx -c ls -la <dir>        # Grouped directory listing
+git status                      # Compressed by configured agent shell/wrapper
+git diff                        # Meaningful diff lines when configured
+git log --oneline -10
+npm install                     # Strips progress bars/noise when configured
+cargo build
+cargo test
+docker ps
+kubectl get pods
+aws ec2 describe-instances
+helm list
+prisma migrate dev
+curl -s <url>                   # JSON schema extraction
+ls -la <dir>                    # Grouped directory listing
+
+# Explicit user request / documented unwrapped shell:
+lean-ctx -c "git status"
 ```
 
 Supported: git, npm, pnpm, yarn, bun, deno, cargo, docker, kubectl, helm, gh, pip, ruff, go, eslint, prettier, tsc, aws, psql, mysql, prisma, swift, zig, cmake, ansible, composer, mix, bazel, systemd, terraform, make, maven, dotnet, flutter, poetry, rubocop, playwright, curl, wget, and more.

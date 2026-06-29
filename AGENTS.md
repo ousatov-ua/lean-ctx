@@ -5,7 +5,10 @@ lean-ctx optimizes LLM context by compressing file reads, shell output, and sear
 ## Integration Mode: Hybrid
 
 - **Reads/Search** → MCP tools (`ctx_read`, `ctx_search`) for caching + compression
-- **Shell commands** → `lean-ctx -c "…"` via CLI (preferred) or `ctx_shell` via MCP (both work)
+- **Shell commands** → run the command normally in agent shells; the shell/tool
+  wrapper may already compress output. Use `lean-ctx -c "…"` only when the user
+  explicitly requests it or task setup/docs explicitly say the shell is not
+  wrapped. Do not probe env vars just to decide; users may forbid env access.
 - **File editing** → native Edit/StrReplace (lean-ctx only handles READ operations)
 
 The canonical tool-mapping table is auto-injected per session via
@@ -15,8 +18,9 @@ deliberately not duplicated here.
 ## CLI commands (optimized shell, lower overhead)
 
 ```bash
-lean-ctx -c "git status"     # compressed shell output
-lean-ctx -c "cargo test"     # compressed test output
+git status                   # compressed by configured agent shell/wrapper
+cargo test                   # compressed by configured agent shell/wrapper
+lean-ctx -c "git status"     # only if explicitly requested / documented unwrapped
 lean-ctx ls src/              # directory map
 ```
 

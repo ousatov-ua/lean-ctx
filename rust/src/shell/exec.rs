@@ -100,6 +100,68 @@ fn wait_with_limits(mut child: Child, max_bytes: usize, timeout: std::time::Dura
     }
 }
 
+#[cfg(test)]
+mod nested_lean_ctx_exec_tests {
+    #[test]
+    fn collapses_single_nested_c() {
+        assert_eq!(
+            super::collapse_nested_lean_ctx_exec("lean-ctx -c 'git status'").as_deref(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn collapses_repeated_nested_c() {
+        assert_eq!(
+            super::collapse_nested_lean_ctx_exec("lean-ctx -c 'lean-ctx -c \"git status\"'")
+                .as_deref(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn preserves_inner_shell_quoting() {
+        assert_eq!(
+            super::collapse_nested_lean_ctx_exec("lean-ctx -c \"git commit -m 'hello world'\"")
+                .as_deref(),
+            Some("git commit -m 'hello world'")
+        );
+        assert_eq!(
+            super::collapse_nested_lean_ctx_exec("lean-ctx -c git commit -m 'hello world'")
+                .as_deref(),
+            Some("git commit -m 'hello world'")
+        );
+    }
+
+    #[test]
+    fn collapses_exec_alias_and_path() {
+        assert_eq!(
+            super::collapse_nested_lean_ctx_exec("/usr/local/bin/lean-ctx exec 'git status'")
+                .as_deref(),
+            Some("git status")
+        );
+    }
+
+    #[test]
+    fn leaves_non_wrappers_alone() {
+        assert!(super::collapse_nested_lean_ctx_exec("git status").is_none());
+    }
+
+    #[test]
+    fn wrapped_nested_wrapper_still_owns_one_compression_pass() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var(super::super::reentry::WRAP_MARKER, "1");
+
+        assert!(super::should_delegate_wrapped_to_shell_default(false));
+        assert!(
+            !super::should_delegate_wrapped_to_shell_default(true),
+            "collapsed nested wrappers must not fall through to raw shell-default path"
+        );
+
+        crate::test_env::remove_var(super::super::reentry::WRAP_MARKER);
+    }
+}
+
 const DEFAULT_MAX_BYTES: usize = 8 * 1024 * 1024; // 8 MB
 const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 const HEAVY_MAX_BYTES: usize = 32 * 1024 * 1024; // 32 MB
@@ -378,7 +440,16 @@ pub fn exec(command: &str) -> i32 {
     // allowlist would otherwise hard-block on every single call. The cwd snapshot
     // is preserved so the host keeps tracking the working directory.
     let unwrapped = super::agent_wrapper::unwrap_agent_wrapper(command).map(|u| u.rebuild());
+    let mut collapsed_nested = false;
+    let collapsed;
     let command = unwrapped.as_deref().unwrap_or(command);
+    let command = if let Some(c) = collapse_nested_lean_ctx_exec(command) {
+        collapsed_nested = true;
+        collapsed = c;
+        collapsed.as_str()
+    } else {
+        command
+    };
 
     if let Some(code) = allowlist_gate(command) {
         return code;
@@ -388,8 +459,11 @@ pub fn exec(command: &str) -> i32 {
     let command = crate::tools::ctx_shell::normalize_command_for_shell(command);
     let command = command.as_str();
 
-    if super::reentry::should_pass_through() {
+    if super::reentry::is_disabled() {
         return exec_inherit(command, &shell, &shell_flag);
+    }
+    if should_delegate_wrapped_to_shell_default(collapsed_nested) {
+        return exec_shell_default(command, &shell, &shell_flag);
     }
 
     let cfg = config::Config::load();
@@ -438,6 +512,124 @@ pub fn exec(command: &str) -> i32 {
     exec_buffered(command, &shell, &shell_flag, &cfg)
 }
 
+fn collapse_nested_lean_ctx_exec(command: &str) -> Option<String> {
+    let mut current = command.trim().to_string();
+    let mut changed = false;
+
+    loop {
+        let Some(next) = strip_one_lean_ctx_exec(&current) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+        changed = true;
+    }
+
+    changed.then_some(current)
+}
+
+fn should_delegate_wrapped_to_shell_default(collapsed_nested: bool) -> bool {
+    // After collapsing `lean-ctx -c "lean-ctx -c ..."` the current process is the
+    // one compression pass that would otherwise be owned by the shell default.
+    // Delegating again would drop back to raw execution or re-enter the hook.
+    super::reentry::is_wrapped() && !collapsed_nested
+}
+
+fn strip_one_lean_ctx_exec(command: &str) -> Option<String> {
+    let words = split_simple_shell_words(command)?;
+    if words.len() < 3 || !is_lean_ctx_bin(&words[0].value) {
+        return None;
+    }
+    if words[1].value != "-c" && words[1].value != "exec" {
+        return None;
+    }
+    if words[2..].iter().any(|w| {
+        matches!(
+            w.value.as_str(),
+            "|" | "||" | "&" | "&&" | ";" | "<" | ">" | ">>"
+        )
+    }) {
+        return None;
+    }
+    if words.len() == 3 {
+        Some(words[2].value.trim().to_string())
+    } else {
+        Some(command[words[2].start..].trim().to_string())
+    }
+}
+
+fn is_lean_ctx_bin(word: &str) -> bool {
+    std::path::Path::new(word)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "lean-ctx" || name == "lean-ctx.exe")
+}
+
+struct SimpleShellWord {
+    value: String,
+    start: usize,
+}
+
+fn split_simple_shell_words(command: &str) -> Option<Vec<SimpleShellWord>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut current_start: Option<usize> = None;
+    let mut chars = command.char_indices().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some((idx, ch)) = chars.next() {
+        match quote {
+            Some('\'') if ch == '\'' => quote = None,
+            Some('"') if ch == '"' => quote = None,
+            Some('"') if ch == '\\' => {
+                current_start.get_or_insert(idx);
+                if let Some((_, next)) = chars.next() {
+                    current.push(next);
+                }
+            }
+            Some(_) => {
+                current_start.get_or_insert(idx);
+                current.push(ch);
+            }
+            None if ch == '\'' || ch == '"' => {
+                current_start.get_or_insert(idx);
+                quote = Some(ch);
+            }
+            None if ch == '\\' => {
+                current_start.get_or_insert(idx);
+                if let Some((_, next)) = chars.next() {
+                    current.push(next);
+                }
+            }
+            None if ch.is_whitespace() => {
+                if let Some(start) = current_start.take() {
+                    words.push(SimpleShellWord {
+                        value: std::mem::take(&mut current),
+                        start,
+                    });
+                }
+            }
+            None => {
+                current_start.get_or_insert(idx);
+                current.push(ch);
+            }
+        }
+    }
+
+    if quote.is_some() {
+        return None;
+    }
+    if let Some(start) = current_start {
+        words.push(SimpleShellWord {
+            value: current,
+            start,
+        });
+    }
+    (!words.is_empty()).then_some(words)
+}
+
 fn exec_inherit(command: &str, shell: &str, shell_flag: &str) -> i32 {
     let mut cmd = Command::new(shell);
     cmd.arg(shell_flag)
@@ -454,6 +646,27 @@ fn exec_inherit(command: &str, shell: &str, shell_flag: &str) -> i32 {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
             tracing::error!("lean-ctx: failed to execute: {e}");
+            127
+        }
+    }
+}
+
+fn exec_shell_default(command: &str, shell: &str, shell_flag: &str) -> i32 {
+    let mut cmd = Command::new(shell);
+    cmd.arg(shell_flag)
+        .arg(command)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    super::reentry::clear_shell_default_markers(&mut cmd);
+    super::platform::apply_utf8_locale(&mut cmd);
+    super::platform::apply_profile_free_env(&mut cmd);
+    let status = cmd.status();
+
+    match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("lean-ctx: failed to execute '{}': {}", command, e);
             127
         }
     }
