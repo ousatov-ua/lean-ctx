@@ -56,7 +56,7 @@ fn proxy_enable_respects_codex_auth_mode_554() {
             codex.join("auth.json"),
             r#"{"auth_mode":"chatgpt","tokens":{"access_token":"x"}}"#,
         )
-            .unwrap();
+        .unwrap();
         std::fs::write(codex.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
 
         let _codex_home = CodexHome::set(&codex);
@@ -91,7 +91,7 @@ fn proxy_enable_respects_codex_auth_mode_554() {
             codex.join("auth.json"),
             r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test"}"#,
         )
-            .unwrap();
+        .unwrap();
         std::fs::write(codex.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
 
         let _codex_home = CodexHome::set(&codex);
