@@ -397,11 +397,15 @@ async fn gateway_compressor_roundtrips_through_a_downstream_addon() {
     }
     ensure_env();
     let config_dir = tempfile::tempdir().unwrap();
-    let toml = format!(
-        "[gateway]\nenabled = true\n\n\
-         [[gateway.servers]]\nname = \"addonfix\"\ntransport = \"stdio\"\n\
-         command = \"node\"\nargs = [\"{FIXTURE}\"]\nintegration = \"compression\"\n"
-    );
+    #[derive(serde::Serialize)]
+    struct TestConfig {
+        gateway: GatewayConfig,
+    }
+
+    let toml = toml::to_string(&TestConfig {
+        gateway: base_cfg(fixture_server("addonfix", "compression")),
+    })
+    .unwrap();
     std::fs::write(config_dir.path().join("config.toml"), toml).unwrap();
     set_env("LEAN_CTX_CONFIG_DIR", config_dir.path().to_str().unwrap());
     pool::clear();
