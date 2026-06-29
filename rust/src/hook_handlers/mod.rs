@@ -53,10 +53,6 @@ fn log_shadow_intercept(tool: &str, detail: &str) {
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
 }
 
-fn is_quiet() -> bool {
-    matches!(std::env::var("LEAN_CTX_QUIET"), Ok(v) if v.trim() == "1")
-}
-
 /// Mark this process as a hook child so the daemon-client never auto-starts
 /// the daemon from inside a hook (which would create zombie processes).
 pub fn mark_hook_environment() {
@@ -1241,15 +1237,9 @@ pub(crate) fn emit_session_start_additional_context(additional_context: &str) {
 }
 
 pub fn handle_codex_session_start() {
-    if is_quiet() {
-        return;
-    }
     // Dedicated rules-injection mode (#343): the `hook observe` SessionStart hook
     // injects the full rules summary as additionalContext, so stay silent here to
     // avoid double-injecting on Codex (which fires both hooks on SessionStart).
-    if crate::core::config::Config::load().dedicated_session_context_active() {
-        return;
-    }
 }
 
 /// Dedicated Copilot PreToolUse handler (dispatched via `hook copilot`).
