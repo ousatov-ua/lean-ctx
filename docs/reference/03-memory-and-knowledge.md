@@ -76,6 +76,7 @@ knows where we were" work. If it *doesn't* work, see Journey 6 →
 ```bash
 lean-ctx sessions list             # all saved snapshots
 lean-ctx sessions show [id]        # inspect one
+lean-ctx sessions delete <id>      # delete one snapshot
 lean-ctx sessions cleanup [days]   # prune old snapshots
 lean-ctx sessions doctor [--fix]   # diagnose/repair session restore
 ```

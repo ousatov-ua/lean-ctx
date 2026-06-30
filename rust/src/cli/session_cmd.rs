@@ -343,6 +343,23 @@ pub fn cmd_sessions(args: &[String]) {
                 );
             }
         }
+        "delete" | "rm" => {
+            let Some(id) = args.get(1) else {
+                eprintln!("Usage: lean-ctx sessions delete <id>");
+                std::process::exit(1);
+            };
+            match SessionState::delete_session(id) {
+                Ok(true) => println!("Deleted session {id}."),
+                Ok(false) => {
+                    eprintln!("Session not found: {id}");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("Failed to delete session {id}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         "doctor" => {
             let apply = args.iter().any(|a| a == "--apply" || a == "--fix");
             let (found, quarantined) = SessionState::doctor_quarantine_unsafe_roots(apply);
@@ -364,7 +381,9 @@ pub fn cmd_sessions(args: &[String]) {
             }
         }
         _ => {
-            eprintln!("Usage: lean-ctx sessions [list|show [id]|cleanup [days]|doctor [--apply]]");
+            eprintln!(
+                "Usage: lean-ctx sessions [list|show [id]|delete <id>|cleanup [days]|doctor [--apply]]"
+            );
             std::process::exit(1);
         }
     }

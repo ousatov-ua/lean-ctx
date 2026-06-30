@@ -216,6 +216,7 @@ lean-ctx wrapped               # Shareable savings report (CCP)
 lean-ctx wrapped --week        # Weekly savings report
 lean-ctx sessions list         # List CCP sessions
 lean-ctx sessions show <id>    # Show session details
+lean-ctx sessions delete <id>  # Delete one session
 lean-ctx sessions cleanup      # Remove old sessions
 lean-ctx benchmark run         # Real project benchmark (terminal)
 lean-ctx benchmark run --json  # Machine-readable JSON output
@@ -451,6 +452,7 @@ New in v2.0.0: CCP provides cross-session memory that persists across chats, con
 ```bash
 lean-ctx sessions list              # List all sessions
 lean-ctx sessions show <id>         # Show session details
+lean-ctx sessions delete <id>       # Delete one session
 lean-ctx sessions cleanup           # Remove old sessions
 lean-ctx wrapped                    # Shareable savings report
 lean-ctx wrapped --week             # Weekly report

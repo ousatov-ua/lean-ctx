@@ -16,6 +16,19 @@ fn restrict_file_permissions(path: &std::path::Path) {
 #[cfg(not(unix))]
 fn restrict_file_permissions(_path: &std::path::Path) {}
 
+fn validate_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id == "latest"
+        || id.starts_with('.')
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains(std::path::MAIN_SEPARATOR)
+    {
+        return Err("invalid session id".to_string());
+    }
+    Ok(())
+}
+
 impl PreparedSave {
     /// Writes the pre-serialized session data, latest pointer, and compaction
     /// snapshot to disk atomically.
@@ -164,11 +177,60 @@ impl SessionState {
 
     /// Loads a specific session from disk by its unique ID.
     pub fn load_by_id(id: &str) -> Option<Self> {
+        validate_session_id(id).ok()?;
         let dir = sessions_dir()?;
         let path = dir.join(format!("{id}.json"));
         let json = std::fs::read_to_string(&path).ok()?;
         let session: Self = serde_json::from_str(&json).ok()?;
         Some(normalize_loaded_session(session))
+    }
+
+    /// Deletes a saved session and its compaction snapshot.
+    ///
+    /// If the deleted session is the global latest pointer, the pointer is
+    /// moved to the newest remaining session or removed when none remain.
+    pub fn delete_session(id: &str) -> Result<bool, String> {
+        validate_session_id(id)?;
+        let Some(dir) = sessions_dir() else {
+            return Ok(false);
+        };
+        let path = dir.join(format!("{id}.json"));
+        if !path.exists() {
+            return Ok(false);
+        }
+
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+
+        let snapshot = dir.join(format!("{id}_snapshot.txt"));
+        match std::fs::remove_file(&snapshot) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+
+        let latest_path = dir.join("latest.json");
+        let points_to_deleted = std::fs::read_to_string(&latest_path)
+            .ok()
+            .and_then(|json| serde_json::from_str::<LatestPointer>(&json).ok())
+            .is_some_and(|pointer| pointer.id == id);
+        if points_to_deleted {
+            if let Some(next) = Self::list_sessions().into_iter().next() {
+                let latest_tmp = dir.join(".latest.json.tmp");
+                let pointer_json = serde_json::to_string(&LatestPointer { id: next.id })
+                    .map_err(|e| e.to_string())?;
+                std::fs::write(&latest_tmp, pointer_json).map_err(|e| e.to_string())?;
+                restrict_file_permissions(&latest_tmp);
+                std::fs::rename(&latest_tmp, &latest_path).map_err(|e| e.to_string())?;
+            } else {
+                match std::fs::remove_file(&latest_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+        }
+
+        Ok(true)
     }
 
     /// Lists all saved sessions as summaries, sorted by most recently updated.

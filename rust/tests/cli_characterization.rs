@@ -2,7 +2,10 @@
 //! assert stable exit codes + output invariants. These freeze the existing
 //! behavior so that future refactors of `cli/dispatch` can't silently regress.
 
-use std::process::{Command, Output};
+use std::{
+    fs,
+    process::{Command, Output},
+};
 
 fn lean_ctx() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_lean-ctx"));
@@ -67,6 +70,34 @@ fn help_short_flag() {
     let out = run(&["-h"]);
     assert_eq!(exit_code(&out), 0);
     assert!(!stdout(&out).is_empty());
+}
+
+#[test]
+fn sessions_delete_removes_saved_session_and_snapshot() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sessions = tmp.path().join("sessions");
+    fs::create_dir_all(&sessions).expect("sessions dir");
+    let mut session = lean_ctx::core::session::SessionState::new();
+    session.id = "cli-delete-me".to_string();
+    fs::write(
+        sessions.join("cli-delete-me.json"),
+        serde_json::to_string_pretty(&session).unwrap(),
+    )
+    .unwrap();
+    fs::write(sessions.join("cli-delete-me_snapshot.txt"), "snapshot").unwrap();
+    fs::write(sessions.join("latest.json"), r#"{"id":"cli-delete-me"}"#).unwrap();
+
+    let out = lean_ctx()
+        .env("LEAN_CTX_DATA_DIR", tmp.path())
+        .args(["sessions", "delete", "cli-delete-me"])
+        .output()
+        .expect("failed to spawn lean-ctx binary");
+
+    assert_eq!(exit_code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("Deleted session cli-delete-me."));
+    assert!(!sessions.join("cli-delete-me.json").exists());
+    assert!(!sessions.join("cli-delete-me_snapshot.txt").exists());
+    assert!(!sessions.join("latest.json").exists());
 }
 
 #[test]

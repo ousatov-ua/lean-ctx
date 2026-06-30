@@ -134,6 +134,7 @@ If MCP is enabled for your IDE, the same capabilities are also available as MCP 
 ```bash
 lean-ctx sessions list          # List all CCP sessions
 lean-ctx sessions show          # Show latest session state
+lean-ctx sessions delete <id>   # Delete one saved session
 lean-ctx wrapped                # Weekly savings report card
 lean-ctx wrapped --month        # Monthly savings report card
 lean-ctx benchmark run          # Real project benchmark (terminal output)
