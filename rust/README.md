@@ -804,4 +804,3 @@ lean-ctx is a **privacy-first** tool — no tracking, no analytics, no PII colle
 ## License
 
 Apache-2.0 — see [LICENSE](../LICENSE) for details.
-
