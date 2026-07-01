@@ -4,14 +4,17 @@ mod fact;
 mod format;
 mod import_export;
 pub mod maintenance;
+pub mod okf;
 mod persist;
 mod query;
 mod ranking;
+mod snapshot;
 mod types;
 
 pub use import_export::{ImportMerge, ImportResult, SimpleFactEntry, parse_import_data};
 pub(crate) use ranking::sort_fact_for_output;
 pub use ranking::{SimilarFact, find_cross_key_similar};
+pub use snapshot::KnowledgeSnapshot;
 pub use types::*;
 
 #[cfg(test)]

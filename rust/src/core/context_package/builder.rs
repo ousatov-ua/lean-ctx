@@ -90,19 +90,19 @@ impl PackageBuilder {
     }
 
     pub fn add_knowledge_from_project(mut self, project_root: &str) -> Self {
-        let knowledge = crate::core::knowledge::ProjectKnowledge::load_or_create(project_root);
+        // Build the knowledge layer from the shared `KnowledgeSnapshot` so ctxpkg
+        // and the OKF exporter render the same source of truth (no parallel
+        // extractor). ctxpkg keeps the full fact history for fidelity.
+        let snapshot = crate::core::knowledge::KnowledgeSnapshot::collect(project_root);
 
-        if knowledge.facts.is_empty()
-            && knowledge.patterns.is_empty()
-            && knowledge.history.is_empty()
-        {
+        if snapshot.is_empty() {
             return self;
         }
 
         self.content.knowledge = Some(KnowledgeLayer {
-            facts: knowledge.facts,
-            patterns: knowledge.patterns,
-            insights: knowledge.history,
+            facts: snapshot.facts,
+            patterns: snapshot.patterns,
+            insights: snapshot.insights,
             exported_at: Utc::now(),
         });
 

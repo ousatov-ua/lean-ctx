@@ -1121,6 +1121,151 @@ fn handle_export(project_root: &str) -> String {
     }
 }
 
+/// Exports the project's current knowledge as an Open Knowledge Format (OKF)
+/// bundle — a directory of Markdown files, portable and vendor-neutral. Renders
+/// from the shared [`crate::core::knowledge::KnowledgeSnapshot`], so it never
+/// disagrees with a ctxpkg export on what the knowledge is. `out` is the target
+/// directory (defaults to the data dir's `exports/okf/<hash>`).
+pub fn handle_export_okf(project_root: &str, out: Option<&str>) -> String {
+    let snapshot = crate::core::knowledge::KnowledgeSnapshot::collect(project_root);
+    if snapshot.is_empty() {
+        return "No knowledge to export.".to_string();
+    }
+
+    let dir = match out {
+        Some(p) => std::path::PathBuf::from(p),
+        None => match crate::core::data_dir::lean_ctx_data_dir() {
+            Ok(d) => d
+                .join("exports")
+                .join("okf")
+                .join(short_hash(&snapshot.project_hash)),
+            Err(e) => return format!("Export failed: {e}"),
+        },
+    };
+
+    let bundle = crate::core::knowledge::okf::to_okf_bundle(&snapshot);
+    match crate::core::knowledge::okf::write_okf_bundle(&dir, &bundle) {
+        Ok(()) => format!(
+            "OKF bundle exported: {} ({} concepts, {} patterns, {} relations)",
+            dir.display(),
+            snapshot.current_facts().len(),
+            snapshot.patterns.len(),
+            snapshot.relations.len()
+        ),
+        Err(e) => format!("Export failed: {e}"),
+    }
+}
+
+/// Imports knowledge from `path`. A directory is treated as an OKF bundle; a
+/// file falls back to the native JSON / simple-array / JSONL import.
+pub fn handle_import(
+    project_root: &str,
+    path: &str,
+    merge: crate::core::knowledge::ImportMerge,
+    session_id: &str,
+) -> String {
+    if std::path::Path::new(path).is_dir() {
+        return handle_import_okf(project_root, std::path::Path::new(path), merge, session_id);
+    }
+
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) => return format!("Failed to read {path}: {e}"),
+    };
+    let facts = match crate::core::knowledge::parse_import_data(&data) {
+        Ok(f) => f,
+        Err(e) => return format!("Parse error: {e}"),
+    };
+    let policy = match load_policy_or_error() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    match ProjectKnowledge::mutate_locked(project_root, |k| {
+        k.import_facts(facts, merge, session_id, &policy)
+    }) {
+        Ok((_, r)) => format!(
+            "Import complete: {} added, {} skipped, {} replaced",
+            r.added, r.skipped, r.replaced
+        ),
+        Err(e) => format!("Import failed: {e}"),
+    }
+}
+
+/// OKF directory import: facts via `import_facts`, patterns via `add_pattern`,
+/// then relations via the relation graph — guarded so an edge is only created
+/// when both endpoints are current facts (facts first, then edges).
+fn handle_import_okf(
+    project_root: &str,
+    dir: &std::path::Path,
+    merge: crate::core::knowledge::ImportMerge,
+    session_id: &str,
+) -> String {
+    let imp = match crate::core::knowledge::okf::from_okf_dir(dir) {
+        Ok(i) => i,
+        Err(e) => return format!("OKF import failed: {e}"),
+    };
+    let policy = match load_policy_or_error() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let pattern_count = imp.patterns.len();
+    let (knowledge, result) = match ProjectKnowledge::mutate_locked(project_root, |k| {
+        let r = k.import_facts(imp.facts, merge, session_id, &policy);
+        for p in &imp.patterns {
+            k.add_pattern(
+                &p.pattern_type,
+                &p.description,
+                p.examples.clone(),
+                session_id,
+                &policy,
+            );
+        }
+        r
+    }) {
+        Ok(v) => v,
+        Err(e) => return format!("OKF import failed: {e}"),
+    };
+
+    // Guarded edges: only between facts that are current after the import.
+    let current: std::collections::HashSet<(String, String)> = knowledge
+        .facts
+        .iter()
+        .filter(|f| f.is_current())
+        .map(|f| (f.category.clone(), f.key.clone()))
+        .collect();
+    let mut relations_added = 0usize;
+    if !imp.edges.is_empty() {
+        let mut graph = crate::core::knowledge_relations::KnowledgeRelationGraph::load_or_create(
+            &knowledge.project_hash,
+        );
+        for e in imp.edges {
+            let endpoints_current = current
+                .contains(&(e.from.category.clone(), e.from.key.clone()))
+                && current.contains(&(e.to.category.clone(), e.to.key.clone()));
+            if endpoints_current && graph.upsert_edge(e.from, e.to, e.kind, session_id) {
+                relations_added += 1;
+            }
+        }
+        if let Err(err) = graph.save() {
+            tracing::warn!("OKF import: relations save failed: {err}");
+        }
+    }
+
+    let mut out = format!(
+        "OKF import: {} added, {} skipped, {} replaced, {pattern_count} patterns, {relations_added} relations",
+        result.added, result.skipped, result.replaced
+    );
+    let warnings = crate::core::knowledge::okf::lint_okf_bundle(dir);
+    if !warnings.is_empty() {
+        out.push_str(&format!("\nLint warnings ({}):", warnings.len()));
+        for w in warnings.iter().take(10) {
+            out.push_str(&format!("\n  - {w}"));
+        }
+    }
+    out
+}
+
 fn handle_consolidate(project_root: &str) -> String {
     match consolidate_project_knowledge(project_root) {
         Ok(report) => format_consolidation_report(&report),

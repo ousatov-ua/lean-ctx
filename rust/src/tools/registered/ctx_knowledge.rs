@@ -29,7 +29,7 @@ action=consolidate imports latest session if present, runs lifecycle, then frees
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "remember|recall|search|pattern|gotcha|relate|relations|consolidate|restore|status|timeline|rooms|wakeup|remove|export (also: feedback, unrelate, relations_diagram, health, lifecycle_report, policy, embeddings_*)"
+                        "description": "remember|recall|search|pattern|gotcha|relate|relations|consolidate|restore|status|timeline|rooms|wakeup|remove|export|import (also: feedback, unrelate, relations_diagram, health, lifecycle_report, policy, embeddings_*)"
                     },
                     "trigger": { "type": "string", "description": "gotcha trigger pattern" },
                     "resolution": { "type": "string", "description": "gotcha resolution/fix" },
@@ -45,7 +45,10 @@ action=consolidate imports latest session if present, runs lifecycle, then frees
                     "confidence": { "type": "number", "description": "0.0-1.0" },
                     "store": { "type": "string", "description": "restore: facts|history|procedures|patterns (default: all)" },
                     "limit": { "type": "number", "description": "restore: max items to recover (default 50)" },
-                    "dry_run": { "type": "boolean", "description": "consolidate: preview imports/reclaim without writing" }
+                    "dry_run": { "type": "boolean", "description": "consolidate: preview imports/reclaim without writing" },
+                    "format": { "type": "string", "description": "export: json|okf (okf = portable Markdown bundle)" },
+                    "path": { "type": "string", "description": "export/import: bundle directory (OKF) or file path" },
+                    "merge": { "type": "string", "description": "import: replace|append|skip-existing (default skip-existing)" }
                 },
                 "required": ["action"]
             }),
@@ -167,6 +170,36 @@ action=consolidate imports latest session if present, runs lifecycle, then frees
                 Err(e) => e,
             };
             return Ok(text_output(&action, text));
+        }
+
+        // OKF export/import handled inline so `format`/`path`/`merge` stay off the
+        // shared handle() signature (same pattern as restore/gotcha above).
+        if action == "export" && get_str(args, "format").as_deref() == Some("okf") {
+            let out = get_str(args, "path").or_else(|| get_str(args, "output"));
+            return Ok(text_output(
+                &action,
+                crate::tools::ctx_knowledge::handle_export_okf(&project_root, out.as_deref()),
+            ));
+        }
+        if action == "import" {
+            let Some(path) = get_str(args, "path").or_else(|| query.clone()) else {
+                return Ok(text_output(
+                    &action,
+                    "ERROR: import requires `path` (a file or an OKF directory)".to_string(),
+                ));
+            };
+            let merge = get_str(args, "merge")
+                .and_then(|s| crate::core::knowledge::ImportMerge::parse(&s))
+                .unwrap_or(crate::core::knowledge::ImportMerge::SkipExisting);
+            return Ok(text_output(
+                &action,
+                crate::tools::ctx_knowledge::handle_import(
+                    &project_root,
+                    &path,
+                    merge,
+                    &session_id,
+                ),
+            ));
         }
 
         let result = crate::tools::ctx_knowledge::handle(

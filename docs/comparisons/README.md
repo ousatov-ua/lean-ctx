@@ -47,6 +47,9 @@ We believe in transparent, fact-based comparisons. Every page below includes rea
 ### "I want a drop-in `compress(messages)` library like Headroom"
 **Use [Headroom](vs-headroom.md) for ML prose compression and the widest set of framework wrappers.** Use [lean-ctx](vs-headroom.md) when you need deterministic, prompt-cache-safe output, 100% local operation in a single binary, or compression alongside cached reads, search and memory.
 
+### "I was going to build plain vector-DB RAG over my codebase"
+**Use [lean-ctx](vs-naive-rag.md) for coding agents** — it combines *compress-into-window* with a *hybrid* retriever (BM25 + dense + RRF + rerank) and is structure-aware (tree-sitter AST + code graph), where naive top-k vector search is not. **Use a dedicated vector DB** when the corpus is huge and unstructured (support tickets, web pages, PDFs) with no structure to exploit.
+
 ### "I want all of the above in one tool"
 **Use lean-ctx.** It's the only tool that combines compression, memory, code intelligence, semantic search, repo-maps, and observability in a single binary.
 
@@ -61,6 +64,7 @@ We believe in transparent, fact-based comparisons. Every page below includes rea
 | [**lean-ctx vs Mem0**](vs-mem0.md) | Code-specific vs general-purpose — local vs cloud | [Full comparison →](vs-mem0.md) |
 | [**lean-ctx vs The Token Company**](vs-token-company.md) | Local deterministic code compression vs cloud ML prose compression | [Full comparison →](vs-token-company.md) |
 | [**lean-ctx vs Headroom**](vs-headroom.md) | Deterministic, prompt-cache-safe `compress()` + full context layer vs ML compression library | [Full comparison →](vs-headroom.md) |
+| [**lean-ctx vs naive RAG**](vs-naive-rag.md) | Two-halves pipeline + structure-aware hybrid retrieval vs top-k vector search | [Full comparison →](vs-naive-rag.md) |
 
 ## What Makes lean-ctx Different
 
@@ -107,4 +111,3 @@ share. This is a published direction, not yet a shipped feature — see the
 *Last updated: June 2026. Star counts and features reflect latest public releases; the lean-ctx tool count is generated from the registry (`docs/reference/generated/mcp-tools.md`).*
 
 [Get started with lean-ctx →](https://leanctx.com/docs/getting-started)
-

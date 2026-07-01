@@ -335,6 +335,16 @@ fn cmd_export(args: &[String], project_root: &str) {
         .unwrap_or_else(|| "json".into());
     let output = value_arg(args, "--output").or_else(|| value_arg(args, "-o"));
 
+    // OKF is a directory of Markdown files, not a single serialized blob — route
+    // it through the dedicated exporter (shared snapshot core).
+    if format == "okf" {
+        println!(
+            "{}",
+            ctx_knowledge::handle_export_okf(project_root, output.as_deref())
+        );
+        return;
+    }
+
     let Some(knowledge) = crate::core::knowledge::ProjectKnowledge::load(project_root) else {
         eprintln!("No knowledge stored for this project yet.");
         std::process::exit(1);
@@ -441,9 +451,9 @@ fn cmd_import(args: &[String], project_root: &str) {
 
     let Some(path) = path else {
         eprintln!(
-            "Usage: lean-ctx knowledge import <path> [--merge replace|append|skip-existing] [--dry-run]"
+            "Usage: lean-ctx knowledge import <path|dir> [--merge replace|append|skip-existing] [--dry-run]"
         );
-        eprintln!("Formats accepted: native JSON, simple JSON array, JSONL");
+        eprintln!("Formats accepted: native JSON, simple JSON array, JSONL, or an OKF directory");
         std::process::exit(1);
     };
 
@@ -451,6 +461,15 @@ fn cmd_import(args: &[String], project_root: &str) {
         eprintln!("Unknown merge strategy: {merge_str}. Use: replace, append, skip-existing");
         std::process::exit(1);
     };
+
+    // A directory is an OKF bundle (facts + patterns + relations as Markdown).
+    if std::path::Path::new(&path).is_dir() {
+        println!(
+            "{}",
+            ctx_knowledge::handle_import(project_root, &path, merge, &cli_session_id())
+        );
+        return;
+    }
 
     let data = match std::fs::read_to_string(&path) {
         Ok(d) => d,
@@ -710,8 +729,8 @@ Usage:
   lean-ctx knowledge remember <value> --category <cat> --key <key> [--confidence <0-1>]
   lean-ctx knowledge recall [query] [--category <cat>] [--mode auto|semantic|hybrid] [--as-of <date>]
   lean-ctx knowledge search <query>
-  lean-ctx knowledge export [--format json|jsonl|simple] [--output <path>]
-  lean-ctx knowledge import <path> [--merge replace|append|skip-existing] [--dry-run]
+  lean-ctx knowledge export [--format json|jsonl|simple|okf] [--output <path|dir>]
+  lean-ctx knowledge import <path|dir> [--merge replace|append|skip-existing] [--dry-run]
   lean-ctx knowledge remove --category <cat> --key <key>
   lean-ctx knowledge consolidate [--all] [--dry-run]
   lean-ctx knowledge restore [--store facts|history|procedures|patterns] [--query <text>] [--limit N]
@@ -723,7 +742,9 @@ Examples:
   lean-ctx knowledge remember \"Uses JWT tokens\" --category auth --key token-type
   lean-ctx knowledge recall \"authentication\"
   lean-ctx knowledge export --format jsonl --output backup.jsonl
+  lean-ctx knowledge export --format okf --output ./knowledge-okf   (portable Markdown bundle)
   lean-ctx knowledge import backup.json --merge skip-existing --dry-run
+  lean-ctx knowledge import ./knowledge-okf --merge append          (import an OKF bundle)
   lean-ctx knowledge remove --category auth --key token-type
   lean-ctx knowledge consolidate
   lean-ctx knowledge consolidate --all

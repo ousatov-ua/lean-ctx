@@ -102,7 +102,9 @@ lean-ctx knowledge health          # integrity check
 lean-ctx knowledge consolidate     # import session + run lifecycle
 lean-ctx knowledge consolidate --all
 lean-ctx knowledge export --output kb.json
+lean-ctx knowledge export --format okf --output ./kb-okf   # portable Markdown bundle
 lean-ctx knowledge import kb.json --merge
+lean-ctx knowledge import ./kb-okf --merge append          # a directory = OKF bundle
 ```
 
 **Categories & confidence:** facts carry a `--category`, optional `--key`, and a
@@ -133,6 +135,28 @@ Eviction is archived either way, so nothing is ever hard-dropped. Near capacity,
 `doctor` warns and `consolidate` reclaims space.
 The CLI `--all` flag scans stored project knowledge roots and invokes that same
 per-project consolidation function for each one.
+
+### Portable knowledge — OKF export/import
+
+Beyond the native JSON export, lean-ctx can render its knowledge as an **Open
+Knowledge Format (OKF)** bundle — a directory of Markdown files, one concept per
+file, with relations as Markdown links. It's vendor-neutral, git-diffable, and
+hand-editable, so your project knowledge is never locked in.
+
+```bash
+lean-ctx knowledge export --format okf --output ./kb-okf   # → directory of .md
+lean-ctx knowledge import ./kb-okf --merge append          # a dir is read as OKF
+```
+
+The MCP tool exposes the same via `ctx_knowledge(action="export", format="okf",
+path=…)` and `ctx_knowledge(action="import", path=…, merge=…)`. Exports are
+**deterministic** (byte-identical for the same knowledge, #498), facts round-trip
+losslessly via producer-owned `leanctx_*` frontmatter keys, and imported edges
+are guarded so both endpoints must be current facts. OKF and the signed `ctxpkg`
+bundle both render from one shared `KnowledgeSnapshot`, so they never disagree on
+what the project knows. OKF is a **local feature, free on every plan**. See the
+[OKF interop guide](../guides/okf-interop.md) and
+[Knowledge Formats — which one, when](../guides/knowledge-formats.md).
 
 ### Gotchas — auto-learned mistakes
 
