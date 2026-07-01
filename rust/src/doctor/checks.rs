@@ -410,12 +410,13 @@ pub(super) fn mcp_config_outcome() -> Outcome {
     };
 
     let locations = mcp_config_locations(&home);
+    let location_names = lean_ctx_mcp_location_names(&home);
     let mut found: Vec<String> = Vec::new();
     let mut exists_no_ref: Vec<String> = Vec::new();
 
     for loc in &locations {
-        if let Ok(content) = std::fs::read_to_string(&loc.path) {
-            if has_lean_ctx_mcp_entry(&content) {
+        if std::fs::read_to_string(&loc.path).is_ok() {
+            if location_names.contains(loc.name) {
                 found.push(format!("{} {DIM}({}){RST}", loc.name, loc.display));
             } else {
                 exists_no_ref.push(loc.name.to_string());

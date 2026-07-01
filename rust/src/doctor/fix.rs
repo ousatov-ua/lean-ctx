@@ -175,8 +175,8 @@ fn build_and_persist_fix_report(
         warnings: Vec::new(),
         errors: Vec::new(),
     };
-    let user_has_lean_ctx = !targets.is_empty();
-    let ws_fixed = super::workspace_scope::fix_workspace_dual_scope(user_has_lean_ctx);
+    let user_scope_mcp_locations = super::lean_ctx_mcp_location_names(&home);
+    let ws_fixed = super::workspace_scope::fix_workspace_dual_scope(&user_scope_mcp_locations);
     ws_scope_step.items.push(SetupItem {
         name: "dual_scope_dedup".to_string(),
         status: if ws_fixed > 0 {

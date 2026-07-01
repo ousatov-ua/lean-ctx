@@ -487,6 +487,20 @@ pub(super) fn has_lean_ctx_mcp_entry(content: &str) -> bool {
     content.contains("lean-ctx")
 }
 
+pub(super) fn lean_ctx_mcp_location_names(
+    home: &std::path::Path,
+) -> std::collections::BTreeSet<&'static str> {
+    let mut names = std::collections::BTreeSet::new();
+    for loc in mcp_config_locations(home) {
+        if let Ok(content) = std::fs::read_to_string(&loc.path)
+            && has_lean_ctx_mcp_entry(&content)
+        {
+            names.insert(loc.name);
+        }
+    }
+    names
+}
+
 pub(super) fn proxy_auth_probe(port: u16) -> bool {
     use std::io::{Read, Write};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};

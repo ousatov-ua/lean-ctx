@@ -333,9 +333,12 @@ pub fn run() -> u32 {
     // 7) MCP
     let mcp = mcp_config_outcome();
     board.check(&mcp);
+    let user_scope_mcp_locations = dirs::home_dir()
+        .map(|home| lean_ctx_mcp_location_names(&home))
+        .unwrap_or_default();
 
     // 8) Workspace-scope MCP (optional; only when a project-local config exists)
-    let workspace_scope = workspace_scope::workspace_scope_outcome(mcp.ok);
+    let workspace_scope = workspace_scope::workspace_scope_outcome(&user_scope_mcp_locations);
     if let Some(ref ws) = workspace_scope {
         board.check(ws);
     }
