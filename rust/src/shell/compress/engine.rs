@@ -255,22 +255,25 @@ pub(crate) fn compress_if_beneficial(command: &str, output: &str) -> String {
     // CRITICAL: Never compress error output from build/check/lint tools.
     // Compiler errors, type errors, lint findings etc. must be preserved verbatim
     // so the agent can see file paths, line numbers, and full diagnostics.
+    // Folding compiler/test-runner *progress* noise composes with — never
+    // replaces — the verbatim token cap: diagnostics stay verbatim, and a log
+    // whose diagnostics alone exceed the budget is still head/tail-truncated
+    // with safety-needle preservation (#655).
     if is_error_output_from_build_tool(command, output) {
-        if let Some(folded) = maybe_fold_progress(output, count_tokens(output)) {
-            return folded;
-        }
-        return truncate_verbatim(output, count_tokens(output));
+        let base =
+            maybe_fold_progress(output, count_tokens(output)).unwrap_or_else(|| output.to_string());
+        return truncate_verbatim(&base, count_tokens(&base));
     }
 
     // CRITICAL: Test-runner output is kept verbatim (only head/tail truncated
     // when huge, and even then middle test-result/failure lines are preserved).
     // This holds for fully-passing runs too, so pass/fail summaries can never be
     // semantically compressed or deduplicated away — on any OS or client.
+    // Same composition as above: progress folding first, cap always (#655).
     if is_test_runner_command(command) {
-        if let Some(folded) = maybe_fold_progress(output, count_tokens(output)) {
-            return folded;
-        }
-        return truncate_verbatim(output, count_tokens(output));
+        let base =
+            maybe_fold_progress(output, count_tokens(output)).unwrap_or_else(|| output.to_string());
+        return truncate_verbatim(&base, count_tokens(&base));
     }
 
     if !is_search_output(command) && crate::tools::ctx_shell::contains_auth_flow(output) {
@@ -763,9 +766,11 @@ fn classify_foldable_progress(line: &str) -> Option<ProgressKind> {
     None
 }
 
+/// Pure dot-run lines (pytest/unittest progress) of any length. Lines with any
+/// other character (e.g. `....F...`, which encodes a failure) are never folded.
 fn is_low_signal_progress(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed == "." || trimmed == ".." || trimmed == "..." || trimmed == "...."
+    !trimmed.is_empty() && trimmed.bytes().all(|b| b == b'.')
 }
 
 fn flush_progress_run(out: &mut Vec<String>, kind: Option<ProgressKind>, lines: &[&str]) {

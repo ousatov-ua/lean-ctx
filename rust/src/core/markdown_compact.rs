@@ -1,68 +1,190 @@
 //! Deterministic Markdown/documentation compaction for LLM-agent reads.
 //!
-//! Keeps heading topology intact and selects high-signal body lines with a small
-//! IDF-style scorer. This is intentionally std-only and byte-stable (#498).
+//! Keeps heading topology intact, treats fenced code blocks as atomic units, and
+//! selects high-signal body units with a small IDF-style scorer. Intentionally
+//! std-only and byte-stable (#498): per-line token sets are ordered
+//! (`BTreeSet`), so the f64 score summation order — and therefore the selected
+//! lines and omission markers — are a pure function of the input bytes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::Write as _;
 
 const SECTION_BODY_FRACTION: f64 = 0.35;
 const MIN_SECTION_BODY_LINES: usize = 2;
+/// Documents with fewer content (non-blank) lines pass through untouched.
+const MIN_CONTENT_LINES: usize = 24;
 
 const STOP_WORDS: &[&str] = &[
     "the", "and", "for", "with", "that", "this", "from", "into", "your", "you", "are", "can",
     "will", "not", "all", "use", "using", "used", "lean", "ctx", "context", "agent", "agents",
 ];
 
-/// Compact Markdown while preserving all headings and high-signal details.
+/// One compaction unit: a heading line, a prose line, or an atomic fenced block.
+///
+/// Fenced blocks are kept or dropped only as a whole, so the output never
+/// contains an unbalanced fence or an omission marker inside a code example.
+struct Unit {
+    /// Raw line range `[start, end)` covered by this unit.
+    start: usize,
+    end: usize,
+    kind: UnitKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnitKind {
+    Heading,
+    Prose,
+    Fence,
+}
+
+impl Unit {
+    /// Non-blank lines covered by this unit (blank interior fence lines are
+    /// emitted verbatim but carry no "content" weight in budgets or markers).
+    fn content_lines(&self, lines: &[&str]) -> usize {
+        lines[self.start..self.end]
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    }
+}
+
+/// Compact Markdown while preserving all headings, whole fenced code blocks,
+/// and high-signal details. Returns `None` when the document is too small, not
+/// markdown-shaped, or compaction would not actually shrink it.
 pub fn compact_markdown(content: &str) -> Option<String> {
     if content.trim().is_empty() || !looks_like_markdown(content) {
         return None;
     }
 
-    let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
-    if lines.len() < 24 {
+    let lines: Vec<&str> = content.lines().collect();
+    let units = parse_units(&lines);
+    let content_total: usize = units.iter().map(|u| u.content_lines(&lines)).sum();
+    if content_total < MIN_CONTENT_LINES {
         return None;
     }
 
-    let keep = section_keep_set(&lines);
+    let keep = select_units(&lines, &units, content_total);
 
     let mut out = String::new();
     let mut omitted = 0usize;
-    for (idx, line) in lines.iter().enumerate() {
-        if keep.contains(&idx) {
+    for (uidx, unit) in units.iter().enumerate() {
+        if keep.contains(&uidx) {
             flush_omission(&mut out, &mut omitted);
-            out.push_str(line.trim_end());
-            out.push('\n');
+            for line in &lines[unit.start..unit.end] {
+                out.push_str(line.trim_end());
+                out.push('\n');
+            }
         } else {
-            omitted += 1;
+            omitted += unit.content_lines(&lines);
         }
     }
     flush_omission(&mut out, &mut omitted);
 
-    let kept_lines = out.lines().count();
-    if kept_lines >= lines.len() || out.len() >= content.len() {
+    let kept_content = out.lines().filter(|l| !l.trim().is_empty()).count();
+    if kept_content >= content_total || out.len() >= content.len() {
         None
     } else {
         Some(out)
     }
 }
 
-fn section_keep_set(lines: &[&str]) -> HashSet<usize> {
+/// True when the document carries at least one ATX heading — the structural
+/// signal a plain `.txt` file must show before the lossy compactor may touch it
+/// (hyphen lists alone are not enough to call a text file "markdown").
+pub fn has_markdown_headings(content: &str) -> bool {
+    content.lines().any(is_heading)
+}
+
+/// Splits raw lines into units. Blank lines outside fences belong to no unit:
+/// they carry no signal and are dropped silently (not counted as "omitted"),
+/// matching the compact typography of the output. Lines inside a fence — blank
+/// or not — always travel with their block.
+fn parse_units(lines: &[&str]) -> Vec<Unit> {
+    let mut units = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        if let Some(marker) = fence_marker(trimmed) {
+            let mut end = i + 1;
+            while end < lines.len() && !is_closing_fence(lines[end], marker) {
+                end += 1;
+            }
+            // Include the closing fence; an unterminated block runs to EOF.
+            let end = (end + 1).min(lines.len());
+            units.push(Unit {
+                start: i,
+                end,
+                kind: UnitKind::Fence,
+            });
+            i = end;
+            continue;
+        }
+        let kind = if is_heading(lines[i]) {
+            UnitKind::Heading
+        } else {
+            UnitKind::Prose
+        };
+        units.push(Unit {
+            start: i,
+            end: i + 1,
+            kind,
+        });
+        i += 1;
+    }
+    units
+}
+
+/// Returns the fence character when `trimmed` opens a code fence (``` or ~~~).
+fn fence_marker(trimmed: &str) -> Option<char> {
+    ['`', '~']
+        .into_iter()
+        .find(|&marker| trimmed.chars().take_while(|c| *c == marker).count() >= 3)
+}
+
+/// A closing fence is a run of >=3 fence characters with nothing but whitespace
+/// after it (an info string like ```rust only ever opens a block).
+fn is_closing_fence(line: &str, marker: char) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.chars().take_while(|c| *c == marker).count() >= 3
+        && trimmed.chars().all(|c| c == marker || c.is_whitespace())
+}
+
+fn select_units(lines: &[&str], units: &[Unit], content_total: usize) -> HashSet<usize> {
     let docs = token_sets(lines);
     let df = document_frequency(&docs);
     let mut keep = HashSet::new();
-    let mut section_body = Vec::new();
+    let mut section_body: Vec<usize> = Vec::new();
 
-    for (idx, line) in lines.iter().enumerate() {
-        if is_heading(line) {
-            select_section_body(&mut keep, &section_body, lines, &docs, &df);
+    for (uidx, unit) in units.iter().enumerate() {
+        if unit.kind == UnitKind::Heading {
+            select_section_body(
+                &mut keep,
+                &section_body,
+                lines,
+                units,
+                &docs,
+                &df,
+                content_total,
+            );
             section_body.clear();
-            keep.insert(idx);
+            keep.insert(uidx);
         } else {
-            section_body.push(idx);
+            section_body.push(uidx);
         }
     }
-    select_section_body(&mut keep, &section_body, lines, &docs, &df);
+    select_section_body(
+        &mut keep,
+        &section_body,
+        lines,
+        units,
+        &docs,
+        &df,
+        content_total,
+    );
     keep
 }
 
@@ -70,20 +192,24 @@ fn select_section_body(
     keep: &mut HashSet<usize>,
     body: &[usize],
     lines: &[&str],
-    docs: &[HashSet<String>],
+    units: &[Unit],
+    docs: &[BTreeSet<String>],
     df: &HashMap<String, usize>,
+    content_total: usize,
 ) {
     if body.is_empty() {
         return;
     }
 
-    let target = section_body_budget(body.len());
+    let body_lines: usize = body.iter().map(|u| units[*u].content_lines(lines)).sum();
+    let target = section_body_budget(body_lines);
+
     let mut scored: Vec<(usize, f64)> = body
         .iter()
-        .map(|idx| {
+        .map(|uidx| {
             (
-                *idx,
-                score_line(*idx, lines[*idx], &docs[*idx], lines.len(), df),
+                *uidx,
+                score_unit(&units[*uidx], lines, docs, content_total, df),
             )
         })
         .collect();
@@ -93,11 +219,19 @@ fn select_section_body(
             .then_with(|| a.0.cmp(&b.0))
     });
 
+    // The first body unit anchors the section (usually its intro sentence).
     if let Some(first) = body.first() {
         keep.insert(*first);
     }
-    for (idx, _) in scored.into_iter().take(target) {
-        keep.insert(idx);
+    // Greedy by content lines so a large fenced block spends its real size of
+    // the budget instead of counting as one line.
+    let mut taken = 0usize;
+    for (uidx, _) in scored {
+        if taken >= target {
+            break;
+        }
+        keep.insert(uidx);
+        taken += units[uidx].content_lines(lines);
     }
 }
 
@@ -110,7 +244,7 @@ fn flush_omission(out: &mut String, omitted: &mut usize) {
     if *omitted == 0 {
         return;
     }
-    out.push_str(&format!("... [lean-ctx: omitted {} lines]\n", *omitted));
+    let _ = writeln!(out, "... [lean-ctx: omitted {omitted} lines]");
     *omitted = 0;
 }
 
@@ -121,19 +255,26 @@ fn looks_like_markdown(content: &str) -> bool {
         || content.lines().any(|l| l.trim_start().starts_with("| "))
 }
 
+/// ATX heading per CommonMark: 1–6 `#` followed by a space (or end of line).
+/// The space requirement keeps shebangs (`#!/usr/bin/env`) and `#pragma`-style
+/// lines from masquerading as document structure.
 fn is_heading(line: &str) -> bool {
     let trimmed = line.trim_start();
-    trimmed.starts_with('#') && trimmed.chars().take_while(|c| *c == '#').count() <= 6
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&hashes) && (trimmed.len() == hashes || trimmed[hashes..].starts_with(' '))
 }
 
-fn token_sets(lines: &[&str]) -> Vec<HashSet<String>> {
+/// Per-line token sets. `BTreeSet` (not `HashSet`) is load-bearing: the score
+/// is an f64 sum over these tokens, and f64 addition is not associative, so the
+/// iteration order must be fixed for the output to be byte-stable (#498).
+fn token_sets(lines: &[&str]) -> Vec<BTreeSet<String>> {
     lines
         .iter()
         .map(|line| tokens(line).into_iter().collect())
         .collect()
 }
 
-fn document_frequency(docs: &[HashSet<String>]) -> HashMap<String, usize> {
+fn document_frequency(docs: &[BTreeSet<String>]) -> HashMap<String, usize> {
     let mut df = HashMap::new();
     for doc in docs {
         for token in doc {
@@ -143,23 +284,43 @@ fn document_frequency(docs: &[HashSet<String>]) -> HashMap<String, usize> {
     df
 }
 
+fn score_unit(
+    unit: &Unit,
+    lines: &[&str],
+    docs: &[BTreeSet<String>],
+    content_total: usize,
+    df: &HashMap<String, usize>,
+) -> f64 {
+    match unit.kind {
+        UnitKind::Fence => {
+            // A block is one unit of meaning: score the union of its tokens
+            // once, with the same code bonus a backticked prose line gets.
+            let mut tokens = BTreeSet::new();
+            for doc in &docs[unit.start..unit.end] {
+                tokens.extend(doc.iter().cloned());
+            }
+            idf_sum(&tokens, content_total, df) + 10.0 + position_bonus(unit.start)
+        }
+        _ => score_line(
+            unit.start,
+            lines[unit.start],
+            &docs[unit.start],
+            content_total,
+            df,
+        ),
+    }
+}
+
 fn score_line(
     idx: usize,
     line: &str,
-    tokens: &HashSet<String>,
+    tokens: &BTreeSet<String>,
     line_count: usize,
     df: &HashMap<String, usize>,
 ) -> f64 {
-    let mut score = 0.0;
-    for token in tokens {
-        let freq = *df.get(token).unwrap_or(&1) as f64;
-        score += ((line_count as f64 + 1.0) / (freq + 1.0)).ln();
-    }
+    let mut score = idf_sum(tokens, line_count, df);
 
     let trimmed = line.trim_start();
-    if is_heading(line) {
-        score += 20.0;
-    }
     if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("| ") {
         score += 2.0;
     }
@@ -173,7 +334,21 @@ fn score_line(
     {
         score += 10.0;
     }
-    score + (1.0 / (idx + 1) as f64)
+    score + position_bonus(idx)
+}
+
+/// IDF-style sum; iterating a `BTreeSet` keeps the f64 summation order fixed.
+fn idf_sum(tokens: &BTreeSet<String>, line_count: usize, df: &HashMap<String, usize>) -> f64 {
+    let mut score = 0.0;
+    for token in tokens {
+        let freq = *df.get(token).unwrap_or(&1) as f64;
+        score += ((line_count as f64 + 1.0) / (freq + 1.0)).ln();
+    }
+    score
+}
+
+fn position_bonus(idx: usize) -> f64 {
+    1.0 / (idx + 1) as f64
 }
 
 fn tokens(line: &str) -> Vec<String> {
@@ -207,7 +382,7 @@ fn push_token(out: &mut Vec<String>, token: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::compact_markdown;
+    use super::{compact_markdown, has_markdown_headings};
 
     #[test]
     fn keeps_all_headings_and_shrinks() {
@@ -263,5 +438,95 @@ mod tests {
     #[test]
     fn short_docs_pass_through() {
         assert!(compact_markdown("# Title\n\nSmall.\n").is_none());
+    }
+
+    #[test]
+    fn output_is_deterministic_across_calls() {
+        // #498 regression guard: the score is an f64 sum over per-line token
+        // sets. With unordered sets, near-tied lines could flip across calls
+        // (each std HashSet instance iterates in its own random order), moving
+        // omission markers and changing bytes. Mixed token frequencies below
+        // engineer many near-ties on purpose.
+        let mut doc = String::from("# Determinism\n\nIntro line for the document.\n");
+        for section in 0..4 {
+            doc.push_str(&format!("\n## Section {section}\n\n"));
+            for i in 0..30 {
+                doc.push_str(&format!(
+                    "candidate_{i} shared_token_{} another_token_{} overlapping detail item.\n",
+                    i % 3,
+                    i % 7,
+                ));
+            }
+        }
+
+        let first = compact_markdown(&doc).expect("doc should compact");
+        for _ in 0..16 {
+            let next = compact_markdown(&doc).expect("doc should compact");
+            assert_eq!(first, next, "compaction must be byte-stable across calls");
+        }
+    }
+
+    #[test]
+    fn fenced_blocks_stay_atomic() {
+        let filler = "Ordinary explanatory filler sentence repeated for volume.\n";
+        let mut doc = String::from("# Guide\n\nIntro line.\n\n## Usage\n\n");
+        for _ in 0..30 {
+            doc.push_str(filler);
+        }
+        doc.push_str("Run the exact `ctx_read` command below:\n\n");
+        doc.push_str(
+            "```bash\nlean-ctx read src/lib.rs\n\nlean-ctx search \"ctx_read\" src/\n```\n",
+        );
+        for _ in 0..30 {
+            doc.push_str(filler);
+        }
+
+        let compacted = compact_markdown(&doc).expect("doc should compact");
+
+        // The fence must never be split: fences stay balanced and no omission
+        // marker may appear inside a block.
+        let mut in_fence = false;
+        for line in compacted.lines() {
+            if line.trim_start().starts_with("```") {
+                in_fence = !in_fence;
+            } else if in_fence {
+                assert!(
+                    !line.starts_with("... [lean-ctx:"),
+                    "omission marker inside a fenced block:\n{compacted}"
+                );
+            }
+        }
+        assert!(!in_fence, "unbalanced code fences:\n{compacted}");
+
+        // This block is high-signal, so it must survive whole — including its
+        // blank interior line (kept fences are verbatim).
+        assert!(compacted.contains(
+            "```bash\nlean-ctx read src/lib.rs\n\nlean-ctx search \"ctx_read\" src/\n```"
+        ));
+        assert!(compacted.contains("[lean-ctx: omitted"));
+    }
+
+    #[test]
+    fn heading_inside_fence_is_not_structure() {
+        // A `# comment` inside a code block is code, not a heading: it must not
+        // be force-kept or start a new section.
+        let mut doc = String::from("# Real Heading\n\nIntro.\n\n");
+        doc.push_str("```sh\n# just a shell comment\necho done\n```\n");
+        for i in 0..30 {
+            doc.push_str(&format!("Body filler sentence number {i} for volume.\n"));
+        }
+
+        let compacted = compact_markdown(&doc).expect("doc should compact");
+        let fences = compacted.matches("```").count();
+        assert_eq!(fences % 2, 0, "fences must stay balanced:\n{compacted}");
+    }
+
+    #[test]
+    fn has_markdown_headings_requires_atx_space() {
+        assert!(has_markdown_headings("# Title\nbody\n"));
+        assert!(has_markdown_headings("###\nempty heading is valid\n"));
+        assert!(!has_markdown_headings("#!/usr/bin/env bash\necho hi\n"));
+        assert!(!has_markdown_headings("#pragma once\nplain text\n"));
+        assert!(!has_markdown_headings("- a list\n- alone\n"));
     }
 }
