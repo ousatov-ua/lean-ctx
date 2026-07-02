@@ -18,10 +18,11 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// The one-line anchor `instructions.rs` emits for covered clients. Kept as a
-/// distinctive prefix (not the full constant) so cosmetic rewording doesn't
-/// break the smoke while the contract (anchor vs full skeleton) still holds.
-const ANCHOR_PREFIX: &str = "lean-ctx active — your auto-loaded lean-ctx rules apply";
+/// The one-line anchor `instructions.rs` emits for covered clients — shared
+/// prefix of both `SKELETON_ANCHOR` and `HOOK_COVERED_ANCHOR` (GL #1153).
+/// Kept as a distinctive prefix (not the full constant) so cosmetic rewording
+/// doesn't break the smoke while the contract (anchor vs full skeleton) holds.
+const ANCHOR_PREFIX: &str = "lean-ctx active —";
 /// A line only the FULL canonical skeleton carries.
 const SKELETON_MARKER: &str = "MANDATORY MAPPING";
 

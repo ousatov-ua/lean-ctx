@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Hook-aware Cursor guidance — the honest profile (GL #1153–#1157).** On
+  hosts whose installed lean-ctx hooks already compress the native tools
+  (Cursor: PreToolUse `rewrite` covers Shell, `redirect` covers Read/Grep),
+  the injected `~/.cursor/rules/lean-ctx.mdc` now carries a new
+  `HookCovered` profile instead of the full mapping: it states that native
+  Shell/Read/Grep are compressed transparently (using them is fine) and
+  advertises only the capabilities with no native equivalent (`ctx_compose`,
+  `ctx_symbol`/`ctx_callgraph`, `ctx_semantic_search`,
+  `ctx_knowledge`/`ctx_session`, `ctx_expand`). Rationale: Cursor's harness
+  makes native tools first-class, so a "NEVER use native" rule there is
+  unenforceable and only produces instruction dissonance — the model follows
+  neither rulebook consistently. The MCP `initialize` anchor for covered
+  Cursor sessions is reworded the same way. Detection is conservative
+  (both PreToolUse entries must be present; invalid/missing `hooks.json`
+  falls back to the full `Dedicated` mapping), the byte-exact drift check
+  re-syncs the profile when hooks are installed or removed later, and the
+  Cursor hook installer now honours `shadow_mode`/`compression_level`
+  instead of hardcoding them (GL #1156). ~55% smaller Cursor rules payload
+  on hook-covered installs, billed every session.
 - **Guard-safe re-read dedup for Claude Code / CodeBuddy (GL #1140, follow-up
   to #637).** `read_redirect = auto` keeps the read-before-write guard intact
   by letting native Read run on the real path — which also forfeited the Read

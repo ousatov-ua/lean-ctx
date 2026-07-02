@@ -17,7 +17,11 @@ pub(super) fn inject_rules(target: &RulesTarget) -> Result<RulesResult, String> 
     let level = CompressionLevel::effective(&cfg);
     let wrapper = match target.format {
         RulesFormat::SharedMarkdown => Wrapper::Shared,
-        RulesFormat::DedicatedMarkdown | RulesFormat::CursorMdc => Wrapper::Dedicated,
+        RulesFormat::DedicatedMarkdown => Wrapper::Dedicated,
+        // Hook-covered Cursor installs get the honest reduced profile
+        // (GL #1153); the byte-exact drift check below then keeps the mdc in
+        // sync when hooks are installed or removed later.
+        RulesFormat::CursorMdc => super::content::cursor_wrapper_for_mdc(&target.path),
     };
 
     let new_content = if target.path.exists() {
@@ -40,7 +44,7 @@ pub(super) fn inject_rules(target: &RulesTarget) -> Result<RulesResult, String> 
     } else {
         // Cursor MDC needs frontmatter; others use canonical directly.
         if matches!(target.format, RulesFormat::CursorMdc) {
-            rules_content(&target.format, level)
+            rules_content(&target.format, level, wrapper)
         } else {
             RulesFile::initial(shadow, wrapper, level)
         }

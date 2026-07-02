@@ -150,11 +150,89 @@ fn rules_catalog_includes_previously_missing_agents_for_detection() {
 
 #[test]
 fn cursor_mdc_has_frontmatter_and_markers() {
-    let mdc = rules_content(&RulesFormat::CursorMdc, CompressionLevel::Off);
+    let mdc = rules_content(
+        &RulesFormat::CursorMdc,
+        CompressionLevel::Off,
+        Wrapper::Dedicated,
+    );
     assert!(mdc.contains("alwaysApply: true"));
     assert!(mdc.contains(START_MARK));
     assert!(mdc.contains(END_MARK));
     assert!(mdc.contains(&format!("<!-- version: {RULES_VERSION} -->")));
+}
+
+#[test]
+fn cursor_wrapper_follows_hook_coverage() {
+    // GL #1153: with lean-ctx rewrite+redirect hooks installed next to the
+    // mdc, the injector selects the honest HookCovered profile; without them
+    // (or with foreign hooks) it stays on the full Dedicated mapping.
+    let home = std::env::temp_dir().join("lc_test_cursor_wrapper_coverage");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".cursor/rules")).unwrap();
+    let mdc_path = home.join(".cursor/rules/lean-ctx.mdc");
+
+    assert!(matches!(
+        super::content::cursor_wrapper_for_mdc(&mdc_path),
+        Wrapper::Dedicated
+    ));
+
+    std::fs::write(
+        home.join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[
+            {"matcher":"Shell","command":"/usr/local/bin/lean-ctx hook rewrite"},
+            {"matcher":"Read|Grep","command":"/usr/local/bin/lean-ctx hook redirect"}
+        ]}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        super::content::cursor_wrapper_for_mdc(&mdc_path),
+        Wrapper::HookCovered
+    ));
+
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn inject_cursor_switches_profile_when_hooks_appear() {
+    // End-to-end through the real injector: a Dedicated mdc written before
+    // hooks existed must be resynced to HookCovered on the next inject after
+    // the hooks arrive (and back, if they are removed) — the byte-exact
+    // drift check makes the transition, no version bump needed.
+    let _guard = crate::core::data_dir::test_env_lock();
+    let home = std::env::temp_dir().join("lc_test_inject_cursor_hookcovered");
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+
+    let result = inject_rules_for_agent(&home, "cursor");
+    assert!(result.errors.is_empty());
+    let mdc_path = home.join(".cursor/rules/lean-ctx.mdc");
+    let before = std::fs::read_to_string(&mdc_path).unwrap();
+    assert!(
+        before.contains("MANDATORY MAPPING"),
+        "without hooks the full Dedicated mapping applies"
+    );
+
+    std::fs::write(
+        home.join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[
+            {"matcher":"Shell","command":"/usr/local/bin/lean-ctx hook rewrite"},
+            {"matcher":"Read|Grep","command":"/usr/local/bin/lean-ctx hook redirect"}
+        ]}}"#,
+    )
+    .unwrap();
+    let result = inject_rules_for_agent(&home, "cursor");
+    assert!(result.errors.is_empty());
+    let after = std::fs::read_to_string(&mdc_path).unwrap();
+    assert!(
+        !after.contains("MANDATORY MAPPING") && after.contains("hooks cover this session"),
+        "with hooks installed the mdc must carry the HookCovered profile"
+    );
+    assert!(
+        after.contains("alwaysApply: true"),
+        "frontmatter survives the profile switch"
+    );
+
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 // ── RulesFile operations ─────────────────────────────────────

@@ -48,49 +48,26 @@ After adding, restart Cursor. You should see "lean-ctx" listed as a connected MC
 
 ### Step 2: Agent Rules (MDC Format)
 
-lean-ctx creates `~/.cursor/rules/lean-ctx.mdc` with Cursor-specific MDC frontmatter:
+lean-ctx creates `~/.cursor/rules/lean-ctx.mdc` with Cursor-specific MDC
+frontmatter (`alwaysApply: true`, `globs: **/*`). The **content is
+hook-aware** (GL #1153):
 
-```markdown
----
-description: "lean-ctx: context compression layer. Tools replace native Read/Grep/Shell — see tool descriptions."
-globs: **/*
-alwaysApply: true
----
+- **Hooks installed** (the default — `init --agent cursor` writes
+  `~/.cursor/hooks.json` with the `rewrite` + `redirect` PreToolUse hooks):
+  the mdc carries the *hook-covered* profile. It states honestly that native
+  Shell/Read/Grep are already compressed transparently by the hooks, and
+  advertises only the tools with no native equivalent — `ctx_compose`,
+  `ctx_symbol` / `ctx_callgraph`, `ctx_semantic_search`,
+  `ctx_knowledge` / `ctx_session`, `ctx_expand`.
+- **No hooks** (MCP-only install): the mdc carries the full tool-mapping
+  profile (`ctx_read` over Read, `ctx_search` over Grep, `ctx_shell` over
+  Shell, …), because nothing else routes native calls through lean-ctx.
 
-# lean-ctx — Context Engineering Layer
-<!-- lean-ctx-rules -->
-
-## Mode: Hybrid (MCP reads + CLI shell)
-
-MCP tools for reads/search (cached, token-efficient):
-- `ctx_read(path, mode)` instead of `Read`
-- `ctx_search(pattern, path)` instead of `Grep`
-
-CLI for shell (no MCP schema overhead):
-- `lean-ctx -c "<cmd>"` instead of raw Shell
-- `lean-ctx ls [path]` instead of `ls`/`find`
-
-## Mode Selection
-- Editing → `full` then `diff` for re-reads
-- Context only → `map` or `signatures`
-- Large file → `aggressive` or `entropy`
-- Specific lines → `lines:N-M`
-- Unsure → `auto`
-
-## File Editing
-Use native Edit/StrReplace. Write/Delete/Glob → use normally.
-If Edit fails, use `ctx_edit(path, old_string, new_string)` immediately.
-
-## Session Documentation
-After significant work: `ctx_knowledge(action="remember", category="decision", content="...")`
-When you see [CHECKPOINT] → call `ctx_session(action="task", value="<status>")`.
-<!-- /lean-ctx -->
-```
-
-Key MDC properties:
-- **`alwaysApply: true`** — rules are active in every file context
-- **`globs: **/*`** — matches all files in the workspace
-- The `description` field helps Cursor understand when to apply these rules
+The injector re-syncs the profile automatically when hooks are installed or
+removed later — no manual step. Rationale: Cursor's harness makes native
+tools first-class and MCP tools two-step; a "NEVER use native tools" rule
+there is unenforceable and only creates instruction dissonance, while the
+hooks already bank the savings on every native call.
 
 ### Step 3: Shell Hook
 
@@ -300,9 +277,16 @@ lean-ctx init --global
 
 ### Cursor using native Read instead of ctx_read
 
-This happens when the rules aren't properly loaded. Check:
+With the hooks installed this is **expected and fine**: the `redirect` hook
+compresses native Read/Grep and the `rewrite` hook compresses native Shell
+transparently — the savings are banked either way (verify with
+`lean-ctx gain --live`). The hook-covered rules profile documents exactly
+this.
 
-1. `~/.cursor/rules/lean-ctx.mdc` exists and has `alwaysApply: true`
+Only in an MCP-only install (no `~/.cursor/hooks.json` entries) should the
+agent prefer `ctx_read`/`ctx_search` directly. If it doesn't there:
+
+1. Check `~/.cursor/rules/lean-ctx.mdc` exists and has `alwaysApply: true`
 2. Restart Cursor after rule changes
 3. In a new chat, verify the agent uses `ctx_read` — if not, the rules may be overridden by project-level rules with conflicting instructions
 

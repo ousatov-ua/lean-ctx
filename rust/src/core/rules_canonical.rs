@@ -208,6 +208,28 @@ pub const SHADOW_MINIMAL: &str = "\
 lean-ctx shadow mode: native file/search/shell calls auto-route to ctx_* — no tool-mapping needed.\n\
 Exclusive tools (no native trigger): ctx_compose (understand code, call first), ctx_symbol (exact symbol), ctx_callgraph (callers), ctx_semantic_search (by meaning), ctx_knowledge / ctx_session (memory).";
 
+/// Hook-covered header (GL #1153): the honest replacement for the
+/// `CRITICAL`/`BULLETS`/`NEVER` mapping on hosts whose *installed hooks*
+/// already compress the native tools (Cursor: `preToolUse` rewrite covers
+/// Shell, redirect covers Read/Grep). There a "NEVER use native tools" rule
+/// fights the host's own tool guidance and is unenforceable — the model calls
+/// native tools anyway and the hooks compress them transparently. Saying so
+/// removes the instruction dissonance instead of losing the battle silently.
+pub const HOOK_COVERED_HEADER: &str = "\
+lean-ctx hooks cover this session: native Shell, Read and Grep are compressed \
+transparently (PreToolUse rewrite/redirect) — using them is fine and already saves tokens.";
+
+/// The tools worth an explicit MCP call on a hook-covered host: capabilities
+/// with *no* native equivalent the hooks could intercept. Kept in sync with
+/// [`SHADOW_MINIMAL`]'s exclusive-tools line (same rationale, different cause).
+pub const HOOK_COVERED_TOOLS: &str = "\
+Call the ctx_* MCP tools for what native tools cannot do:\n\
+• ctx_compose — orient in code (bundles search + read + symbols in one call)\n\
+• ctx_symbol / ctx_callgraph — exact definitions, callers, blast radius\n\
+• ctx_semantic_search — search by meaning, not pattern\n\
+• ctx_knowledge / ctx_session — persistent memory across sessions\n\
+• ctx_expand — recover full text from [Archived]/compressed output";
+
 // ── Output-style compression prompts ───────────────────────────
 
 /// Lite compression — concise, bullet-point output.
@@ -292,6 +314,21 @@ const FULL_NON_SHADOW: &[&str] = &[
 // style survive. Footprint reduction is provable via the #959 delta harness.
 const FULL_SHADOW: &[&str] = &[SHADOW_MINIMAL, INTELLIGENCE];
 
+// GL #1153: the hook-covered profile — for hosts whose installed lean-ctx
+// hooks already compress the native tools (Cursor). Like shadow, the
+// tool-mapping ("NEVER use native …") is dropped: it is unenforceable against
+// the host's own tool guidance and the hooks make it unnecessary. Unlike
+// shadow, the coverage is partial (hooks see Shell/Read/Grep but not e.g.
+// semantic questions), so the exclusive-capability advert is a full section
+// and the recovery line stays.
+const HOOK_COVERED_NON_SHADOW: &[&str] = &[
+    HOOK_COVERED_HEADER,
+    HOOK_COVERED_TOOLS,
+    PARALLEL,
+    RECOVER_COMPACT,
+    INTELLIGENCE,
+];
+
 const COMPACT_NON_SHADOW: &[&str] = &[
     CRITICAL,
     BULLETS,
@@ -328,6 +365,14 @@ pub enum Wrapper {
     /// **MCP session instructions.**  COMPACT profile.  No markers or
     /// headers — bare content used inline in per-session MCP instructions.
     Bare,
+
+    /// **Hook-covered dedicated rule file** (GL #1153). For hosts whose
+    /// installed lean-ctx hooks already compress the native tools (Cursor:
+    /// PreToolUse rewrite/redirect). Same marker/version wrapping as
+    /// `Dedicated`, but the body swaps the unenforceable tool-mapping for the
+    /// honest hook-coverage note plus the exclusive-capability advert.
+    /// Shadow mode collapses it to the same minimal profile as `Dedicated`.
+    HookCovered,
 }
 
 /// Render lean-ctx rules for a given wrapper, shadow mode, and compression level.
@@ -340,9 +385,11 @@ pub enum Wrapper {
 pub fn render(shadow: bool, wrapper: Wrapper, level: CompressionLevel) -> String {
     let profile = match (wrapper, shadow) {
         (Wrapper::Longform, false) => LONGFORM_NON_SHADOW,
-        // Shadow collapses Longform + Dedicated to the same minimal profile.
-        (Wrapper::Longform | Wrapper::Dedicated, true) => FULL_SHADOW,
+        // Shadow collapses Longform + Dedicated + HookCovered to the same
+        // minimal profile (interception supersedes hook coverage).
+        (Wrapper::Longform | Wrapper::Dedicated | Wrapper::HookCovered, true) => FULL_SHADOW,
         (Wrapper::Dedicated, false) => FULL_NON_SHADOW,
+        (Wrapper::HookCovered, false) => HOOK_COVERED_NON_SHADOW,
         (_, false) => COMPACT_NON_SHADOW,
         (_, true) => COMPACT_SHADOW,
     };
@@ -374,6 +421,25 @@ pub fn render(shadow: bool, wrapper: Wrapper, level: CompressionLevel) -> String
     let version_line = format!("<!-- version: {RULES_VERSION} -->");
 
     format!("{START_MARK}\n{version_line}\n\n{body}\n{END_MARK}")
+}
+
+/// Unmarked render of the hook-covered profile for ephemeral channels
+/// (the mcp.json `instructions` snapshot on hook-covered hosts, GL #1153).
+/// The `Bare` counterpart of `Wrapper::HookCovered`: same body, no markers —
+/// per-session channels are governed by carrier coverage, so markers would be
+/// noise (see [`COMPRESSION_BLOCK_START`]). Shadow collapses to the regular
+/// bare shadow profile (interception supersedes hook coverage).
+pub fn render_hook_covered_bare(shadow: bool, level: CompressionLevel) -> String {
+    if shadow {
+        return render(true, Wrapper::Bare, level);
+    }
+    let mut body = HOOK_COVERED_NON_SHADOW.join("\n\n");
+    let compression = compression_text(level);
+    if !compression.is_empty() {
+        body.push('\n');
+        body.push_str(compression);
+    }
+    body
 }
 // ============================================================
 // RULES FILE — centralized interface for reading rule files
@@ -1162,5 +1228,69 @@ mod tests {
             CRITICAL.contains("ctx_*"),
             "CRITICAL must name the ctx_* family"
         );
+    }
+
+    // --- HookCovered profile (GL #1153) ---
+
+    #[test]
+    fn hook_covered_drops_unenforceable_mapping() {
+        // The whole point: on a hook-covered host the "NEVER use native"
+        // mapping fights the host's own tool guidance. The profile must
+        // acknowledge the hooks instead of demanding the impossible.
+        let out = render(false, Wrapper::HookCovered, CompressionLevel::Off);
+        assert!(
+            !out.contains("MANDATORY MAPPING") && !out.contains(NEVER) && !out.contains(CRITICAL),
+            "HookCovered must not carry the native-tool prohibition"
+        );
+        assert!(
+            out.contains(HOOK_COVERED_HEADER),
+            "must state that hooks compress native tools"
+        );
+        assert!(
+            out.contains("ctx_compose") && out.contains("ctx_semantic_search"),
+            "must advertise the exclusive capabilities"
+        );
+    }
+
+    #[test]
+    fn hook_covered_keeps_markers_version_and_recovery() {
+        // Coverage detection (rules_channel::carries_full_rules /
+        // client_autoloads_rules) and the injector's drift check both key on
+        // the canonical markers — HookCovered must stay a first-class carrier.
+        let out = render(false, Wrapper::HookCovered, CompressionLevel::Off);
+        assert!(out.contains(START_MARK) && out.contains(END_MARK));
+        assert!(out.contains(&format!("<!-- version: {RULES_VERSION} -->")));
+        assert!(out.contains(RECOVER_COMPACT), "recovery line must survive");
+        assert!(out.contains("(no MCP)"), "MCP-free recovery path stays");
+    }
+
+    #[test]
+    fn hook_covered_is_leaner_than_full() {
+        let covered = render(false, Wrapper::HookCovered, CompressionLevel::Off);
+        let full = render(false, Wrapper::Dedicated, CompressionLevel::Off);
+        assert!(
+            covered.len() < full.len(),
+            "HookCovered ({}) must be a strict reduction of FULL ({})",
+            covered.len(),
+            full.len()
+        );
+    }
+
+    #[test]
+    fn hook_covered_shadow_collapses_to_minimal() {
+        // Interception supersedes hook coverage — same minimal profile as
+        // Dedicated shadow.
+        let covered_shadow = render(true, Wrapper::HookCovered, CompressionLevel::Off);
+        let dedicated_shadow = render(true, Wrapper::Dedicated, CompressionLevel::Off);
+        assert_eq!(covered_shadow, dedicated_shadow);
+    }
+
+    #[test]
+    fn hook_covered_wraps_compression_in_markers() {
+        // The compression payload keeps the carrier markers so cross-channel
+        // dedup (cursor_compression_covered) recognises the mdc as covered.
+        let out = render(false, Wrapper::HookCovered, CompressionLevel::Standard);
+        assert!(out.contains(COMPRESSION_BLOCK_START) && out.contains(COMPRESSION_BLOCK_END));
+        assert!(out.contains("OUTPUT STYLE: dense"));
     }
 }

@@ -293,12 +293,22 @@ fn build_full_instructions(
     // instructions.md), repeating the skeleton here would bill the same
     // guidance twice on every session. A one-line anchor keeps the binding;
     // the compression payload is deduped separately via `level` above.
+    //
+    // Hook-covered hosts (GL #1153) get the hook-aware anchor: repeating
+    // "ctx_* replaces native tools" to a Cursor whose hooks already compress
+    // the native calls re-creates exactly the instruction dissonance the
+    // HookCovered rule profile removes.
     let skeleton = if client_loads_rules_from_file(client_name) {
+        let anchor = if client_is_hook_covered(client_name) {
+            HOOK_COVERED_ANCHOR
+        } else {
+            SKELETON_ANCHOR
+        };
         let compression = rc::compression_text(level);
         if compression.is_empty() {
-            SKELETON_ANCHOR.to_string()
+            anchor.to_string()
         } else {
-            format!("{SKELETON_ANCHOR}\n{compression}")
+            format!("{anchor}\n{compression}")
         }
     } else {
         rc::render(shadow, Wrapper::Bare, level)
@@ -413,6 +423,13 @@ pub fn claude_code_instructions() -> String {
 const SKELETON_ANCHOR: &str = "lean-ctx active — your auto-loaded lean-ctx rules apply: \
     ctx_* tools replace native Read/Grep/Shell/Glob (ctx_compose first).";
 
+/// The anchor for hook-covered hosts (GL #1153): consistent with the
+/// HookCovered rule profile — native tools are fine (the hooks compress
+/// them), the MCP call is for the exclusive capabilities.
+const HOOK_COVERED_ANCHOR: &str = "lean-ctx active — hooks compress native Shell/Read/Grep \
+    transparently; call ctx_compose to orient, ctx_semantic_search / ctx_knowledge for \
+    meaning & memory.";
+
 fn client_loads_compression_from_file(client_name: &str) -> bool {
     crate::core::home::resolve_home_dir().is_some_and(|home| {
         crate::core::rules_channel::client_autoloads_compression(client_name, &home)
@@ -422,6 +439,11 @@ fn client_loads_compression_from_file(client_name: &str) -> bool {
 fn client_loads_rules_from_file(client_name: &str) -> bool {
     crate::core::home::resolve_home_dir()
         .is_some_and(|home| crate::core::rules_channel::client_autoloads_rules(client_name, &home))
+}
+
+fn client_is_hook_covered(client_name: &str) -> bool {
+    crate::core::home::resolve_home_dir()
+        .is_some_and(|home| crate::core::rules_channel::client_hook_covered(client_name, &home))
 }
 
 fn build_shell_hint() -> String {
@@ -516,6 +538,55 @@ mod tests {
         assert!(
             count_tokens(&covered) < count_tokens(&uncovered),
             "anchor path must be strictly cheaper"
+        );
+    }
+
+    #[test]
+    fn hook_covered_client_gets_hook_aware_anchor() {
+        // GL #1153: with lean-ctx hooks covering the native tools, the anchor
+        // must not repeat "ctx_* replaces native tools" — that is exactly the
+        // instruction dissonance the HookCovered profile removes.
+        let _guard = crate::core::data_dir::test_env_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".cursor/rules")).unwrap();
+        std::fs::write(
+            home.join(".cursor/rules/lean-ctx.mdc"),
+            rc::render(
+                false,
+                Wrapper::HookCovered,
+                crate::core::config::CompressionLevel::Off,
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".cursor/hooks.json"),
+            r#"{"version":1,"hooks":{"preToolUse":[
+                {"matcher":"Shell","command":"/usr/local/bin/lean-ctx hook rewrite"},
+                {"matcher":"Read|Grep","command":"/usr/local/bin/lean-ctx hook redirect"}
+            ]}}"#,
+        )
+        .unwrap();
+        let old_home = std::env::var("HOME").ok();
+        crate::test_env::set_var("HOME", home);
+        crate::test_env::set_var("LEAN_CTX_MINIMAL", "1");
+
+        let covered = build_instructions_with_client(CrpMode::Off, "cursor");
+
+        if let Some(h) = old_home {
+            crate::test_env::set_var("HOME", h);
+        } else {
+            crate::test_env::remove_var("HOME");
+        }
+        crate::test_env::remove_var("LEAN_CTX_MINIMAL");
+
+        assert!(
+            covered.contains(HOOK_COVERED_ANCHOR),
+            "hook-covered client must get the hook-aware anchor:\n{covered}"
+        );
+        assert!(
+            !covered.contains(SKELETON_ANCHOR) && !covered.contains("MANDATORY MAPPING"),
+            "hook-covered client must not carry the replace-native wording:\n{covered}"
         );
     }
 

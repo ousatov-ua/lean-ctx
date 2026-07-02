@@ -104,11 +104,21 @@ pub(super) fn lean_ctx_server_entry_with_instructions(
     let shadow = crate::core::config::Config::load().shadow_mode;
     let level =
         crate::core::config::CompressionLevel::effective(&crate::core::config::Config::load());
-    let instructions = crate::core::rules_canonical::render(
-        shadow,
-        crate::core::rules_canonical::Wrapper::Bare,
-        level,
-    );
+    // Hook-covered hosts (GL #1153): the static instructions snapshot must
+    // agree with the injected rule file — repeating "NEVER use native tools"
+    // to a Cursor whose hooks compress them re-creates the dissonance the
+    // HookCovered profile removes.
+    let hook_covered = crate::core::home::resolve_home_dir()
+        .is_some_and(|home| crate::core::rules_channel::client_hook_covered(agent_key, &home));
+    let instructions = if hook_covered {
+        crate::core::rules_canonical::render_hook_covered_bare(shadow, level)
+    } else {
+        crate::core::rules_canonical::render(
+            shadow,
+            crate::core::rules_canonical::Wrapper::Bare,
+            level,
+        )
+    };
 
     let constraints = crate::core::client_constraints::by_client_id(agent_key);
     if let Some(max_chars) = constraints.and_then(|c| c.mcp_instructions_max_chars) {

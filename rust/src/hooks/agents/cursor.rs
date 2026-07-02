@@ -141,21 +141,7 @@ pub fn install_cursor_hook(global: bool) {
                 eprintln!("Cursor rule already exists.");
             }
         } else {
-            let body = crate::core::rules_canonical::render(
-                false,
-                crate::core::rules_canonical::Wrapper::Dedicated,
-                crate::core::config::CompressionLevel::Off,
-            );
-            let rule_content = format!(
-                "---\n\
-                 description: \"lean-ctx: context compression layer. \
-                 Tools replace native Read/Grep/Shell — see rule body.\"\n\
-                 globs: **/*\n\
-                 alwaysApply: true\n\
-                 ---\n\n\
-                 {body}"
-            );
-            write_file(&rule_path, &rule_content);
+            write_file(&rule_path, &cursor_mdc_content(&home));
             if !mcp_server_quiet_mode() {
                 eprintln!("Created .cursor/rules/lean-ctx.mdc in current project.");
             }
@@ -178,24 +164,25 @@ pub(crate) fn install_cursor_hook_with_mode(global: bool, mode: HookMode) {
 }
 
 fn install_cursor_rules_for_mode(global: bool, mode: HookMode) {
-    let content = cursor_mdc_for_mode(mode);
+    let Some(home) = crate::core::home::resolve_home_dir() else {
+        return;
+    };
+    let content = cursor_mdc_content(&home);
     let mode_name = match mode {
         HookMode::Hybrid => "hybrid",
         HookMode::Mcp => "mcp",
     };
 
     if global {
-        if let Some(home) = crate::core::home::resolve_home_dir() {
-            let global_rules_dir = home.join(".cursor").join("rules");
-            let _ = std::fs::create_dir_all(&global_rules_dir);
-            let global_path = global_rules_dir.join("lean-ctx.mdc");
-            write_file(&global_path, &content);
-            if !mcp_server_quiet_mode() {
-                eprintln!(
-                    "Installed Cursor rules in {mode_name} mode at {}",
-                    global_path.display()
-                );
-            }
+        let global_rules_dir = home.join(".cursor").join("rules");
+        let _ = std::fs::create_dir_all(&global_rules_dir);
+        let global_path = global_rules_dir.join("lean-ctx.mdc");
+        write_file(&global_path, &content);
+        if !mcp_server_quiet_mode() {
+            eprintln!(
+                "Installed Cursor rules in {mode_name} mode at {}",
+                global_path.display()
+            );
         }
     } else {
         let rules_dir = PathBuf::from(".cursor").join("rules");
@@ -208,21 +195,24 @@ fn install_cursor_rules_for_mode(global: bool, mode: HookMode) {
     }
 }
 
-fn cursor_mdc_for_mode(_mode: HookMode) -> String {
+/// The Cursor mdc document this installer writes. Config-driven (GL #1156 —
+/// previously hardcoded `shadow=false`, `CompressionLevel::Off`) and
+/// hook-aware (GL #1153): right after `install_cursor_hook_config` wrote the
+/// rewrite+redirect hooks, the coverage check selects the honest HookCovered
+/// profile; without hooks it falls back to the full Dedicated mapping.
+fn cursor_mdc_content(home: &std::path::Path) -> String {
+    let cfg = crate::core::config::Config::load();
+    let wrapper = if crate::core::rules_channel::cursor_hooks_cover_native_tools(home) {
+        crate::core::rules_canonical::Wrapper::HookCovered
+    } else {
+        crate::core::rules_canonical::Wrapper::Dedicated
+    };
     let body = crate::core::rules_canonical::render(
-        false,
-        crate::core::rules_canonical::Wrapper::Dedicated,
-        crate::core::config::CompressionLevel::Off,
+        cfg.shadow_mode,
+        wrapper,
+        crate::core::config::CompressionLevel::effective(&cfg),
     );
-    format!(
-        "---\n\
-         description: \"lean-ctx: context compression layer. \
-         Tools replace native Read/Grep/Shell — see rule body.\"\n\
-         globs: **/*\n\
-         alwaysApply: true\n\
-         ---\n\n\
-         {body}"
-    )
+    crate::rules_inject::cursor_mdc_document(&body)
 }
 
 pub(crate) fn install_cursor_hook_scripts(home: &std::path::Path) {

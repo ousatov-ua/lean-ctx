@@ -4,29 +4,56 @@
 //! Rule CONTENT is delegated to `core::rules_canonical` — this module only
 //! handles format dispatch and the Cursor-specific frontmatter.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::RulesFormat;
 use crate::core::config::CompressionLevel;
 use crate::core::rules_canonical::{self as rc, Wrapper};
 
-pub(super) fn rules_content(format: &RulesFormat, level: CompressionLevel) -> String {
+/// The wrapper a Cursor mdc at `mdc_path` should carry (GL #1153): the
+/// honest `HookCovered` profile when the sibling `hooks.json` (always under
+/// the same `.cursor/` dir) shows lean-ctx compressing the native tools,
+/// otherwise the full `Dedicated` mapping. Path-derived so isolated test
+/// homes and the real `~/.cursor` behave identically.
+pub(super) fn cursor_wrapper_for_mdc(mdc_path: &Path) -> Wrapper {
+    let covered = mdc_path
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|cursor_dir| {
+            crate::core::rules_channel::cursor_hooks_json_covers(&cursor_dir.join("hooks.json"))
+        });
+    if covered {
+        Wrapper::HookCovered
+    } else {
+        Wrapper::Dedicated
+    }
+}
+
+/// Wrap a rendered rules body in the Cursor mdc frontmatter. The description
+/// stays profile-neutral: whether native tools are replaced (Dedicated) or
+/// hook-covered (GL #1153) is stated by the body itself.
+pub(crate) fn cursor_mdc_document(body: &str) -> String {
+    format!(
+        "---\n\
+         description: \"lean-ctx: context compression layer — \
+         tool guidance in rule body.\"\n\
+         globs: **/*\n\
+         alwaysApply: true\n\
+         ---\n\n\
+         {body}"
+    )
+}
+
+pub(super) fn rules_content(
+    format: &RulesFormat,
+    level: CompressionLevel,
+    wrapper: Wrapper,
+) -> String {
     let shadow = crate::core::config::Config::load().shadow_mode;
     match format {
         RulesFormat::SharedMarkdown => rc::render(shadow, Wrapper::Shared, level),
         RulesFormat::DedicatedMarkdown => rc::render(shadow, Wrapper::Dedicated, level),
-        RulesFormat::CursorMdc => {
-            let body = rc::render(shadow, Wrapper::Dedicated, level);
-            format!(
-                "---\n\
-                 description: \"lean-ctx: context compression layer. \
-                 Tools replace native Read/Grep/Shell — see rule body.\"\n\
-                 globs: **/*\n\
-                 alwaysApply: true\n\
-                 ---\n\n\
-                 {body}"
-            )
-        }
+        RulesFormat::CursorMdc => cursor_mdc_document(&rc::render(shadow, wrapper, level)),
     }
 }
 

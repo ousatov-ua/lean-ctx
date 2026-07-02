@@ -54,6 +54,51 @@ pub fn cursor_compression_covered(home: &Path) -> bool {
     file_has_compression(&home.join(".cursor/rules/lean-ctx.mdc"))
 }
 
+/// True when the installed Cursor hooks already compress the native tools
+/// (GL #1153): `~/.cursor/hooks.json` carries lean-ctx `preToolUse` entries
+/// for BOTH the Shell rewrite and the Read/Grep redirect. Only then is the
+/// "use ctx_* instead of native" mapping dead weight — with partial or no
+/// hook coverage the full guidance stays.
+pub fn cursor_hooks_cover_native_tools(home: &Path) -> bool {
+    cursor_hooks_json_covers(&home.join(".cursor/hooks.json"))
+}
+
+/// Path-based core of [`cursor_hooks_cover_native_tools`], so the rules
+/// injector can derive the hooks.json location from the mdc target path (the
+/// two always live under the same `.cursor/` dir).
+///
+/// Conservative by construction: unreadable/invalid JSON, a missing file, or
+/// a redirect that was manually removed all mean "not covered".
+pub fn cursor_hooks_json_covers(hooks_json: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(hooks_json) else {
+        return false;
+    };
+    let Ok(v) = crate::core::jsonc::parse_jsonc(&content) else {
+        return false;
+    };
+    let Some(pre) = v.pointer("/hooks/preToolUse").and_then(|p| p.as_array()) else {
+        return false;
+    };
+    let has_lean_ctx_hook = |suffix: &str| {
+        pre.iter().any(|e| {
+            e.get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("lean-ctx") && c.contains(suffix))
+        })
+    };
+    has_lean_ctx_hook("hook rewrite") && has_lean_ctx_hook("hook redirect")
+}
+
+/// For the MCP `instructions` block: is `client_name` a host whose installed
+/// lean-ctx hooks already compress the native tools? Drives the hook-aware
+/// anchor wording (GL #1153) — repeating "ctx_* replaces native tools" to a
+/// hook-covered Cursor re-creates exactly the instruction dissonance the
+/// HookCovered profile removes.
+pub fn client_hook_covered(client_name: &str, home: &Path) -> bool {
+    let lower = client_name.to_lowercase();
+    lower.contains("cursor") && cursor_hooks_cover_native_tools(home)
+}
+
 /// Codex's per-user config dir (`~/.codex`, or `$CODEX_HOME`).
 fn codex_dir(home: &Path) -> std::path::PathBuf {
     crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"))
@@ -268,6 +313,59 @@ mod tests {
         .unwrap();
         assert!(client_autoloads_rules("codex", home));
         crate::test_env::remove_var("CODEX_HOME");
+    }
+
+    #[test]
+    fn cursor_hook_coverage_requires_both_pretooluse_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // No hooks.json at all.
+        assert!(!cursor_hooks_cover_native_tools(home));
+        assert!(!client_hook_covered("cursor", home));
+
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        let hooks = home.join(".cursor/hooks.json");
+
+        // Rewrite only (Shell covered, Read/Grep not) → NOT covered.
+        std::fs::write(
+            &hooks,
+            r#"{"version":1,"hooks":{"preToolUse":[
+                {"matcher":"Shell","command":"/usr/local/bin/lean-ctx hook rewrite"}
+            ]}}"#,
+        )
+        .unwrap();
+        assert!(!cursor_hooks_cover_native_tools(home));
+
+        // Rewrite + redirect → covered (exactly what install_cursor_hook_config writes).
+        std::fs::write(
+            &hooks,
+            r#"{"version":1,"hooks":{"preToolUse":[
+                {"matcher":"Shell","command":"/usr/local/bin/lean-ctx hook rewrite"},
+                {"matcher":"Read|Grep","command":"/usr/local/bin/lean-ctx hook redirect"}
+            ]}}"#,
+        )
+        .unwrap();
+        assert!(cursor_hooks_cover_native_tools(home));
+        assert!(client_hook_covered("cursor", home));
+        assert!(client_hook_covered("cursor-vscode", home));
+        // Other clients never count as hook-covered via Cursor's hooks.json.
+        assert!(!client_hook_covered("codex", home));
+        assert!(!client_hook_covered("", home));
+
+        // Foreign hooks (not lean-ctx) must not count.
+        std::fs::write(
+            &hooks,
+            r#"{"version":1,"hooks":{"preToolUse":[
+                {"matcher":"Shell","command":"/opt/other hook rewrite"},
+                {"matcher":"Read|Grep","command":"/opt/other hook redirect"}
+            ]}}"#,
+        )
+        .unwrap();
+        assert!(!cursor_hooks_cover_native_tools(home));
+
+        // Invalid JSON → fail closed (full guidance).
+        std::fs::write(&hooks, "{ not json").unwrap();
+        assert!(!cursor_hooks_cover_native_tools(home));
     }
 
     #[test]
