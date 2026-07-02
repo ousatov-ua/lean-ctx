@@ -343,6 +343,11 @@ lean-ctx maintains an **audit trail** (`audit_trail.rs`) of security-relevant
 actions and ships an **OWASP alignment** map (`owasp_alignment.rs`) documenting
 which controls address which risks — useful when answering a security review.
 
+For a structured external yardstick, lean-ctx publishes a self-assessment
+against the 32-control [Context Governance Benchmark](https://github.com/yvgude/context-governance-benchmark)
+(v1.0-draft): graded **C2 — Managed** with declared gaps — see
+[docs/compliance/cgb-self-assessment.md](../compliance/cgb-self-assessment.md).
+
 ---
 
 ## Governance checklist

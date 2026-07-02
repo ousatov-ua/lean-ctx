@@ -573,10 +573,18 @@ guessed.
 
 | Read mode | Compression | Tokens (50 files) | Quality |
 |---|---:|---:|---:|
-| Raw read | 0% | 457.6K | 100% |
-| `map` | **97.7%** | 8.9K | 83% |
-| `signatures` | **97.0%** | 11.8K | 92% |
+| Raw read | 0% | 533.2K | 100% |
+| `map` | **98.1%** | 8.0K | 78% |
+| `signatures` | **96.7%** | 14.0K | 96% |
 | Cached re-read | ~99.99% | ~13 tok | 100% |
+
+lean-ctx's **own cost is measured too**: the fixed per-session footprint it
+injects (advertised tool schemas + MCP instructions) is ~2.1K tokens and
+CI-gated via `lean-ctx doctor overhead --gate`, so it can only shrink. And the
+long-lived proxy rail has a deterministic self-verify —
+`lean-ctx benchmark dual-arm --json` replays a 15-turn session and prices it per
+model (digest `f5ed145e61ce3689`, 99.4% input-side saving on cache-priced rails;
+methodology: [bench/agent-task/r2](bench/agent-task/r2/README.md)).
 
 Accuracy isn't a vibe: the lossy stages are **CI-gated**. A model-free A/B gate
 proves the JSON crusher keeps *every* gold answer while cutting tokens, and proxy
@@ -593,7 +601,7 @@ committed recorded subset that blocks CI on any regression.
 
 ## By the numbers
 
-- **2,900+ GitHub stars** — and counting
+- **3,000+ GitHub stars** — and counting
 - **280+ forks** — active community contributions
 - **200+ releases** — shipped near-daily since launch
 - **30+ supported AI coding agents** — broadest MCP compatibility
@@ -623,6 +631,7 @@ committed recorded subset that blocks CI on any regression.
 - **Optional anonymous stats sharing** (opt-in during setup)
 - **Disableable update check** (config `update_check_disabled = true` or `LEAN_CTX_NO_UPDATE_CHECK=1`)
 - **40+ security hardening fixes** in v3.5.16 (path traversal, injection, CSPRNG, CSP, resource limits — [details](CHANGELOG.md))
+- **Context Governance Benchmark self-assessment**: graded **C2 — Managed** against the 32-control [CGB v1.0-draft](https://github.com/yvgude/context-governance-benchmark) spec, gaps declared — [docs/compliance/cgb-self-assessment.md](docs/compliance/cgb-self-assessment.md)
 - Runs locally; your code never leaves your machine unless you explicitly enable cloud sync
 
 See [SECURITY.md](SECURITY.md).

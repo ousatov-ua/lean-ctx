@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **Benchmark numbers refreshed & self-footprint made a headline metric (#659).**
+  `BENCHMARKS.md` regenerated with v3.8.18 (map 98.1% / signatures 96.7% on the
+  50-file corpus; cold start 2.69s → 0.67s). The README benchmarks section now
+  also states lean-ctx's *own* fixed per-session cost (~2.1K tok, CI-gated via
+  `doctor overhead --gate`) and links the deterministic dual-arm self-verify
+  (digest `f5ed145e61ce3689`) with its methodology. The CGB self-assessment
+  (C2 — Managed) is surfaced from the README security section and Journey 13.
+
 ### Security
 - **Bundled addons now spawn with a scrubbed environment (addon env isolation).**
   Every runnable registry addon (Headroom, Sophon, Repomix, Serena, …) now
