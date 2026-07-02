@@ -179,7 +179,10 @@ fn render_config(opts: &InitOptions) -> String {
          # [[proxy.providers]]\n\
          # id = \"local\"\n\
          # shape = \"openai\"\n\
-         # base_url = \"http://ollama:11434\"\n\
+         # base_url = \"http://host.docker.internal:11434\"\n\
+         # local = true   # billed at the shadow rate, not cloud list prices\n\
+         # # plain-HTTP non-loopback upstream additionally needs:\n\
+         # # [proxy] allow_insecure_http_upstream = true\n\
          #\n\
          # [[proxy.providers]]\n\
          # id = \"foundry\"\n\

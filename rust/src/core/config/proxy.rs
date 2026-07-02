@@ -337,6 +337,14 @@ pub struct ProviderEntry {
     /// Set `false` to keep the entry in config but take it out of service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// Marks this endpoint as local inference (Ollama/vLLM/…): usage is booked
+    /// at the transparent `local_shadow_rate` instead of provider list prices
+    /// (enterprise#15/#18). Unset = derived from the URL (loopback hosts are
+    /// local). Set it explicitly when the endpoint is local but not loopback —
+    /// the containerized gateway reaching the host's Ollama
+    /// (`host.docker.internal`) or an in-cluster server (`ollama.svc.cluster.local`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<bool>,
 }
 
 /// A validated, ready-to-serve registry provider (runtime view of
@@ -347,6 +355,9 @@ pub struct ResolvedProvider {
     pub shape: WireShape,
     pub base_url: String,
     pub api_key_env: Option<String>,
+    /// Billed as local inference (shadow rate). Explicit `local` flag when the
+    /// entry declares one, otherwise loopback-URL derivation.
+    pub local: bool,
 }
 
 /// Built-in provider route names a registry entry must not shadow.
@@ -842,17 +853,23 @@ impl ProxyConfig {
             }
             match validate_upstream_url(&entry.base_url, self.allows_insecure_http_upstream(), true)
             {
-                Ok(base_url) => out.push(ResolvedProvider {
-                    id: id.to_string(),
-                    shape: entry.shape,
-                    base_url,
-                    api_key_env: entry
-                        .api_key_env
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|v| !v.is_empty())
-                        .map(str::to_string),
-                }),
+                Ok(base_url) => {
+                    // Explicit `local` flag wins; otherwise loopback URLs are
+                    // local (host.docker.internal etc. need the explicit flag).
+                    let local = entry.local.unwrap_or_else(|| is_local_proxy_url(&base_url));
+                    out.push(ResolvedProvider {
+                        id: id.to_string(),
+                        shape: entry.shape,
+                        base_url,
+                        api_key_env: entry
+                            .api_key_env
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .map(str::to_string),
+                        local,
+                    });
+                }
                 Err(e) => {
                     tracing::warn!("[proxy.providers] '{id}' has invalid base_url — skipped: {e}");
                 }
@@ -1639,7 +1656,34 @@ mod tests {
             base_url: base_url.into(),
             api_key_env: None,
             enabled: None,
+            local: None,
         }
+    }
+
+    #[test]
+    fn provider_local_flag_explicit_beats_url_derivation() {
+        // Loopback URL → derived local; explicit flag wins in both directions
+        // (host.docker.internal is the containerized-gateway case, #15/#18).
+        let loopback = entry("ollama", WireShape::OpenAi, "http://127.0.0.1:11434");
+        let mut declared_local = entry("hostgw", WireShape::OpenAi, "https://ollama.corp.example");
+        declared_local.local = Some(true);
+        let mut declared_cloud = entry("tunnel", WireShape::OpenAi, "http://localhost:9999");
+        declared_cloud.local = Some(false);
+        let cfg = ProxyConfig {
+            providers: vec![loopback, declared_local, declared_cloud],
+            ..Default::default()
+        };
+        let resolved = cfg.resolve_providers();
+        assert_eq!(resolved.len(), 3);
+        assert!(resolved[0].local, "loopback URL derives local=true");
+        assert!(
+            resolved[1].local,
+            "explicit local=true wins over HTTPS host"
+        );
+        assert!(
+            !resolved[2].local,
+            "explicit local=false wins over loopback"
+        );
     }
 
     #[test]

@@ -27,6 +27,9 @@ pub struct ProviderStatus {
     pub injects_credential: bool,
     /// `injects_credential` and the env var is actually set and non-empty.
     pub credential_present: bool,
+    /// Billed as local inference (shadow rate) — declared flag or loopback URL.
+    #[serde(default)]
+    pub local: bool,
 }
 
 /// Store (Postgres) health, measured by a live query at request time.
@@ -126,6 +129,7 @@ pub fn provider_statuses(
                 base_url: p.base_url.clone(),
                 injects_credential: p.api_key_env.is_some(),
                 credential_present,
+                local: p.local,
             }
         })
         .collect()
@@ -144,12 +148,14 @@ mod tests {
                 shape: WireShape::OpenAi,
                 base_url: "http://127.0.0.1:11434".into(),
                 api_key_env: None,
+                local: true,
             },
             ResolvedProvider {
                 id: "foundry".into(),
                 shape: WireShape::OpenAi,
                 base_url: "https://example.services.ai.azure.com/models".into(),
                 api_key_env: Some("LEANCTX_TEST_STATUS_KEY_UNSET".into()),
+                local: false,
             },
         ];
         let statuses = provider_statuses(&providers);
@@ -157,11 +163,13 @@ mod tests {
         assert!(!statuses[0].injects_credential);
         assert!(!statuses[0].credential_present);
         assert_eq!(statuses[0].shape, "openai");
+        assert!(statuses[0].local, "declared local flag must surface");
         assert!(statuses[1].injects_credential);
         assert!(
             !statuses[1].credential_present,
             "unset env var must show as missing credential"
         );
+        assert!(!statuses[1].local);
     }
 
     #[test]

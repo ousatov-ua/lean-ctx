@@ -145,6 +145,11 @@ pub async fn forward_request(
         if let Some(id) = &route.provider_id {
             wire.provider = id.clone();
         }
+        // Registry route targets carry their own local-inference flag
+        // (shadow-rate billing); built-in targets keep the URL heuristic.
+        if let Some(local) = route.local {
+            wire.is_local = local;
+        }
     }
     let wire = Some(wire);
 
@@ -177,11 +182,14 @@ fn wire_context(
         .cloned()
         .unwrap_or_default();
     // Registry routes attribute usage to the provider identity ("foundry",
-    // "local"), not the wire-shape label ("OpenAI") — shape ≠ identity.
-    let provider = parts
+    // "local"), not the wire-shape label ("OpenAI") — shape ≠ identity. The
+    // entry's resolved local flag rides along (shadow-rate billing for
+    // non-loopback local endpoints, e.g. host.docker.internal).
+    let registry = parts
         .extensions
-        .get::<super::providers::RegistryProviderId>()
-        .map_or(provider_label, |id| id.0.as_str());
+        .get::<super::providers::RegistryProviderId>();
+    let provider = registry.map_or(provider_label, |r| r.id.as_str());
+    let is_local = registry.map_or_else(|| upstream_is_local(upstream_base), |r| r.local);
     Box::new(super::usage::WireContext {
         provider: provider.to_string(),
         person: tags.person,
@@ -190,7 +198,7 @@ fn wire_context(
         saved_tokens: tokens_saved,
         // bytes/4 — the same estimation basis the proxy stats use throughout.
         uncompressed_input_tokens: original_size as u64 / 4,
-        is_local: upstream_is_local(upstream_base),
+        is_local,
         routed_from: None, // populated by the routing hook (wave 3)
     })
 }
@@ -687,9 +695,45 @@ mod tests {
         let mut parts = parts_for("/v1/chat/completions");
         parts
             .extensions
-            .insert(super::super::providers::RegistryProviderId("local".into()));
+            .insert(super::super::providers::RegistryProviderId {
+                id: "local".into(),
+                local: false,
+            });
         let wire = wire_context(&parts, "OpenAI", "http://127.0.0.1:11434", 0, 400);
         assert_eq!(wire.provider, "local");
+    }
+
+    #[test]
+    fn wire_context_registry_local_flag_beats_url_heuristic() {
+        // The containerized gateway reaches host Ollama via
+        // host.docker.internal — not loopback, but declared local = true must
+        // book the shadow rate (enterprise#15/#18). And the inverse: a
+        // loopback-tunneled cloud endpoint declared local = false must not.
+        let mut parts = parts_for("/v1/chat/completions");
+        parts
+            .extensions
+            .insert(super::super::providers::RegistryProviderId {
+                id: "local".into(),
+                local: true,
+            });
+        let wire = wire_context(
+            &parts,
+            "OpenAI",
+            "http://host.docker.internal:11434",
+            0,
+            400,
+        );
+        assert!(wire.is_local, "declared local flag must win");
+
+        let mut parts = parts_for("/v1/chat/completions");
+        parts
+            .extensions
+            .insert(super::super::providers::RegistryProviderId {
+                id: "tunnel".into(),
+                local: false,
+            });
+        let wire = wire_context(&parts, "OpenAI", "http://127.0.0.1:9999", 0, 400);
+        assert!(!wire.is_local, "declared non-local flag must win");
     }
 
     // --- enterprise#51: fail-open single retry ---

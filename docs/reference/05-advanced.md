@@ -175,6 +175,12 @@ api_key_env = "FOUNDRY_API_KEY"                         # optional: gateway-held
 id = "openrouter"
 shape = "openai"
 base_url = "https://openrouter.ai/api"
+
+[[proxy.providers]]
+id = "local"
+shape = "openai"
+base_url = "http://host.docker.internal:11434"          # gateway container → host Ollama
+local = true                                            # bill at the shadow rate
 ```
 
 - **Shape ≠ identity.** The proxy speaks three wire dialects; any number of
@@ -185,6 +191,13 @@ base_url = "https://openrouter.ai/api"
   credential header is stripped and replaced (callers authenticate with the
   lean-ctx Bearer token and never see the provider key). Unset → the caller's own
   credentials are forwarded verbatim, exactly like the built-ins.
+- **`local`** marks the endpoint as local inference for metering: usage is booked
+  at the transparent `local_shadow_rate` instead of cloud list prices. Unset, it
+  is derived from the URL (loopback hosts count as local) — declare it explicitly
+  when the endpoint is local but not loopback, e.g. the containerized gateway
+  reaching the host's Ollama via `host.docker.internal`, or an in-cluster vLLM
+  service. `local = false` likewise pins a loopback-tunneled cloud endpoint to
+  list-price billing.
 - Invalid entries are logged and skipped; the registry is hot-reloaded from
   `config.toml` like every upstream. Active entries appear on `/status` under
   `providers`.
