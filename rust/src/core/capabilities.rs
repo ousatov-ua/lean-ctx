@@ -45,10 +45,13 @@ pub fn required_capabilities(tool_name: &str) -> &'static [Capability] {
         "ctx_edit" => &[Capability::FsRead, Capability::FsWrite],
         "ctx_shell" => &[Capability::ExecUnrestricted],
         "ctx_knowledge" => &[Capability::KnowledgeRead, Capability::KnowledgeWrite],
-        "ctx_handoff" => &[Capability::KnowledgeRead, Capability::AgentManage],
+        // ctx_share is agent-to-agent handover WITHIN one project: the store is
+        // keyed per project root and push is jailed to it (enterprise#28), so it
+        // is not a cross-project data flow. AgentManage keeps it (like
+        // ctx_handoff) out of read-only roles (reviewer/ci/minimal).
+        "ctx_handoff" | "ctx_share" => &[Capability::KnowledgeRead, Capability::AgentManage],
         "ctx_agent" | "ctx_task" => &[Capability::AgentManage],
         "ctx_session" | "ctx" => &[],
-        "ctx_share" => &[Capability::KnowledgeRead, Capability::CrossProject],
         _ => &[Capability::FsRead],
     }
 }

@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (settings) {
       toggleEnabled.checked = settings.enabled !== false;
       togglePaste.checked = settings.autoCompressPaste !== false;
+      applyManagedState(settings, { toggleEnabled, togglePaste });
     }
   });
 
@@ -35,6 +36,34 @@ function updateSetting(key, value) {
     settings[key] = value;
     chrome.storage.local.set({ settings });
   });
+}
+
+// Enterprise policy (enterprise#29): lock controls whose values come from
+// chrome.storage.managed and surface the org gateway endpoint for
+// base-URL-capable tools (CLI/IDE). First-party web apps are not re-routable.
+function applyManagedState(settings, controls) {
+  const managedKeys = settings.managedKeys || [];
+  const banner = document.getElementById("managed-banner");
+  if (managedKeys.length === 0 && !settings.gatewayBaseUrl) return;
+
+  banner.style.display = "block";
+  if (managedKeys.includes("enabled")) {
+    controls.toggleEnabled.disabled = true;
+  }
+  if (managedKeys.includes("autoCompressPaste")) {
+    controls.togglePaste.disabled = true;
+  }
+
+  if (settings.gatewayBaseUrl) {
+    document.getElementById("managed-gateway").style.display = "block";
+    const urlEl = document.getElementById("managed-gateway-url");
+    urlEl.textContent = settings.gatewayBaseUrl;
+    urlEl.addEventListener("click", () => {
+      navigator.clipboard.writeText(settings.gatewayBaseUrl);
+      urlEl.textContent = "Copied!";
+      setTimeout(() => (urlEl.textContent = settings.gatewayBaseUrl), 1500);
+    });
+  }
 }
 
 function formatNumber(n) {

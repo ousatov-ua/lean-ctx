@@ -211,6 +211,95 @@ async fn missing_bearer_token_is_401() {
 }
 
 #[tokio::test]
+async fn ctx_share_requires_session_mutations_scope() {
+    // enterprise#28: org-wide context sharing is auth-gated — a token holding
+    // only Search must be denied before the tool ever runs.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_savings(&tmp); // "member" token: Search scope only
+    let app = build_app(cfg).await;
+
+    let body = json!({"name":"ctx_share","arguments":{"action":"list"}}).to_string();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/tools/call")
+        .header("Host", "localhost")
+        .header("Content-Type", "application/json")
+        .header("Authorization", "Bearer member-secret")
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+#[ignore = "requires full MCP server initialization via serve_directly"]
+async fn ctx_share_org_flow_push_pull_across_tokens_with_isolation() {
+    // enterprise#28 acceptance: context shareable across instances with
+    // isolation + auth. Token A pushes in ws1; token B pulls it in ws1 (each
+    // REST call is a fresh engine instance); ws2 sees nothing.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_two(&tmp);
+    cfg.tokens.push(TeamTokenConfig {
+        id: "t2".to_string(),
+        sha256_hex: sha256_hex(b"secret2"),
+        scopes: vec![TeamScope::Search, TeamScope::SessionMutations],
+        role: None,
+    });
+    let ws1_root = cfg.workspaces[0].root.clone();
+    std::fs::write(ws1_root.join("handover.md"), "ORG marker-XYZ\n").unwrap();
+    let app = build_app(cfg).await;
+
+    let call = |token: &'static str, body: String| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/tools/call")
+                .header("Host", "localhost")
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {token}"))
+                .body(Body::from(body))
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+            (status, String::from_utf8_lossy(&bytes).to_string())
+        }
+    };
+
+    // t1 pushes a ws1 file (fresh instance → disk fallback, jailed to ws1).
+    let (st, out) = call(
+        "secret",
+        json!({"name":"ctx_share","arguments":{"action":"push","paths":"handover.md","message":"take over"}}).to_string(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "push failed: {out}");
+    assert!(out.contains("Shared 1 files"), "push: {out}");
+
+    // t2 pulls in ws1 → sees t1's share (identities are token-derived).
+    let (st, out) = call(
+        "secret2",
+        json!({"name":"ctx_share","arguments":{"action":"pull"}}).to_string(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(out.contains("handover.md"), "cross-token pull: {out}");
+    assert!(out.contains("team:t1"), "sender identity missing: {out}");
+
+    // t2 pulls in ws2 → workspace isolation, nothing visible.
+    let (st, out) = call(
+        "secret2",
+        json!({"name":"ctx_share","workspaceId":"ws2","arguments":{"action":"pull"}}).to_string(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(
+        out.contains("No shared contexts"),
+        "workspace isolation broken: {out}"
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires full MCP server initialization via serve_directly"]
 async fn workspace_header_routes_tool_call_and_audits() {
     let tmp = tempfile::tempdir().unwrap();

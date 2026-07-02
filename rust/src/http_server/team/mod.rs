@@ -43,6 +43,11 @@ mod tests;
 
 const WORKSPACE_ARG_KEY: &str = "workspaceId";
 const CHANNEL_ARG_KEY: &str = "channelId";
+/// Per-call agent identity (enterprise#28). On the `/v1` REST surface the
+/// server overwrites this with `team:<token_id>` — identity is auth-derived,
+/// never client-claimed. Raw MCP clients may set it cooperatively (same trust
+/// model as local `ctx_agent register`).
+const AGENT_ARG_KEY: &str = "agentId";
 const WORKSPACE_HEADER: &str = "x-leanctx-workspace";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -419,10 +424,22 @@ impl ServerHandler for TeamCtxServer {
             .unwrap_or("default")
             .to_string();
         args.remove(CHANNEL_ARG_KEY);
+        // Per-call agent identity (enterprise#28): the per-call server instance
+        // starts with no registered agent, so identity-dependent tools
+        // (ctx_share, ctx_agent post/read) receive it via argument — on the
+        // REST surface it is the authenticated token id, injected server-side.
+        let agent = args
+            .get(AGENT_ARG_KEY)
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        args.remove(AGENT_ARG_KEY);
         // Re-apply dot path rewriting against the resolved root.
         Self::rewrite_dot_paths(&mut args, &root);
         request.arguments = Some(args);
         let s = LeanCtxServer::new_shared_with_context(&root, &ws, &channel);
+        if let Some(agent) = agent {
+            *s.agent_id.write().await = Some(agent);
+        }
         <LeanCtxServer as ServerHandler>::call_tool(&s, request, context).await
     }
 }
@@ -1086,6 +1103,12 @@ async fn v1_tool_call(
                 Value::String(ch.trim().to_string()),
             );
         }
+        // Auth-derived agent identity (enterprise#28): overwrite unconditionally
+        // so a REST client can never impersonate another token's agent.
+        m.insert(
+            AGENT_ARG_KEY.to_string(),
+            Value::String(format!("team:{}", auth.token_id)),
+        );
     }
 
     let required = required_scopes(&body.name, Some(&args));

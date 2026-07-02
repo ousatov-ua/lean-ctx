@@ -27,6 +27,28 @@ fn shared_dir(project_root: &str) -> PathBuf {
         .join(hash)
 }
 
+/// Reads `path` (absolute or relative to `project_root`) only if it resolves
+/// inside the project root after symlink resolution — the jail that keeps a
+/// share from carrying files outside the workspace (enterprise#28).
+fn read_within_root(path: &str, project_root: &str) -> Option<(String, String, usize)> {
+    let root =
+        crate::core::pathutil::canonicalize_secure(std::path::Path::new(project_root)).ok()?;
+    let candidate = std::path::Path::new(path);
+    let absolute = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    let resolved = crate::core::pathutil::canonicalize_secure(&absolute).ok()?;
+    if !resolved.starts_with(&root) {
+        return None;
+    }
+    let resolved_str = resolved.to_string_lossy().to_string();
+    let content = crate::core::io_boundary::read_file_lossy(&resolved_str).ok()?;
+    let tokens = crate::core::tokens::count_tokens(&content);
+    Some((resolved_str, content, tokens))
+}
+
 pub fn handle(
     action: &str,
     from_agent: Option<&str>,
@@ -70,24 +92,37 @@ fn handle_push(
         // stale cached copy would silently pass an outdated handover file to the
         // receiving agent. `current_full_content` re-reads when the cache is
         // behind disk, so the receiver always gets the current content.
-        let Some((content, tokens)) = cache.current_full_content(path) else {
-            not_found.push(*path);
+        if let Some((content, tokens)) = cache.current_full_content(path) {
+            let canonical = cache
+                .get(path)
+                .map_or_else(|| (*path).to_string(), |entry| entry.path.clone());
+            shared_files.push(SharedFile {
+                path: canonical,
+                content,
+                mode: "full".to_string(),
+                tokens,
+            });
             continue;
-        };
-        let canonical = cache
-            .get(path)
-            .map_or_else(|| (*path).to_string(), |entry| entry.path.clone());
-        shared_files.push(SharedFile {
-            path: canonical,
-            content,
-            mode: "full".to_string(),
-            tokens,
-        });
+        }
+        // Not in this instance's cache — org flows (team server, enterprise#28)
+        // run each call on a fresh instance, so fall back to a direct read,
+        // jailed to the project root: a share must never exfiltrate files
+        // outside the workspace.
+        if let Some((canonical, content, tokens)) = read_within_root(path, project_root) {
+            shared_files.push(SharedFile {
+                path: canonical,
+                content,
+                mode: "full".to_string(),
+                tokens,
+            });
+        } else {
+            not_found.push(*path);
+        }
     }
 
     if shared_files.is_empty() {
         return format!(
-            "No cached files found to share. Files must be read first via ctx_read.\nNot found: {}",
+            "No shareable files found (not cached, and not readable inside the project root).\nNot found: {}",
             not_found.join(", ")
         );
     }
@@ -403,9 +438,105 @@ mod tests {
             root,
         );
         assert!(
-            out.contains("No cached files found to share"),
+            out.contains("No shareable files found"),
             "expected skip message: {out}"
         );
+    }
+
+    #[test]
+    fn push_falls_back_to_disk_inside_root_without_cache() {
+        // Org flow (enterprise#28): the team server runs every call on a fresh
+        // instance — an empty cache must not block sharing a workspace file.
+        let _lock = crate::core::data_dir::test_env_lock();
+        let data = tempfile::tempdir().unwrap();
+        crate::test_env::set_var("LEAN_CTX_DATA_DIR", data.path());
+
+        let proj = tempfile::tempdir().unwrap();
+        let root = proj.path().to_str().unwrap();
+        std::fs::write(proj.path().join("notes.md"), "ORG-SHARE marker-CCC\n").unwrap();
+
+        let cache = SessionCache::new(); // fresh instance, nothing cached
+        let out = handle_push(
+            Some("team:alice"),
+            None,
+            Some("notes.md"),
+            Some("handover"),
+            &cache,
+            root,
+        );
+        assert!(out.contains("Shared 1 files"), "push result: {out}");
+        assert!(
+            shared_json(root).contains("marker-CCC"),
+            "disk fallback content not captured"
+        );
+
+        // A different token (agent) pulls it — org-wide sharing.
+        let pulled = handle_pull(Some("team:bob"), root);
+        assert!(pulled.contains("notes.md"), "receiver pull: {pulled}");
+        // The sender does not see their own share on pull.
+        let own = handle_pull(Some("team:alice"), root);
+        assert!(own.contains("No shared contexts for you"), "own: {own}");
+    }
+
+    #[test]
+    fn push_disk_fallback_is_jailed_to_project_root() {
+        // A path outside the workspace root must never enter a share.
+        let _lock = crate::core::data_dir::test_env_lock();
+        let data = tempfile::tempdir().unwrap();
+        crate::test_env::set_var("LEAN_CTX_DATA_DIR", data.path());
+
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "TOP-SECRET\n").unwrap();
+
+        let proj = tempfile::tempdir().unwrap();
+        let root = proj.path().to_str().unwrap();
+        let cache = SessionCache::new();
+
+        for evil in [
+            secret.to_str().unwrap().to_string(),
+            format!("../{}", secret.display()),
+            "../../etc/hosts".to_string(),
+        ] {
+            let out = handle_push(Some("a"), None, Some(&evil), None, &cache, root);
+            assert!(
+                out.contains("No shareable files found"),
+                "jail escape via {evil}: {out}"
+            );
+        }
+        assert!(
+            !shared_json(root).contains("TOP-SECRET"),
+            "outside content leaked into share store"
+        );
+    }
+
+    #[test]
+    fn share_store_is_isolated_per_workspace_root() {
+        // Two workspaces on the same host (team server) must not see each
+        // other's shares — the store is keyed by the workspace root.
+        let _lock = crate::core::data_dir::test_env_lock();
+        let data = tempfile::tempdir().unwrap();
+        crate::test_env::set_var("LEAN_CTX_DATA_DIR", data.path());
+
+        let ws1 = tempfile::tempdir().unwrap();
+        let ws2 = tempfile::tempdir().unwrap();
+        let root1 = ws1.path().to_str().unwrap();
+        let root2 = ws2.path().to_str().unwrap();
+        std::fs::write(ws1.path().join("a.md"), "WS1-ONLY\n").unwrap();
+
+        let cache = SessionCache::new();
+        let out = handle_push(Some("team:t1"), None, Some("a.md"), None, &cache, root1);
+        assert!(out.contains("Shared 1 files"), "push: {out}");
+
+        // Same host, other workspace: nothing visible.
+        let other = handle_pull(Some("team:t2"), root2);
+        assert!(
+            other.contains("No shared contexts"),
+            "workspace isolation broken: {other}"
+        );
+        // Same workspace: visible.
+        let same = handle_pull(Some("team:t2"), root1);
+        assert!(same.contains("a.md"), "same-workspace pull: {same}");
     }
 
     #[test]

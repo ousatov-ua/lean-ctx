@@ -1,22 +1,38 @@
 const NATIVE_HOST = "com.leanctx.bridge";
 
-let settings = {
+const DEFAULTS = {
   enabled: true,
   autoCompressPaste: true,
   threshold: 50,
 };
 
+let settings = { ...DEFAULTS };
+// Enterprise policy (chrome.storage.managed, enterprise#29): IT-managed values
+// override user choices; managedKeys tells the popup which controls to lock.
+let managed = {};
+
 let nativeAvailable = null; // null = unknown, true/false = tested
 
-chrome.storage.local.get(["settings"], (result) => {
-  if (result.settings) {
-    settings = { ...settings, ...result.settings };
-  }
-});
+function recomputeSettings(local) {
+  settings = { ...DEFAULTS, ...(local || {}), ...managed };
+}
 
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.settings) {
-    settings = { ...settings, ...changes.settings.newValue };
+function reloadAllSettings() {
+  chrome.storage.managed.get(null, (policy) => {
+    // storage.managed throws for unmanaged profiles in some Chromium builds —
+    // treat any error as "no policy".
+    managed = chrome.runtime.lastError ? {} : policy || {};
+    chrome.storage.local.get(["settings"], (result) => {
+      recomputeSettings(result.settings);
+    });
+  });
+}
+
+reloadAllSettings();
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "managed" || changes.settings) {
+    reloadAllSettings();
   }
 });
 
@@ -80,7 +96,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.action === "getSettings") {
-    sendResponse(settings);
+    sendResponse({
+      ...settings,
+      managedKeys: Object.keys(managed),
+      gatewayBaseUrl: managed.gatewayBaseUrl || null,
+    });
     return true;
   }
 

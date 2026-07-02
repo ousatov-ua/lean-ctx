@@ -9,6 +9,9 @@
     "nativeMessaging",
     "clipboardRead"
   ],
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
