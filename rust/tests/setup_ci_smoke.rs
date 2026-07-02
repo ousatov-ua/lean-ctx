@@ -417,9 +417,16 @@ fn init_claude_installs_dedicated_rules_file_without_claude_md() {
     // imports inline at launch, so the old `@rules/lean-ctx.md` pointer
     // silently multiplied the per-session footprint. Detail docs moved to
     // the on-demand skill; the CLAUDE.md block itself must stay compact.
+    // v4 (GH #637 / GL #1138): MCP-aware — ctx_* guidance is conditional on
+    // the tools actually existing in the session, and native Read → Edit is
+    // documented as the primary editing path (read-before-write gate).
     assert!(
-        claude_md.contains("lean-ctx-claude-v3"),
-        "CLAUDE.md must carry the v3 block version"
+        claude_md.contains("lean-ctx-claude-v4"),
+        "CLAUDE.md must carry the v4 block version"
+    );
+    assert!(
+        claude_md.contains("prior native Read"),
+        "v4 block must document Claude Code's path-keyed read-before-write gate"
     );
     assert!(
         !claude_md.contains("@rules/"),

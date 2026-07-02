@@ -701,6 +701,7 @@ pub fn run() {
                 match action {
                     "rewrite" => hook_handlers::handle_rewrite(),
                     "redirect" => hook_handlers::handle_redirect(),
+                    "read-dedup" => hook_handlers::handle_read_dedup(),
                     "observe" => hook_handlers::handle_observe(),
                     "copilot" => hook_handlers::handle_copilot(),
                     "codex-pretooluse" => hook_handlers::handle_codex_pretooluse(),
@@ -708,7 +709,7 @@ pub fn run() {
                     "rewrite-inline" => hook_handlers::handle_rewrite_inline(),
                     _ => {
                         eprintln!(
-                            "Usage: lean-ctx hook <rewrite|redirect|observe|copilot|codex-pretooluse|codex-session-start|rewrite-inline>"
+                            "Usage: lean-ctx hook <rewrite|redirect|read-dedup|observe|copilot|codex-pretooluse|codex-session-start|rewrite-inline>"
                         );
                         eprintln!(
                             "  Internal commands used by agent hooks (Claude, Cursor, Copilot, etc.)"

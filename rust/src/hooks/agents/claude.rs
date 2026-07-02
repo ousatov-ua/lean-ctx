@@ -93,25 +93,35 @@ fn install_claude_mcp_server(home: &std::path::Path) {
 /// appended a duplicate (GH #549).
 pub(crate) const CLAUDE_MD_BLOCK_START: &str = crate::core::rules_canonical::AGENTS_BLOCK_START;
 const CLAUDE_MD_BLOCK_END: &str = crate::core::rules_canonical::AGENTS_BLOCK_END;
-const CLAUDE_MD_BLOCK_VERSION: &str = "lean-ctx-claude-v3";
+const CLAUDE_MD_BLOCK_VERSION: &str = "lean-ctx-claude-v4";
 
 // v3 (GL #555): self-contained, no `@rules/lean-ctx.md` import. Claude Code
 // expands `@` imports inline at launch ("imports do not reduce context usage"
 // — code.claude.com/docs/en/memory), so the old pointer silently tripled the
 // per-session footprint. Detail docs now live in the lean-ctx skill, which
 // loads on demand only.
+//
+// v4 (GH #637 / GL #1138): MCP-aware guidance. The old block recommended
+// `ctx_edit` unconditionally — in sessions where the lean-ctx MCP server is
+// not connected the advertised fallback does not exist, and agents strand on
+// shell heredocs. It also predated `read_redirect=auto`, which makes native
+// Read → Edit the primary editing path under Claude Code (the read-before-
+// write gate is path-keyed, so the edited file must be *natively* read).
 const CLAUDE_MD_BLOCK_CONTENT_MCP: &str = "\
 <!-- lean-ctx -->
-<!-- lean-ctx-claude-v3 -->
+<!-- lean-ctx-claude-v4 -->
 ## lean-ctx — Context Runtime
 
-Always prefer lean-ctx MCP tools over native equivalents:
-- `ctx_read` instead of `Read` / `cat` (cached, 10 modes, re-reads ~13 tokens)
+When the `ctx_*` MCP tools are listed in this session, prefer them over native equivalents:
+- `ctx_read` instead of `Read` / `cat` for exploration (cached, 10 modes, re-reads ~13 tokens)
 - `ctx_shell` instead of `bash` / `Shell` (95+ compression patterns)
 - `ctx_search` instead of `Grep` / `rg` (compact results)
 - `ctx_tree` instead of `ls` / `find` (compact directory maps)
-- Native Edit/StrReplace stay unchanged. If Edit requires Read and Read is unavailable, use `ctx_edit(path, old_string, new_string)` instead.
-- Write, Delete, Glob — use normally.
+
+Editing: native `Read` → `Edit`/`StrReplace` is the primary path — Claude Code's edit gate
+requires a prior native Read of the same file path. Use `ctx_edit(path, old_string, new_string)`
+only when the `ctx_*` tools exist and native Edit stays blocked. Write, Delete, Glob — use normally.
+If no `ctx_*` tools are listed in this session, use the native tools throughout.
 
 Read modes: full (edit), map (overview), signatures (API), diff (post-edit), lines:N-M (range), auto.
 Details live in the `lean-ctx` skill (loads on demand — keep this file lean).
@@ -296,6 +306,28 @@ pub(crate) fn install_claude_hook_scripts(home: &std::path::Path) {
 /// The `Read|…` tool matcher shared by every Claude redirect hook (global + project).
 const REDIRECT_MATCHER: &str = "Read|read|ReadFile|read_file|View|view|Grep|grep|Search|search|ListFiles|list_files|ListDirectory|list_directory|Glob|glob";
 
+/// PostToolUse matcher for the guard-safe re-read dedup (GL #1140): Read only —
+/// the handler mirrors the Read result shape and must never see another tool's.
+const READ_DEDUP_MATCHER: &str = "Read";
+
+/// Ensure the PostToolUse `hook read-dedup` entry exists exactly once (GL #1140).
+///
+/// Runs alongside the observe hook on PostToolUse; only read-dedup emits
+/// `updatedToolOutput`, so there is no competing-rewriter race. The handler is
+/// inert off guard hosts and for first reads (`read_dedup = auto`), so
+/// installing it unconditionally is safe.
+fn ensure_read_dedup_hook(
+    hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
+    read_dedup_cmd: &str,
+) {
+    let post = hooks_obj
+        .entry("PostToolUse".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if let Some(post_arr) = post.as_array_mut() {
+        ensure_command_hook(post_arr, READ_DEDUP_MATCHER, read_dedup_cmd);
+    }
+}
+
 /// The trailing action token of a lean-ctx hook command, e.g. `"hook rewrite"`.
 ///
 /// Commands are rendered as `<binary> hook <action>`, where `<binary>` is either a bare
@@ -438,6 +470,7 @@ pub(crate) fn install_claude_hook_config(home: &std::path::Path) {
     let rewrite_cmd = format!("{binary} hook rewrite");
     let redirect_cmd = format!("{binary} hook redirect");
     let observe_cmd = format!("{binary} hook observe");
+    let read_dedup_cmd = format!("{binary} hook read-dedup");
 
     let settings_path = crate::core::editor_registry::claude_state_dir(home).join("settings.json");
     let settings_content = if settings_path.exists() {
@@ -473,6 +506,7 @@ pub(crate) fn install_claude_hook_config(home: &std::path::Path) {
         let mut hook_map = serde_json::Map::new();
         hook_map.insert("PreToolUse".to_string(), desired_pretooluse);
         ensure_claude_observe_hooks(&mut hook_map, &observe_cmd);
+        ensure_read_dedup_hook(&mut hook_map, &read_dedup_cmd);
         let hook_entry = serde_json::json!({ "hooks": serde_json::Value::Object(hook_map) });
         write_file(
             &settings_path,
@@ -493,6 +527,7 @@ pub(crate) fn install_claude_hook_config(home: &std::path::Path) {
                     ensure_command_hook(pre_arr, REDIRECT_MATCHER, &redirect_cmd);
                 }
                 ensure_claude_observe_hooks(hooks_obj, &observe_cmd);
+                ensure_read_dedup_hook(hooks_obj, &read_dedup_cmd);
             }
         }
         // Only rewrite (with backup) when the merge actually changed something, so a
@@ -512,6 +547,7 @@ pub(crate) fn install_claude_project_hooks(cwd: &std::path::Path) {
     let rewrite_cmd = format!("{binary} hook rewrite");
     let redirect_cmd = format!("{binary} hook redirect");
     let observe_cmd = format!("{binary} hook observe");
+    let read_dedup_cmd = format!("{binary} hook read-dedup");
 
     let settings_path = cwd.join(".claude").join("settings.local.json");
     let _ = std::fs::create_dir_all(cwd.join(".claude"));
@@ -544,6 +580,7 @@ pub(crate) fn install_claude_project_hooks(cwd: &std::path::Path) {
         let mut hook_map = serde_json::Map::new();
         hook_map.insert("PreToolUse".to_string(), desired_pretooluse);
         ensure_claude_project_observe_hooks(&mut hook_map, &observe_cmd);
+        ensure_read_dedup_hook(&mut hook_map, &read_dedup_cmd);
         let hook_entry = serde_json::json!({ "hooks": serde_json::Value::Object(hook_map) });
         write_file(
             &settings_path,
@@ -564,6 +601,7 @@ pub(crate) fn install_claude_project_hooks(cwd: &std::path::Path) {
                     ensure_command_hook(pre_arr, REDIRECT_MATCHER, &redirect_cmd);
                 }
                 ensure_claude_project_observe_hooks(hooks_obj, &observe_cmd);
+                ensure_read_dedup_hook(hooks_obj, &read_dedup_cmd);
             }
         }
         let after = serde_json::to_string_pretty(&json).unwrap_or_default();
@@ -748,6 +786,52 @@ mod tests {
         // of the redirect matcher Claude installs.
         assert!(REDIRECT_MATCHER.contains("Glob"));
         assert!(REDIRECT_MATCHER.contains("glob"));
+    }
+
+    #[test]
+    fn read_dedup_hook_installs_once_alongside_observe() {
+        // GL #1140: the PostToolUse array carries observe (matcher .*) AND
+        // read-dedup (matcher Read); repeated installs must not duplicate either.
+        let mut hooks_obj = serde_json::Map::new();
+        ensure_claude_observe_hooks(&mut hooks_obj, "lean-ctx hook observe");
+        ensure_read_dedup_hook(&mut hooks_obj, "lean-ctx hook read-dedup");
+        ensure_read_dedup_hook(&mut hooks_obj, "lean-ctx hook read-dedup"); // re-run
+
+        let post = hooks_obj
+            .get("PostToolUse")
+            .and_then(|p| p.as_array())
+            .expect("PostToolUse array");
+        let dedup_entries: Vec<&serde_json::Value> = post
+            .iter()
+            .filter(|g| {
+                g.get("hooks").and_then(|h| h.as_array()).is_some_and(|h| {
+                    h.iter().any(|hook| {
+                        hook.get("command")
+                            .and_then(|c| c.as_str())
+                            .is_some_and(|c| c.ends_with("hook read-dedup"))
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(dedup_entries.len(), 1, "exactly one read-dedup group");
+        assert_eq!(
+            dedup_entries[0].get("matcher").and_then(|m| m.as_str()),
+            Some("Read"),
+            "read-dedup must match ONLY the Read tool (shape safety)"
+        );
+        let observe_present = post.iter().any(|g| {
+            g.get("hooks").and_then(|h| h.as_array()).is_some_and(|h| {
+                h.iter().any(|hook| {
+                    hook.get("command")
+                        .and_then(|c| c.as_str())
+                        .is_some_and(|c| c.contains("hook observe"))
+                })
+            })
+        });
+        assert!(
+            observe_present,
+            "observe hook must survive read-dedup install"
+        );
     }
 
     #[test]

@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Guard-safe re-read dedup for Claude Code / CodeBuddy (GL #1140, follow-up
+  to #637).** `read_redirect = auto` keeps the read-before-write guard intact
+  by letting native Read run on the real path — which also forfeited the Read
+  dedup savings on those hosts. A new `PostToolUse` hook (`lean-ctx hook
+  read-dedup`, matcher `Read` only) wins them back without touching the guard:
+  the *result* of a re-read of an unchanged, already-read file is replaced with
+  a compact `[unchanged]` stub via the documented `updatedToolOutput` channel.
+  First reads stay byte-identical (edit safety: `old_string` always comes from
+  real content), the incoming response shape is mirrored with only the content
+  field swapped (unknown shapes pass through), every failure path fails open,
+  replacement happens only when strictly smaller, a host compaction
+  (`PreCompact`) purges the session's records so post-compaction re-reads
+  deliver full content again, and Cursor's double-fired hooks are recognised by
+  `tool_use_id` so a duplicate first read is never mistaken for a re-read.
+  Config `read_dedup = auto | on | off` (env `LEAN_CTX_READ_DEDUP`); `auto`
+  (default) activates only on guard hosts, where the PreToolUse redirect is
+  off. Verified end-to-end against headless `claude -p` 2.1.139: first read
+  byte-identical, second read served as the ~40-token stub, native Edit of the
+  same file still passes the read-before-write gate.
 - **Hybrid multi-repo search (Context Hub, GL#1133).** `ctx_multi_repo
   action=search` now runs the full hybrid stack per root — BM25 + dense
   embeddings + SPLADE boost + graph ranks, the same pipeline as single-root
@@ -51,6 +70,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **`minimal_overhead=true` (the default) is now documented honestly:** session
   continuity is delivered via the `AUTO CONTEXT` block on the first tool call
   (prompt-cache-friendly) instead of an `ACTIVE SESSION` block at initialize.
+- **CLAUDE.md block v4: MCP-aware guidance (GL #1138, second half of #637).**
+  The injected CLAUDE.md/CODEBUDDY.md block recommended `ctx_read`-first and a
+  `ctx_edit` fallback *unconditionally* — in sessions without a connected
+  lean-ctx MCP server those tools do not exist, stranding agents on shell
+  heredocs. The block (v4 / CodeBuddy v2, session-heal updates existing
+  installs) now scopes every ctx_* recommendation to "when the ctx_* MCP tools
+  are listed in this session", documents native `Read` → `Edit` as the primary
+  editing path under the read-before-write gate, and says explicitly to use
+  native tools throughout when no ctx_* tools are available. `doctor` gains an
+  `Instructions/MCP consistency` check (GL #1139) that flags the hazardous
+  combination — instructions advertising ctx_* while no lean-ctx entry is
+  registered in the Claude MCP config — with a `lean-ctx setup` repair hint.
 
 ### Security
 - **Bundled addons now spawn with a scrubbed environment (addon env isolation).**

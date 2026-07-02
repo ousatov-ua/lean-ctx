@@ -435,6 +435,15 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         ),
     );
     root.insert(
+        "read_dedup".into(),
+        key_enum_with_env(
+            &["auto", "on", "off"],
+            "auto",
+            "Controls the PostToolUse native-Read re-read dedup. auto (default): replace only re-reads of unchanged files with the compact stub, and only on guard hosts (Claude Code / CodeBuddy) where the PreToolUse redirect is off — first reads stay byte-identical and the read-before-write guard is untouched. on: dedup wherever the hook fires. off: never replace a Read result",
+            "LEAN_CTX_READ_DEDUP",
+        ),
+    );
+    root.insert(
         "debug_log".into(),
         key_with_env(
             "bool",

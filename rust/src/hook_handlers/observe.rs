@@ -34,6 +34,15 @@ pub fn handle_observe() {
     let Some(event) = parse_observe_event(&input) else {
         return;
     };
+    // Compaction evicts the conversation the read-dedup stubs would point into
+    // (GL #1140): purge the session's re-read records so every file delivers
+    // full content again, mirroring the MCP-side compaction sync (GL #555).
+    if event.event_type == "compaction"
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&input)
+        && let Some(session_id) = v.get("session_id").and_then(|s| s.as_str())
+    {
+        super::read_dedup::purge_session(session_id);
+    }
     append_radar_event(&event);
 
     // Output-echo analysis (#501): measure how much of the agent's reply

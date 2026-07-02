@@ -100,6 +100,65 @@ fn antigravity_cli_hooks_note_is_informational_and_explains_gating() {
 }
 
 #[test]
+fn claude_flags_instructions_advertising_ctx_without_mcp_registration() {
+    // GH #637 (second half) / GL #1139: a CLAUDE.md block advertising ctx_*
+    // tools while no lean-ctx MCP server is registered strands the agent on
+    // fallbacks that do not exist in the session. The combination must be
+    // surfaced as its own failing check with a repair hint.
+    let _lock = crate::core::data_dir::test_env_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    // Hermetic config: the check consults rules_scope/rules_injection via
+    // Config::load(); the developer's real config must not leak in.
+    crate::test_env::set_var(
+        "LEAN_CTX_CONFIG_DIR",
+        home.join("cfg").to_string_lossy().to_string(),
+    );
+    let claude_dir = crate::core::editor_registry::claude_state_dir(home);
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(
+        claude_dir.join("CLAUDE.md"),
+        format!(
+            "{}\n## lean-ctx\nctx_read guidance…\n{}\n",
+            crate::hooks::agents::CLAUDE_MD_BLOCK_START,
+            crate::core::rules_canonical::AGENTS_BLOCK_END
+        ),
+    )
+    .unwrap();
+    // No ~/.claude.json → MCP registration missing.
+
+    let status = integration_claude(home, "/usr/local/bin/lean-ctx", "/tmp/data");
+    let consistency = status
+        .checks
+        .iter()
+        .find(|c| c.name == "Instructions/MCP consistency");
+    let consistency =
+        consistency.expect("block-without-MCP must produce the Instructions/MCP consistency check");
+    assert!(!consistency.ok, "the combination is a failure, not a note");
+    assert!(
+        consistency.detail.contains("lean-ctx setup"),
+        "detail must carry the repair hint: {}",
+        consistency.detail
+    );
+
+    // With the MCP server registered the consistency check disappears.
+    std::fs::write(
+        crate::core::editor_registry::claude_mcp_json_path(home),
+        r#"{"mcpServers":{"lean-ctx":{"command":"/usr/local/bin/lean-ctx","args":[]}}}"#,
+    )
+    .unwrap();
+    let healthy = integration_claude(home, "/usr/local/bin/lean-ctx", "/tmp/data");
+    assert!(
+        !healthy
+            .checks
+            .iter()
+            .any(|c| c.name == "Instructions/MCP consistency"),
+        "registered MCP must suppress the consistency warning"
+    );
+    crate::test_env::remove_var("LEAN_CTX_CONFIG_DIR");
+}
+
+#[test]
 fn hook_binary_refs_extracts_token_before_hook_keyword() {
     let content =
         r#"{"command": "/opt/lean-ctx hook rewrite"} {"command": "/opt/lean-ctx hook redirect"}"#;

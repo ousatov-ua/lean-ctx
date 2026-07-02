@@ -17,7 +17,9 @@ mod dedup;
 mod edit_health;
 mod observe;
 mod payload;
+mod read_dedup;
 pub use observe::*;
+pub use read_dedup::handle_read_dedup;
 #[cfg(test)]
 mod tests;
 

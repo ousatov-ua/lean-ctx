@@ -162,7 +162,9 @@ pub(crate) fn integration_claude(
 
     let mut checks = Vec::new();
     let mcp_path = crate::core::editor_registry::claude_mcp_json_path(home);
-    checks.push(check_mcp_json(&mcp_path, binary, data_dir));
+    let mcp_check = check_mcp_json(&mcp_path, binary, data_dir);
+    let mcp_registered = mcp_check.ok;
+    checks.push(mcp_check);
 
     let settings_path = crate::core::editor_registry::claude_state_dir(home).join("settings.json");
     checks.push(check_claude_hooks(&settings_path, binary));
@@ -189,11 +191,28 @@ pub(crate) fn integration_claude(
             S::LegacyRules => "legacy rules file (migrates on next setup)".into(),
             S::Missing => "missing (run: lean-ctx setup)".into(),
         };
+        let advertises_ctx_tools = matches!(state, S::BlockAndSkill | S::BlockOnly);
         checks.push(NamedCheck {
             name: "Instructions".to_string(),
             ok: state.ok(),
             detail,
         });
+
+        // GH #637 (second half) / GL #1139: a CLAUDE.md block that advertises
+        // ctx_* tools while no lean-ctx MCP server is registered strands the
+        // agent — it chases fallbacks (`ctx_edit`) that do not exist in the
+        // session. Surface the *combination* explicitly; the bare "MCP config"
+        // failure above does not tell the user the instructions are the hazard.
+        if advertises_ctx_tools && !mcp_registered {
+            checks.push(NamedCheck {
+                name: "Instructions/MCP consistency".to_string(),
+                ok: false,
+                detail: format!(
+                    "CLAUDE.md advertises ctx_* tools but no lean-ctx MCP server is registered in {} — run: lean-ctx setup",
+                    mcp_path.display()
+                ),
+            });
+        }
     }
 
     // #637: surface the Read-redirect posture so a Claude Code user understands why
@@ -204,7 +223,7 @@ pub(crate) fn integration_claude(
         let cfg = crate::core::config::Config::load();
         let detail = match ReadRedirect::effective(&cfg) {
             ReadRedirect::Auto => {
-                "auto — native Read passes through Claude Code's read-before-write guard; ctx_read + Grep/Glob still compress (#637)"
+                "auto — native Read passes through Claude Code's read-before-write guard; re-reads dedup via PostToolUse, ctx_read + Grep/Glob still compress (#637)"
             }
             ReadRedirect::On => {
                 "on — native Read redirected to ctx_read; can retrigger #637 here — switch to auto if native Write/Edit fails"

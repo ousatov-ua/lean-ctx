@@ -86,20 +86,27 @@ fn install_codebuddy_mcp_server(home: &std::path::Path) {
 /// markers broke detection and caused duplicate blocks (GH #549).
 pub(crate) const CODEBUDDY_MD_BLOCK_START: &str = crate::core::rules_canonical::AGENTS_BLOCK_START;
 const CODEBUDDY_MD_BLOCK_END: &str = crate::core::rules_canonical::AGENTS_BLOCK_END;
-const CODEBUDDY_MD_BLOCK_VERSION: &str = "lean-ctx-codebuddy-v1";
+const CODEBUDDY_MD_BLOCK_VERSION: &str = "lean-ctx-codebuddy-v2";
 
+// v2 (GH #637 / GL #1138): MCP-aware guidance, mirroring the Claude v4 block.
+// CodeBuddy is a Claude Code fork with the same path-keyed read-before-write
+// gate, so native Read → Edit is the primary editing path and `ctx_edit` is
+// only advertised when the ctx_* tools actually exist in the session.
 const CODEBUDDY_MD_BLOCK_CONTENT_MCP: &str = "\
 <!-- lean-ctx -->
-<!-- lean-ctx-codebuddy-v1 -->
+<!-- lean-ctx-codebuddy-v2 -->
 ## lean-ctx — Context Runtime
 
-Always prefer lean-ctx MCP tools over native equivalents:
-- `ctx_read` instead of `Read` / `cat` (cached, 10 modes, re-reads ~13 tokens)
+When the `ctx_*` MCP tools are listed in this session, prefer them over native equivalents:
+- `ctx_read` instead of `Read` / `cat` for exploration (cached, 10 modes, re-reads ~13 tokens)
 - `ctx_shell` instead of `bash` / `Shell` (95+ compression patterns)
 - `ctx_search` instead of `Grep` / `rg` (compact results)
 - `ctx_tree` instead of `ls` / `find` (compact directory maps)
-- Native Edit/StrReplace stay unchanged. If Edit requires Read and Read is unavailable, use `ctx_edit(path, old_string, new_string)` instead.
-- Write, Delete, Glob — use normally.
+
+Editing: native `Read` → `Edit`/`StrReplace` is the primary path — the edit gate requires a
+prior native Read of the same file path. Use `ctx_edit(path, old_string, new_string)` only
+when the `ctx_*` tools exist and native Edit stays blocked. Write, Delete, Glob — use normally.
+If no `ctx_*` tools are listed in this session, use the native tools throughout.
 
 Read modes: full (edit), map (overview), signatures (API), diff (post-edit), lines:N-M (range), auto.
 Details live in the `lean-ctx` skill (loads on demand — keep this file lean).
@@ -270,6 +277,24 @@ pub(crate) fn install_codebuddy_hook_scripts(home: &std::path::Path) {
 
 const REDIRECT_MATCHER: &str = "Read|read|ReadFile|read_file|View|view|Grep|grep|Search|search|ListFiles|list_files|ListDirectory|list_directory|Glob|glob";
 
+/// PostToolUse matcher for the guard-safe re-read dedup (GL #1140), mirroring
+/// the Claude installer: Read only — the handler mirrors the Read result shape.
+const READ_DEDUP_MATCHER: &str = "Read";
+
+/// Ensure the PostToolUse `hook read-dedup` entry exists exactly once (GL #1140).
+/// CodeBuddy shares Claude Code's hook contract and read-before-write guard.
+fn ensure_read_dedup_hook(
+    hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
+    read_dedup_cmd: &str,
+) {
+    let post = hooks_obj
+        .entry("PostToolUse".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if let Some(post_arr) = post.as_array_mut() {
+        ensure_command_hook(post_arr, READ_DEDUP_MATCHER, read_dedup_cmd);
+    }
+}
+
 fn lean_ctx_action_token(command: &str) -> &str {
     match command.rfind(" hook ") {
         Some(i) => command[i + 1..].trim_end(),
@@ -393,6 +418,7 @@ pub(crate) fn install_codebuddy_hook_config(home: &std::path::Path) {
     let rewrite_cmd = format!("{binary} hook rewrite");
     let redirect_cmd = format!("{binary} hook redirect");
     let observe_cmd = format!("{binary} hook observe");
+    let read_dedup_cmd = format!("{binary} hook read-dedup");
 
     let settings_path =
         crate::core::editor_registry::codebuddy_state_dir(home).join("settings.json");
@@ -429,6 +455,7 @@ pub(crate) fn install_codebuddy_hook_config(home: &std::path::Path) {
         let mut hook_map = serde_json::Map::new();
         hook_map.insert("PreToolUse".to_string(), desired_pretooluse);
         ensure_codebuddy_observe_hooks(&mut hook_map, &observe_cmd);
+        ensure_read_dedup_hook(&mut hook_map, &read_dedup_cmd);
         let hook_entry = serde_json::json!({ "hooks": serde_json::Value::Object(hook_map) });
         write_file(
             &settings_path,
@@ -449,6 +476,7 @@ pub(crate) fn install_codebuddy_hook_config(home: &std::path::Path) {
                     ensure_command_hook(pre_arr, REDIRECT_MATCHER, &redirect_cmd);
                 }
                 ensure_codebuddy_observe_hooks(hooks_obj, &observe_cmd);
+                ensure_read_dedup_hook(hooks_obj, &read_dedup_cmd);
             }
         }
         let after = serde_json::to_string_pretty(&existing).unwrap_or_default();
@@ -466,6 +494,7 @@ pub(crate) fn install_codebuddy_project_hooks(cwd: &std::path::Path) {
     let rewrite_cmd = format!("{binary} hook rewrite");
     let redirect_cmd = format!("{binary} hook redirect");
     let observe_cmd = format!("{binary} hook observe");
+    let read_dedup_cmd = format!("{binary} hook read-dedup");
 
     let settings_path = cwd.join(".codebuddy").join("settings.local.json");
     let _ = std::fs::create_dir_all(cwd.join(".codebuddy"));
@@ -498,6 +527,7 @@ pub(crate) fn install_codebuddy_project_hooks(cwd: &std::path::Path) {
         let mut hook_map = serde_json::Map::new();
         hook_map.insert("PreToolUse".to_string(), desired_pretooluse);
         ensure_codebuddy_project_observe_hooks(&mut hook_map, &observe_cmd);
+        ensure_read_dedup_hook(&mut hook_map, &read_dedup_cmd);
         let hook_entry = serde_json::json!({ "hooks": serde_json::Value::Object(hook_map) });
         write_file(
             &settings_path,
@@ -518,6 +548,7 @@ pub(crate) fn install_codebuddy_project_hooks(cwd: &std::path::Path) {
                     ensure_command_hook(pre_arr, REDIRECT_MATCHER, &redirect_cmd);
                 }
                 ensure_codebuddy_project_observe_hooks(hooks_obj, &observe_cmd);
+                ensure_read_dedup_hook(hooks_obj, &read_dedup_cmd);
             }
         }
         let after = serde_json::to_string_pretty(&json).unwrap_or_default();

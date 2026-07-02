@@ -69,7 +69,10 @@ impl ReadRedirect {
 /// process but is **not** propagated to hook children — verified empirically for
 /// #637 — so it cannot be the primary in-hook signal. `CLAUDECODE` / `CODEBUDDY` are
 /// kept as extra markers (other entry points, the CodeBuddy fork) at no cost.
-fn host_has_read_before_write_guard() -> bool {
+///
+/// Shared with [`super::read_dedup`]: the PostToolUse re-read dedup targets exactly
+/// the hosts where this guard forces the PreToolUse redirect off.
+pub(crate) fn host_has_read_before_write_guard() -> bool {
     std::env::var_os("CLAUDE_PROJECT_DIR").is_some()
         || std::env::var_os("CLAUDECODE").is_some()
         || std::env::var_os("CODEBUDDY").is_some()
