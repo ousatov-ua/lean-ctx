@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **`setup` no longer panics when a client's MCP-instructions cap lands inside
+  a multi-byte character (GH #680).** The Claude Code / CodeBuddy 2048-char
+  truncation used a raw byte slice; when the cut fell inside an em-dash the
+  whole setup crashed ("end byte index 2048 is not a char boundary",
+  live-reported at setup level 3, step 3/13). The cut now backs up to the
+  previous char boundary (`truncate_instructions`, unit-tested with the exact
+  crash shape).
+- **`doctor` no longer false-flags a working OpenCode install (GH #686).**
+  Two gaps: `has_lean_ctx_mcp_entry` only walked `mcp.servers.lean-ctx`, but
+  OpenCode's schema (opencode.ai/config.json) nests servers DIRECTLY under
+  `mcp` — the direct-child form is now recognized too; and OpenCode was absent
+  from the SKILL.md candidate list (checked: `~/.config/opencode/skills/
+  lean-ctx/SKILL.md`) — it is now both checked by doctor AND installed by
+  `install_all_skills` when OpenCode is detected, so check and installer can't
+  drift apart.
+- **Anchored line-1 edits of UTF-8-BOM files no longer conflict forever
+  (GH #683 follow-up).** With ctx_read stripping the BOM (output honesty #683),
+  the anchor hash the model holds for line 1 is over the BOM-less text — but
+  `ctx_patch` validated anchors against the raw preimage, so the hashes could
+  never match and every retry conflicted again. The edit side now validates
+  against the same BOM-less view and re-prepends the BOM on write (the BOM is
+  an encoding artifact of the file, not of the edit).
 - **Shell allowlist no longer splits commands at backslash-escaped operators
   (GL #1160).** In restricted (allowlisted) mode, `rg -n split\.label\|foo src/`
   was split at the escaped pipe, so the pattern fragment after it was validated

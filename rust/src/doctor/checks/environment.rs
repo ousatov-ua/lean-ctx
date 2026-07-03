@@ -427,6 +427,10 @@ pub(crate) fn skill_files_outcome() -> Outcome {
             "GitHub Copilot",
             home.join(".copilot/skills/lean-ctx/SKILL.md"),
         ),
+        (
+            "OpenCode",
+            home.join(".config/opencode/skills/lean-ctx/SKILL.md"),
+        ),
     ];
 
     let mut found: Vec<&str> = Vec::new();

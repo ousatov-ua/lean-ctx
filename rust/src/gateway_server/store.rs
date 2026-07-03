@@ -387,9 +387,9 @@ pub async fn evidence_rows(
                'local_requests', count(*) FILTER (WHERE is_local)
              )
              FROM usage_events WHERE ts >= $1 AND ts <= $2
-             GROUP BY 
+             GROUP BY
                date_trunc('day', ts AT TIME ZONE 'utc'), person, project, model, provider
-             ORDER BY 
+             ORDER BY
                date_trunc('day', ts AT TIME ZONE 'utc'), person, project, model, provider",
             &[&from, &to],
         )

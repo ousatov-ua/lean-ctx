@@ -57,6 +57,34 @@ fn set_line_applies_and_invalidates() {
     );
 }
 
+// BOM parity (GH #683 follow-up): `ctx_read` strips the UTF-8 BOM, so the
+// anchor hash the model holds for line 1 of a BOM file is over the BOM-less
+// text. The edit side must validate against the same view — and preserve the
+// BOM on disk — or every line-1 edit of a BOM file conflicts forever.
+#[test]
+fn bom_file_line_one_edit_matches_read_side_hash_and_keeps_bom() {
+    let f = make_temp("\u{feff}hello\nworld\n");
+    let (text, effect) = run_io(
+        &params(
+            f.path(),
+            vec![AnchorOp::SetLine {
+                line: 1,
+                // The hash the model was shown: over "hello", not "\u{feff}hello".
+                hash: line_hash("hello"),
+                new_text: "HELLO".to_string(),
+            }],
+        ),
+        "",
+    );
+    assert!(text.contains('✓'), "expected success: {text}");
+    assert!(matches!(effect, CacheEffect::Invalidate));
+    assert_eq!(
+        std::fs::read_to_string(f.path()).unwrap(),
+        "\u{feff}HELLO\nworld\n",
+        "BOM must survive the edit"
+    );
+}
+
 #[test]
 fn stale_anchor_rejects_without_writing() {
     let original = "alpha\nbeta\ngamma\n";

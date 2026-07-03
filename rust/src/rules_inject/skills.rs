@@ -51,6 +51,11 @@ pub(super) fn build_skill_targets(home: &std::path::Path) -> Vec<SkillTarget> {
             display_name: "OpenClaw",
             skill_dir: home.join(".openclaw/skills/lean-ctx"),
         },
+        SkillTarget {
+            agent_key: "opencode",
+            display_name: "OpenCode",
+            skill_dir: home.join(".config/opencode/skills/lean-ctx"),
+        },
     ]
 }
 
@@ -78,6 +83,7 @@ fn is_skill_agent_detected(agent_key: &str, home: &std::path::Path) -> bool {
                 || command_exists("copilot")
         }
         "openclaw" => home.join(".openclaw").exists() || command_exists("openclaw"),
+        "opencode" => home.join(".config/opencode").exists() || command_exists("opencode"),
         _ => false,
     }
 }

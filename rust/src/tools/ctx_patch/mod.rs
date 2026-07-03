@@ -133,7 +133,16 @@ pub fn run_io(params: &PatchParams, _last_mode: &str) -> (String, CacheEffect) {
         );
     }
 
-    let (lines, sep, trailing) = apply::split_lines(&pre.text);
+    // BOM parity with `ctx_read` (GH #683 follow-up): the read side strips a
+    // UTF-8 BOM before hashing line 1, so anchors must be validated against
+    // the BOM-less body — otherwise every line-1 edit of a BOM file conflicts
+    // forever. The BOM itself is preserved on write (prepended below); it is
+    // an encoding artifact of the file, not of the edit.
+    let (bom, body) = match pre.text.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", pre.text.as_str()),
+    };
+    let (lines, sep, trailing) = apply::split_lines(body);
 
     let edits = match apply::resolve_ops(&lines, &params.ops) {
         Ok(e) => e,
@@ -158,7 +167,7 @@ pub fn run_io(params: &PatchParams, _last_mode: &str) -> (String, CacheEffect) {
     let n_edits = edits.len();
     let lines_before = lines.len();
     let new_lines = apply::apply_edits(lines.clone(), edits);
-    let new_content = apply::join_lines(&new_lines, sep, trailing);
+    let new_content = format!("{bom}{}", apply::join_lines(&new_lines, sep, trailing));
 
     if new_content == pre.text {
         return (

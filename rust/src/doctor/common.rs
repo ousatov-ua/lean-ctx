@@ -482,11 +482,18 @@ pub(super) fn has_lean_ctx_mcp_entry(content: &str) -> bool {
                 return true;
             }
         }
-        // mcp.servers.lean-ctx (OpenCode et al.)
+        // mcp.servers.lean-ctx (some multi-level configs)
         if let Some(servers) = json
             .get("mcp")
             .and_then(|v| v.get("servers"))
             .and_then(|v| v.as_object())
+            && servers.contains_key("lean-ctx")
+        {
+            return true;
+        }
+        // mcp.lean-ctx — OpenCode's schema (https://opencode.ai/config.json)
+        // nests servers DIRECTLY under "mcp", no "servers" level (GH #686).
+        if let Some(servers) = json.get("mcp").and_then(|v| v.as_object())
             && servers.contains_key("lean-ctx")
         {
             return true;
@@ -720,8 +727,38 @@ pub(super) fn codebuddy_binary_exists() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_user_path, tildify_home};
+    use super::{display_user_path, has_lean_ctx_mcp_entry, tildify_home};
     use std::path::Path;
+
+    // GH #686: OpenCode's schema (https://opencode.ai/config.json) nests
+    // servers DIRECTLY under "mcp" — `mcp.lean-ctx`, no "servers" level. The
+    // doctor used to only walk `mcp.servers.lean-ctx` and reported a working
+    // install as missing.
+    #[test]
+    fn opencode_direct_mcp_child_is_recognized() {
+        let opencode = r#"{
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": {
+                "lean-ctx": { "command": ["/usr/bin/lean-ctx"], "enabled": true, "type": "local" }
+            }
+        }"#;
+        assert!(has_lean_ctx_mcp_entry(opencode));
+    }
+
+    #[test]
+    fn mcp_servers_nested_form_still_recognized() {
+        let nested = r#"{ "mcp": { "servers": { "lean-ctx": { "command": "lean-ctx" } } } }"#;
+        assert!(has_lean_ctx_mcp_entry(nested));
+        let flat = r#"{ "mcpServers": { "lean-ctx": { "command": "lean-ctx" } } }"#;
+        assert!(has_lean_ctx_mcp_entry(flat));
+    }
+
+    #[test]
+    fn unrelated_mcp_children_are_not_a_match() {
+        // A different server directly under "mcp" must not count as ours.
+        let other = r#"{ "mcp": { "some-other-server": { "command": "x" } } }"#;
+        assert!(!has_lean_ctx_mcp_entry(other));
+    }
 
     #[test]
     fn display_user_path_abbreviates_home() {
