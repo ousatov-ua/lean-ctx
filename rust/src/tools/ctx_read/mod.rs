@@ -159,10 +159,11 @@ pub fn read_file_lossy(path: &str) -> Result<String, std::io::Error> {
     use std::io::Read;
     let mut bytes = Vec::with_capacity(meta.len() as usize);
     std::io::BufReader::new(file).read_to_end(&mut bytes)?;
-    match String::from_utf8(bytes) {
-        Ok(s) => Ok(s),
-        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
-    }
+    let s = match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    };
+    Ok(crate::core::io_boundary::strip_utf8_bom(s))
 }
 
 /// Opens a file, retrying once after a brief pause on NotFound.

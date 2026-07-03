@@ -280,6 +280,11 @@ pub(crate) fn process_mode_tuned(
                     output.push_str(note);
                 }
             }
+            // Same honesty rule as map: an empty signature view for a language
+            // without an extractor must be labeled (limitations audit, #4).
+            if sigs.is_empty() && dep_info.imports.is_empty() {
+                output.push_str(&no_structure_marker(ext));
+            }
             if let Some(body) = task_relevant_body(content, file_path, ext, task) {
                 output.push('\n');
                 output.push_str(&body);
@@ -395,6 +400,13 @@ pub(crate) fn process_mode_tuned(
                         output.push_str(note);
                     }
                 }
+            }
+
+            // Nothing extractable (no grammar/regex coverage for this language):
+            // an information-free map must say so, or the caller reads the bare
+            // header as "this file has no API" (limitations audit, #4 residual).
+            if key_sigs.is_empty() && dep_info.imports.is_empty() && extra_exports.is_empty() {
+                output.push_str(&no_structure_marker(ext));
             }
 
             if let Some(body) = task_relevant_body(content, file_path, ext, task) {
@@ -677,9 +689,20 @@ pub(crate) fn process_mode_tuned(
             } else {
                 format!("{short} {line_count}L lines:{range_str}")
             };
+            // Comma is multi-select, not a range — a caller who meant `N-M`
+            // gets stray single lines back, so say what the comma did instead
+            // of letting the wrong window pass silently (limitations #7).
+            let multi_hint = if range_str.contains(',') {
+                LINES_COMMA_HINT
+            } else {
+                ""
+            };
             let sent = count_tokens(&extracted);
             let savings = protocol::format_savings(original_tokens, sent);
-            (format!("{header}\n{extracted}\n{savings}"), sent)
+            (
+                format!("{header}\n{extracted}{multi_hint}\n{savings}"),
+                sent,
+            )
         }
         mode if mode.starts_with("density:") => {
             // SDE target-density mode: compress to a token budget instead of
@@ -806,6 +829,20 @@ pub(crate) fn task_relevant_body(
         "  ▸ body {} L{}-{}:\n{body}{truncated}",
         ch.symbol_name, ch.start_line, ch.end_line
     ))
+}
+
+/// One-line explainer appended whenever a `lines:` payload uses a comma —
+/// comma means multi-select, and a caller who meant a `N-M` span must be able
+/// to see that from the output (limitations #7). Shared with the CLI arm.
+pub(crate) const LINES_COMMA_HINT: &str = "\n[lines: comma = multi-select (e.g. 5,10-20 picks line 5 and lines 10-20); use N-M for one span]";
+
+/// Marker for a map/signatures view that extracted nothing — a language with
+/// no grammar/regex coverage must be distinguishable from a file with no API
+/// (limitations audit, #4). Shared with the CLI arms.
+pub(crate) fn no_structure_marker(ext: &str) -> String {
+    format!(
+        "\n  [no extractable structure for .{ext} — header only; use mode=\"lines:N-M\" or \"full\"]"
+    )
 }
 
 pub(crate) fn extract_line_range(content: &str, range_str: &str) -> String {

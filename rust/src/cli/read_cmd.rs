@@ -46,6 +46,25 @@ fn should_force_fresh(args: &[String], hook_child: bool) -> bool {
     hook_child || args.iter().any(|a| a == "--fresh" || a == "--no-cache")
 }
 
+/// Resolve the read mode from CLI args. `--mode`/`-m` wins; otherwise the
+/// first positional after the path that parses as a known mode counts — a bare
+/// `lean-ctx read f.ps1 map` used to silently serve the `auto` default instead
+/// of the requested view (limitations audit 2026-07-03). Unknown positionals
+/// and flags are left alone so existing invocations keep their meaning.
+fn resolve_cli_read_mode(args: &[String]) -> &str {
+    if let Some(m) = args
+        .iter()
+        .position(|a| a == "--mode" || a == "-m")
+        .and_then(|i| args.get(i + 1))
+    {
+        return m.as_str();
+    }
+    args.iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-') && a.parse::<crate::tools::ctx_read::ReadMode>().is_ok())
+        .map_or("auto", std::string::String::as_str)
+}
+
 pub fn cmd_read(args: &[String]) {
     if args.is_empty() {
         eprintln!(
@@ -64,11 +83,7 @@ pub fn cmd_read(args: &[String]) {
         raw_path.clone()
     };
     let path = path.as_str();
-    let mode = args
-        .iter()
-        .position(|a| a == "--mode" || a == "-m")
-        .and_then(|i| args.get(i + 1))
-        .map_or("auto", std::string::String::as_str);
+    let mode = resolve_cli_read_mode(args);
     // #1037: redirect/rewrite hook children pipe `-m full` output into a temp file the
     // host reads back AS the file's content, so a `cached <file> [NL]` cache-hit stub
     // corrupts the read (and round-trips the stub into the real file on the next edit).
@@ -250,6 +265,11 @@ pub fn cmd_read(args: &[String]) {
                         buf.push_str(&format!("\n    {}", sig.to_compact_located()));
                     }
                 }
+                // Same honesty rule as the MCP renderer: an information-free
+                // map must say so (limitations audit, #4).
+                if key_sigs.is_empty() && dep_info.imports.is_empty() && extra_exports.is_empty() {
+                    buf.push_str(&crate::tools::ctx_read::no_structure_marker(ext));
+                }
                 buf
             } else {
                 format!("{short} [{line_count}L]\n{structured}")
@@ -276,6 +296,10 @@ pub fn cmd_read(args: &[String]) {
             let mut output_buf = format!("{short} [{line_count}L]");
             for sig in &sigs {
                 output_buf.push_str(&format!("\n{}", sig.to_compact_located()));
+            }
+            // Same honesty rule as the MCP renderer (limitations audit, #4).
+            if sigs.is_empty() {
+                output_buf.push_str(&crate::tools::ctx_read::no_structure_marker(ext));
             }
             if requested_auto {
                 output_buf = cap_cli_to_raw(output_buf, &content, original_tokens);
@@ -326,13 +350,38 @@ pub fn cmd_read(args: &[String]) {
                 read_start.elapsed(),
             );
         }
+        m if m.starts_with("lines:") => {
+            // The CLI used to drop the window and print the whole file — a
+            // `lines:` read must return the requested selection, with the same
+            // comma-multi-select hint as the MCP renderer (limitations #7).
+            let range_str = &m[6..];
+            let extracted = crate::tools::ctx_read::extract_line_range(&content, range_str);
+            let multi_hint = if range_str.contains(',') {
+                crate::tools::ctx_read::LINES_COMMA_HINT
+            } else {
+                ""
+            };
+            let output =
+                format!("{short} [{line_count}L] lines:{range_str}\n{extracted}{multi_hint}");
+            println!("{output}");
+            let sent = count_tokens(&output);
+            print_savings(original_tokens, sent);
+            super::common::cli_track_read(
+                path,
+                "lines",
+                original_tokens,
+                sent,
+                &output,
+                read_start.elapsed(),
+            );
+        }
         _ => {
-            // `full`, `lines:` and any unrecognized mode land here. These are
+            // `full` and any unrecognized mode land here. These are
             // verbatim reads — the prose terse pipeline would mangle source
             // (dictionary substitutions, line-drop dedup) and break a `full`
             // read's "complete content" contract, so it must never run here
             // (#404). Intentionally-lossy modes (map/signatures/aggressive/
-            // entropy) have their own arms above.
+            // entropy/lines) have their own arms above.
             let mut output = format!("{short} [{line_count}L]\n{content}");
             if !crate::core::terse::is_verbatim_read("ctx_read", Some(mode)) {
                 let config = crate::core::config::Config::load();
@@ -700,5 +749,46 @@ mod fresh_tests {
         assert!(should_force_fresh(&["--fresh".to_string()], false));
         assert!(should_force_fresh(&["--no-cache".to_string()], false));
         assert!(!should_force_fresh(&["file.rs".to_string()], false));
+    }
+}
+
+#[cfg(test)]
+mod mode_arg_tests {
+    use super::resolve_cli_read_mode;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(ToString::to_string).collect()
+    }
+
+    // `lean-ctx read f.ps1 map` used to silently IGNORE the positional mode and
+    // serve the `auto` default — reads must honour it like `--mode map`
+    // (limitations audit 2026-07-03).
+    #[test]
+    fn positional_mode_is_honoured() {
+        assert_eq!(resolve_cli_read_mode(&args(&["f.ps1", "map"])), "map");
+        assert_eq!(
+            resolve_cli_read_mode(&args(&["f.rs", "lines:5-10"])),
+            "lines:5-10"
+        );
+    }
+
+    #[test]
+    fn mode_flag_wins_over_positional() {
+        assert_eq!(
+            resolve_cli_read_mode(&args(&["f.rs", "map", "--mode", "signatures"])),
+            "signatures"
+        );
+        assert_eq!(
+            resolve_cli_read_mode(&args(&["f.rs", "-m", "full"])),
+            "full"
+        );
+    }
+
+    #[test]
+    fn defaults_to_auto_and_skips_flags_and_junk() {
+        assert_eq!(resolve_cli_read_mode(&args(&["f.rs"])), "auto");
+        assert_eq!(resolve_cli_read_mode(&args(&["f.rs", "--fresh"])), "auto");
+        // An unknown positional is not silently treated as a mode.
+        assert_eq!(resolve_cli_read_mode(&args(&["f.rs", "banana"])), "auto");
     }
 }
