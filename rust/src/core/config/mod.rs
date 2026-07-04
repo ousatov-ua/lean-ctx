@@ -427,8 +427,9 @@ pub struct Config {
     #[serde(default)]
     pub debug_log: bool,
     /// Controls when the shell hook auto-activates aliases.
-    /// - `always`: (Default) Aliases active in every interactive shell.
-    /// - `agents-only`: Aliases only active when an AI agent env var is detected.
+    /// - `agents-only`: (Default since #699) Aliases only active when an AI
+    ///   agent env var is detected — transparent in plain human terminals.
+    /// - `always`: Aliases active in every interactive shell (pre-#699 default).
     /// - `off`: Aliases never auto-activate (user must call `lean-ctx-on` manually).
     ///
     /// Override via `LEAN_CTX_SHELL_ACTIVATION` env var.

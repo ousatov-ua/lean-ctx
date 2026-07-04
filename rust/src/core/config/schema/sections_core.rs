@@ -465,8 +465,8 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         "shell_activation".into(),
         key_enum_with_env(
             &["always", "agents-only", "off"],
-            "always",
-            "Controls when the shell hook auto-activates aliases",
+            "agents-only",
+            "Controls when the shell hook auto-activates aliases (agents-only since #699: transparent in plain human terminals)",
             "LEAN_CTX_SHELL_ACTIVATION",
         ),
     );

@@ -5,6 +5,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+- **The shell hook is now transparent in plain human terminals: default
+  activation is `agents-only` (GH #699).** With the old `always` default the
+  hook aliased git/docker/kubectl in every interactive shell — so a human in
+  a plain terminal (no agent anywhere) saw lean-ctx allowlist diagnostics for
+  their own commands. lean-ctx exists to save *agent* tokens; the aliases now
+  auto-activate only when an agent session is detected (`LEAN_CTX_AGENT`,
+  `CURSOR_AGENT` — newly recognized across every guard — `CLAUDECODE`,
+  `CODEBUDDY`, `CODEX_CLI_SESSION`, `GEMINI_SESSION`). Set
+  `shell_activation = "always"` (or `LEAN_CTX_SHELL_ACTIVATION=always`) to
+  keep the old behavior, e.g. to feed your own shell usage into
+  `lean-ctx wrapped`; `lean-ctx-on` still opts a single session in manually.
+  The "[CLI] Command would be blocked in MCP mode" allowlist diagnostic is
+  also downgraded to debug level for interactive TTY callers — it's agent
+  telemetry, not human feedback. Thanks @DerPate for the precise report.
+
+### Fixed
+- **Grammar-addon dylibs refuse to load from world-writable dirs/files
+  (GH #690 review point 3, PR #697 — thanks @getappz).** A group/other-
+  writable grammar dir would let any local account swap the dylib between
+  hash check and `dlopen`; the loader now rejects that layout outright.
+- **`ctx_read` gains `repo` param parity in multi-repo mode (GH #696,
+  PR #698 — thanks @getappz).** `ctx_search`/`ctx_glob`/`ctx_tree` could
+  already target a registered root via `repo=<alias>`, but `ctx_read` could
+  not — you could find a file in another root yet not read it. Read-only by
+  design (`ctx_edit`/`ctx_patch` stay session-rooted until undo history is
+  multi-repo-aware); unknown aliases error with the list of known ones, and
+  jail + secret screening apply against the resolved repo root.
+
 ## [3.9.0] — 2026-07-04
 
 ### Added

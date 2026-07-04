@@ -453,7 +453,15 @@ fn allowlist_gate(command: &str) -> Option<i32> {
             );
             return Some(126);
         }
-        tracing::warn!("[CLI] Command would be blocked in MCP mode: {msg}");
+        // Diagnostic, not user feedback: an interactive human at a TTY can run
+        // the command without lean-ctx anyway, and surfacing a WARN in their
+        // plain terminal is exactly the confusion GH #699 reported. Keep the
+        // warning for non-TTY callers (agents that opted into warn-only).
+        if io::stderr().is_terminal() {
+            tracing::debug!("[CLI] Command would be blocked in MCP mode: {msg}");
+        } else {
+            tracing::warn!("[CLI] Command would be blocked in MCP mode: {msg}");
+        }
     }
     None
 }
