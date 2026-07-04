@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [3.9.0] — 2026-07-04
+
 ### Added
 - **The AI Gateway (team mode).** The engine can now run as a shared
   org gateway — one deployment your whole team points its IDEs at, with
