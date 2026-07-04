@@ -42,8 +42,12 @@ pub(crate) fn ensure_installed(
         return Ok(());
     }
 
-    if crate::core::config::Config::load().addons.policy() == AddonPolicy::Locked {
+    let addons = crate::core::config::Config::load().addons;
+    if addons.policy() == AddonPolicy::Locked {
         return Err("addons.policy = locked: grammar-addon fetch disabled".into());
+    }
+    if !addons.grammar_auto_fetch {
+        return Err("addons.grammar_auto_fetch = false: fetch disabled".into());
     }
     if asset.sha256.trim().is_empty() {
         return Err(format!(
@@ -87,7 +91,27 @@ pub(crate) fn ensure_installed(
         ));
     }
 
+    // The dylib is dlopen'd into our own process: read-only on disk so a
+    // stray write is refused at the OS level (a deliberate swap still fails
+    // the per-load hash pin in grammar_loader), and ad-hoc signed on macOS so
+    // a copy that picked up a quarantine xattr along the way stays loadable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o444));
+    }
+    #[cfg(target_os = "macos")]
+    crate::core::codesign::adhoc_sign(&tmp);
+
     std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
+    // Egress transparency: the fetch is zero-config by design (#690 — a
+    // grammar addon is a parsing fallback, not a spawned server), so the one
+    // network round-trip it performs must at least be visible in the log.
+    tracing::info!(
+        "grammar addon `{}` installed from {} (sha256 verified)",
+        manifest.name,
+        asset.url
+    );
     Ok(())
 }
 
@@ -137,5 +161,23 @@ mod tests {
         let err = ensure_installed(&manifest, &asset, &dest).unwrap_err();
         assert!(err.contains("sha256 pin"), "got: {err}");
         assert!(!dest.exists());
+    }
+
+    /// An already-valid install must stay a pure hash check — no policy read,
+    /// no network. Pinned so the `grammar_auto_fetch` gate can never regress
+    /// into un-loading grammars that are already on disk.
+    #[test]
+    fn existing_valid_install_short_circuits_before_any_policy_gate() {
+        let tmp = std::env::temp_dir().join(format!(
+            "lc-grammar-install-test-{}-c.dll",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"already installed").unwrap();
+        let hash = sha256_file(&tmp).unwrap();
+        let (manifest, asset) = manifest_and_asset(&hash);
+
+        // Would need network (example.invalid) if it didn't short-circuit.
+        assert!(ensure_installed(&manifest, &asset, &tmp).is_ok());
+        std::fs::remove_file(&tmp).ok();
     }
 }

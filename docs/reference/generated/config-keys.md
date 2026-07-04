@@ -103,6 +103,7 @@ Addon ecosystem security floor: install policy, signature requirement, per-addon
 - `allowlist` (array, default `[]`) — Addon slugs permitted when policy = allowlist
 - `block_risky` (bool, default `false`) — Refuse to install an addon that has a high-risk (Danger) capability
 - `enforce_capabilities` (bool, default `false`) — Fail closed when an addon declares restricted [capabilities] but no OS sandbox launcher is available to enforce them
+- `grammar_auto_fetch` (bool, default `true`) — Zero-config grammar-addon fetch (#690): download a SHA-256-pinned grammar dylib on first use of a covered extension. Off = regex-signature fallback only (strict egress/DLP posture)
 - `metering` (bool, default `true`) — Record per-addon / per-tool gateway usage to <data_dir>/addons/usage.json (analytics + billing base)
 - `policy` (enum: open | verified_only | allowlist | locked, default `open`) — Addon install policy: open (any) | verified_only | allowlist | locked
 - `require_signature` (bool, default `false`) — Honour a user-override registry only if signed by a trusted org key

@@ -56,6 +56,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   tokens saved and current task — shown as soon as two or more workspaces
   have sessions.
 
+### Added
+- **Grammar addons: long-tail tree-sitter grammars as signed runtime dylibs
+  (GH #690 Phase 1, PR #695 — thanks @getappz).** Structural understanding no
+  longer has to be compiled in: an extension not covered by the 27 built-in
+  grammars can now resolve through a SHA-256-pinned, per-platform grammar
+  dylib that is `dlopen`'d at runtime — manifest + curated registry
+  (`data/grammar_registry.json`, user-overridable under the same signed-
+  override policy as the addon registry), a loader that verifies the hash pin
+  **on every load** plus the tree-sitter ABI version before handing the
+  grammar to the parser, a five-platform CI build matrix, and a zero-config
+  fetch on first use. Fully offline-safe: no addon installed (or no network,
+  or `addons.policy = locked`, or the new `addons.grammar_auto_fetch = false`
+  for strict-egress orgs) degrades to the regex-signature fallback exactly as
+  before. Installed dylibs land read-only and ad-hoc-signed on macOS; every
+  fetch is logged with its source URL. The registry ships empty — which of
+  the 27 static grammars (if any) move to the addon tier is a separate,
+  telemetry-gated Phase 2 decision.
+
 ### Changed
 - **The heredoc-to-interpreter refusal now hands the agent the recovery path
   (GL #1161).** Policy review outcome: the block stays — inline code embedded

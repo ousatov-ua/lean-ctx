@@ -620,6 +620,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "Allow `addon add` to install an addon's upstream package via a pinned manager (uv/pip/cargo/npm/brew/dotnet). Off = refuse bootstrap installs",
         ),
     );
+    addons.insert(
+        "grammar_auto_fetch".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.addons.grammar_auto_fetch),
+            "Zero-config grammar-addon fetch (#690): download a SHA-256-pinned grammar dylib on first use of a covered extension. Off = regex-signature fallback only (strict egress/DLP posture)",
+        ),
+    );
     sections.insert(
         "addons".into(),
         SectionSchema {

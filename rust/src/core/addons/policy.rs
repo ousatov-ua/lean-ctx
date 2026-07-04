@@ -83,6 +83,13 @@ pub struct AddonsConfig {
     /// bootstrap is fully disclosed + pinned + audited before it runs. An org
     /// that forbids local package-manager execution sets this to `false`.
     pub allow_bootstrap: bool,
+    /// Zero-config grammar-addon fetch (#690): transparently download a
+    /// SHA-256-pinned grammar dylib on first use of a registry-covered file
+    /// extension. On by default (a grammar addon is a parsing fallback, not a
+    /// spawned server). Orgs with a strict egress/DLP posture set this to
+    /// `false` — reads then degrade to the regex-signature fallback, exactly
+    /// like offline. `policy = locked` implies the same.
+    pub grammar_auto_fetch: bool,
 }
 
 impl Default for AddonsConfig {
@@ -96,6 +103,7 @@ impl Default for AddonsConfig {
             enforce_capabilities: false,
             metering: true,
             allow_bootstrap: true,
+            grammar_auto_fetch: true,
         }
     }
 }
