@@ -98,4 +98,3 @@ built-in preset names are listed under `presets`.
 
 Additive fields are non-breaking within v1; clients must ignore unknown fields.
 Removing/renaming a field or changing selection semantics bumps the version.
-
