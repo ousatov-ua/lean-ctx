@@ -14,7 +14,7 @@ Umgebungsvariablen (config.rs):
   SMTP_PORT      — SMTP Port (Default: 587)
   SMTP_USERNAME  — SMTP Username
   SMTP_PASSWORD  — SMTP Password
-  SMTP_FROM      — Absender-Adresse (z.B. "LeanCTX <noreply@leanctx.com>")
+  SMTP_FROM      — Absender-Adresse (z.B. "LeanCTX <hello@leanctx.com>")
   API_BASE_URL   — API URL fuer Verification Links (z.B. https://api.leanctx.com)
   PUBLIC_BASE_URL — Website URL fuer Password Reset Links (z.B. https://leanctx.com)
 
