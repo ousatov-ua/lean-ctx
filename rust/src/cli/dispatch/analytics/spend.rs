@@ -18,6 +18,9 @@ pub(in crate::cli::dispatch) fn cmd_spend(args: &[String]) {
         return;
     }
 
+    // Live prices from the disk cache (#1179): pricing the snapshot with the
+    // current provider list instead of family heuristics. No network here.
+    crate::core::gain::live_pricing::ensure_loaded();
     let rows = usage_meter::persisted_snapshot();
 
     if args.iter().any(|a| a == "--json") {
@@ -63,7 +66,13 @@ fn print_table(rows: &[ModelSpend]) {
     for r in rows {
         total += r.cost_usd;
         let model = truncate(&r.model, 24);
-        let flag = if r.pricing_estimated { " *" } else { "" };
+        let flag = if r.measured_requests >= r.requests && r.requests > 0 {
+            " ✓"
+        } else if r.pricing_estimated {
+            " *"
+        } else {
+            ""
+        };
         println!(
             "  {:<24} {:>7} {:>10} {:>10} {:>10} {:>12}{}",
             model,
@@ -78,9 +87,18 @@ fn print_table(rows: &[ModelSpend]) {
     println!("  {}", "-".repeat(78));
     println!("  {:<24} {:>52}", "Total", fmt_usd(total));
 
-    if rows.iter().any(|r| r.pricing_estimated) {
+    let any_measured = rows.iter().any(|r| r.measured_requests > 0);
+    let any_estimated = rows.iter().any(|r| r.pricing_estimated);
+    if any_measured || any_estimated {
         println!();
-        println!("  * pricing matched heuristically (no exact entry in the price table).");
+        if any_measured {
+            println!("  ✓ cost reported by the provider itself (usage accounting) — the bill.");
+        }
+        if any_estimated {
+            println!(
+                "  * pricing matched heuristically (no exact or live entry in the price table)."
+            );
+        }
     }
     println!();
     println!(

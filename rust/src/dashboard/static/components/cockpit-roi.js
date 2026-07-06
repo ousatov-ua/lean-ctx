@@ -207,8 +207,17 @@ class CockpitRoi extends HTMLElement {
 
     var bodyRows = rows.slice(0, 10).map(function (m) {
       var estTag = m.pricing_estimated
-        ? ' <span class="tag ty" title="Pricing matched heuristically; no exact entry in the price table">est. price</span>'
+        ? ' <span class="tag ty" title="Pricing matched heuristically; no exact or live entry in the price table">est. price</span>'
         : '';
+      if (m.measured_requests > 0) {
+        var allMeasured = m.measured_requests >= m.requests;
+        estTag = ' <span class="tag tg" title="' +
+          (allMeasured
+            ? 'Cost reported by the provider itself (usage accounting) \u2014 this is the bill, not an estimate'
+            : 'Partially provider-reported: ' + esc(ff(m.measured_requests)) + ' of ' + esc(ff(m.requests)) + ' requests carry the provider\u2019s own charge') +
+          '">' + (allMeasured ? 'provider-billed' : 'partly billed') + '</span>' +
+          (m.pricing_estimated ? estTag : '');
+      }
       return '<tr><td>' + esc(String(m.model)) + estTag + '</td>' +
         '<td class="r">' + esc(ff(m.requests)) + '</td>' +
         '<td class="r">' + esc(ff(m.input_tokens)) + '</td>' +

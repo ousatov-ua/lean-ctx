@@ -21,9 +21,21 @@ impl ModelCost {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum PricingMatchKind {
     Exact,
+    /// Exact hit in the live provider price list (OpenRouter models API,
+    /// refreshed in the background). Current market data — NOT an estimate.
+    Live,
     Alias,
     Heuristic,
     Fallback,
+}
+
+impl PricingMatchKind {
+    /// True when the priced figure is an estimate (no exact or live price for
+    /// the model) and must be surfaced as such, never as a precise number.
+    #[must_use]
+    pub fn is_estimated(self) -> bool {
+        !matches!(self, Self::Exact | Self::Live)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,6 +274,18 @@ impl ModelPricing {
             };
         }
 
+        // Live provider price list (#1179): exact market prices for models the
+        // embedded table doesn't know — checked BEFORE any family heuristic so
+        // a new model is never priced by its older, differently-priced kin.
+        // No-op unless a run-mode loaded the snapshot (proxy/gateway/spend).
+        if let Some((k, cost)) = super::live_pricing::lookup(raw) {
+            return ModelQuote {
+                model_key: k,
+                cost,
+                match_kind: PricingMatchKind::Live,
+            };
+        }
+
         if let Some((k, kind)) = Self::heuristic_key(raw)
             && let Some(cost) = self.models.get(&k).copied()
         {
@@ -335,6 +359,18 @@ impl ModelPricing {
         for k in exact_keys {
             if m == k {
                 return Some(k.to_string());
+            }
+        }
+        // Anthropic API ids write versions with dashes ("claude-sonnet-4-5")
+        // where the table keys use dots ("claude-sonnet-4.5") — same model,
+        // same list price. Retry with dotted versions so real API ids hit
+        // their exact entry instead of degrading to the family heuristic.
+        let dotted = dot_versions(&m);
+        if dotted != m {
+            for k in exact_keys {
+                if dotted == k {
+                    return Some(k.to_string());
+                }
             }
         }
         None
@@ -488,6 +524,26 @@ fn normalize(s: &str) -> String {
     s.trim().to_lowercase().replace(' ', "-")
 }
 
+/// Rewrites dashed version tails into dotted ones: `sonnet-4-5` → `sonnet-4.5`.
+/// Only digit-digit boundaries are touched, so names like `phi-4-mini` or
+/// `llama-4-maverick` stay as they are.
+fn dot_versions(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    for (i, &c) in b.iter().enumerate() {
+        if c == b'-'
+            && i > 0
+            && b[i - 1].is_ascii_digit()
+            && b.get(i + 1).is_some_and(u8::is_ascii_digit)
+        {
+            out.push('.');
+        } else {
+            out.push(c as char);
+        }
+    }
+    out
+}
+
 fn non_blank(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
@@ -529,6 +585,85 @@ mod tests {
         let p = ModelPricing::embedded();
         let q = p.quote(Some("unknown-model"));
         assert_eq!(q.match_kind, PricingMatchKind::Fallback);
+    }
+
+    #[test]
+    fn live_price_beats_heuristic_but_not_embedded_exact() {
+        // #1179: a live-listed model must be priced from the live table (Live),
+        // never from a family heuristic; embedded exact matches keep priority.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::core::gain::live_pricing::install(crate::core::gain::live_pricing::LivePriceTable {
+            fetched_at: 1,
+            models: [
+                (
+                    "zzz-test/live-only-model".to_string(),
+                    ModelCost {
+                        input_per_m: 0.07,
+                        output_per_m: 0.28,
+                        cache_write_per_m: 0.07,
+                        cache_read_per_m: 0.007,
+                    },
+                ),
+                (
+                    "claude-sonnet-4-5".to_string(),
+                    ModelCost {
+                        input_per_m: 999.0,
+                        output_per_m: 999.0,
+                        cache_write_per_m: 999.0,
+                        cache_read_per_m: 999.0,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        });
+
+        let p = ModelPricing::embedded();
+        let live = p.quote(Some("zzz-test/live-only-model"));
+        assert_eq!(live.match_kind, PricingMatchKind::Live);
+        assert!(
+            !live.match_kind.is_estimated(),
+            "live is market data, not a guess"
+        );
+        assert!((live.cost.input_per_m - 0.07).abs() < 1e-9);
+
+        // Embedded exact match wins over a (bogus) live row for the same key.
+        let exact = p.quote(Some("claude-sonnet-4.5"));
+        assert_eq!(exact.match_kind, PricingMatchKind::Exact);
+        assert!((exact.cost.input_per_m - 3.00).abs() < f64::EPSILON);
+
+        crate::core::gain::live_pricing::clear_for_tests();
+        let after = p.quote(Some("zzz-test/live-only-model"));
+        assert_eq!(
+            after.match_kind,
+            PricingMatchKind::Fallback,
+            "no snapshot → fallback"
+        );
+    }
+
+    #[test]
+    fn dashed_api_ids_hit_their_exact_table_entry() {
+        // Anthropic wire ids use dashes ("claude-sonnet-4-5"); the table keys
+        // use dots. Same model — must book as Exact list price, not Heuristic.
+        let p = ModelPricing::embedded();
+        for (api_id, key) in [
+            ("claude-sonnet-4-5", "claude-sonnet-4.5"),
+            ("claude-opus-4-5", "claude-opus-4.5"),
+            ("claude-3-5-sonnet", "claude-3.5-sonnet"),
+            ("gemini-2-5-pro", "gemini-2.5-pro"),
+        ] {
+            let q = p.quote(Some(api_id));
+            assert_eq!(q.model_key, key, "{api_id} must map to {key}");
+            assert_eq!(
+                q.match_kind,
+                PricingMatchKind::Exact,
+                "{api_id} is the same model as {key} — exact, not heuristic"
+            );
+        }
+        // Dash-digit names that are NOT versions stay untouched.
+        let q = p.quote(Some("phi-4-mini"));
+        assert_eq!(q.model_key, "phi-4-mini");
+        assert_eq!(q.match_kind, PricingMatchKind::Exact);
     }
 
     #[test]

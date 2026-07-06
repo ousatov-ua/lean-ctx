@@ -101,7 +101,14 @@ pub async fn forward_request(
         })
     };
 
-    let prepared = prepare_request_body(&parts, &body_bytes, compress_body, route_hook)?;
+    let prepared = prepare_request_body(
+        &parts,
+        &body_bytes,
+        compress_body,
+        route_hook,
+        upstream_base,
+        provider_label == "OpenAI",
+    )?;
     let original_size = prepared.original_size;
     let compressed_size = prepared.compressed_size;
     let compression_candidate = prepared.compression_candidate;
@@ -377,6 +384,8 @@ fn prepare_request_body(
     body_bytes: &[u8],
     compress_body: impl FnOnce(serde_json::Value, usize) -> (Vec<u8>, usize, usize),
     route_hook: impl FnOnce(&mut serde_json::Value) -> Option<super::routing::RouteDecision>,
+    default_upstream_base: &str,
+    openai_shape: bool,
 ) -> Result<PreparedRequestBody, StatusCode> {
     let encoding = request_body_encoding(parts);
     let decoded = match encoding {
@@ -412,12 +421,40 @@ fn prepare_request_body(
     // swap lands in the same single serialization as the compression pass.
     let mut route = route_hook(&mut parsed);
 
+    // Measured cost opt-in (#1179): when the *effective* upstream (post-
+    // routing) is OpenRouter and the body speaks the OpenAI shape, ask for the
+    // billed charge in the final usage payload. Other upstreams never see the
+    // non-standard `usage` field (api.openai.com rejects unknown params).
+    let effective_upstream = route
+        .as_ref()
+        .and_then(|r| r.upstream_base.as_deref())
+        .unwrap_or(default_upstream_base);
+    let wants_billed_cost = super::usage_accounting::upstream_is_openrouter(effective_upstream)
+        && crate::core::config::Config::load()
+            .proxy
+            .meters_openai_usage();
+    let xlat_route = route.as_ref().is_some_and(|r| r.xlat);
+    // `usage.include` is a Chat-Completions-only parameter: gate on the shape
+    // AND the call path so a Responses-API body never carries it.
+    let chat_completions_call = openai_shape
+        && parts
+            .uri
+            .path()
+            .trim_end_matches('/')
+            .ends_with("/chat/completions");
+    if wants_billed_cost && chat_completions_call && !xlat_route {
+        super::usage_accounting::inject_usage_include(&mut parsed);
+    }
+
     let original_size = decoded.len();
     // Cross-shape route (enterprise#16): translate Messages→Chat-Completions
     // and compress with the target shape's compressor. An untranslatable body
     // fails open — the route is cancelled and the request forwards natively.
     let (logical_body, _, compressed_size) =
-        if let Some(openai_body) = translated_openai_body(route.as_ref(), &parsed) {
+        if let Some(mut openai_body) = translated_openai_body(route.as_ref(), &parsed) {
+            if wants_billed_cost {
+                super::usage_accounting::inject_usage_include(&mut openai_body);
+            }
             super::openai::compress_request_body(openai_body, original_size)
         } else {
             if route.as_ref().is_some_and(|r| r.xlat) {
@@ -983,7 +1020,15 @@ mod tests {
             .into_parts()
             .0;
 
-        let prepared = prepare_request_body(&parts, &encoded, add_test_marker, |_| None).unwrap();
+        let prepared = prepare_request_body(
+            &parts,
+            &encoded,
+            add_test_marker,
+            |_| None,
+            "https://api.openai.com",
+            false,
+        )
+        .unwrap();
         assert_eq!(request_body_encoding(&parts), RequestBodyEncoding::Zstd);
         assert_eq!(prepared.original_size, json.len());
         assert!(prepared.compression_candidate);
@@ -1010,7 +1055,15 @@ mod tests {
             .into_parts()
             .0;
 
-        let prepared = prepare_request_body(&parts, &encoded, add_test_marker, |_| None).unwrap();
+        let prepared = prepare_request_body(
+            &parts,
+            &encoded,
+            add_test_marker,
+            |_| None,
+            "https://api.openai.com",
+            false,
+        )
+        .unwrap();
         assert_eq!(request_body_encoding(&parts), RequestBodyEncoding::Gzip);
         assert_eq!(prepared.original_size, json.len());
         assert!(prepared.compression_candidate);
@@ -1020,6 +1073,75 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(parsed["lean_ctx_touched"], true);
         assert_eq!(parsed["model"], "gpt-5");
+    }
+
+    #[test]
+    fn openrouter_chat_requests_opt_into_billed_cost() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let body = serde_json::json!({"model": "deepseek/deepseek-v4-flash", "messages": []});
+        let json = serde_json::to_vec(&body).unwrap();
+        let parts = parts_for("/v1/chat/completions");
+
+        let prepared = prepare_request_body(
+            &parts,
+            &json,
+            add_test_marker,
+            |_| None,
+            "https://openrouter.ai/api",
+            true,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(
+            parsed["usage"]["include"], true,
+            "OpenRouter chat requests must ask for the billed cost (#1179)"
+        );
+    }
+
+    #[test]
+    fn non_openrouter_upstreams_never_carry_the_usage_opt_in() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let body = serde_json::json!({"model": "gpt-5.5", "messages": []});
+        let json = serde_json::to_vec(&body).unwrap();
+        let parts = parts_for("/v1/chat/completions");
+
+        let prepared = prepare_request_body(
+            &parts,
+            &json,
+            add_test_marker,
+            |_| None,
+            "https://api.openai.com",
+            true,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert!(
+            parsed.get("usage").is_none(),
+            "api.openai.com rejects unknown top-level params — no injection"
+        );
+    }
+
+    #[test]
+    fn responses_api_bodies_never_carry_the_usage_opt_in() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let body = serde_json::json!({"model": "gpt-5.5", "input": []});
+        let json = serde_json::to_vec(&body).unwrap();
+        let parts = parts_for("/v1/responses");
+
+        let prepared = prepare_request_body(
+            &parts,
+            &json,
+            add_test_marker,
+            |_| None,
+            "https://openrouter.ai/api",
+            true,
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert!(
+            parsed.get("usage").is_none(),
+            "`usage.include` is Chat-Completions-only — Responses bodies stay clean"
+        );
     }
 
     #[test]
@@ -1051,6 +1173,8 @@ mod tests {
             body,
             |_, _| panic!("unknown encodings must not be JSON-rewritten"),
             |_| None,
+            "https://api.openai.com",
+            false,
         )
         .unwrap();
 
@@ -1079,6 +1203,8 @@ mod tests {
             body,
             |_, _| panic!("invalid JSON must not enter the compression pipeline"),
             |_| None,
+            "https://api.openai.com",
+            false,
         )
         .unwrap();
 

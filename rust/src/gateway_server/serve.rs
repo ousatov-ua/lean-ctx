@@ -51,6 +51,11 @@ pub async fn serve(opts: ServeOptions) -> anyhow::Result<()> {
         .admin_port
         .unwrap_or_else(|| opts.port.saturating_add(1));
 
+    // Live model prices (#1179): every usage_events row is priced through
+    // ModelPricing — keep the provider price list current so unknown models
+    // never fall back to stale family heuristics. Fail-open.
+    crate::core::gain::live_pricing::spawn_background_refresh();
+
     // -- Usage store (fail-open, enterprise#12/#17) -------------------------
     let pool = match std::env::var(DATABASE_URL_ENV) {
         Ok(url) if !url.trim().is_empty() => match super::store::pool_from_database_url(&url) {

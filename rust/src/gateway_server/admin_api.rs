@@ -35,6 +35,12 @@ pub struct UsageBreakdownRow {
     pub cost_usd: f64,
     pub saved_tokens: i64,
     pub saved_usd: f64,
+    /// Requests whose cost is the provider's own reported charge (#1179).
+    #[serde(default)]
+    pub measured_requests: i64,
+    /// Requests whose cost had to be estimated from a heuristic price match.
+    #[serde(default)]
+    pub estimated_requests: i64,
 }
 
 /// Aggregate totals + the seat projection over the queried window.
@@ -48,6 +54,12 @@ pub struct UsageTotals {
     pub reference_cost_usd: f64,
     /// Distinct persons with ≥1 event in the window — the projection divisor.
     pub active_persons: i64,
+    /// Requests billed at the provider's own reported charge (#1179).
+    #[serde(default)]
+    pub measured_requests: i64,
+    /// Requests whose cost is a heuristic estimate (no exact/live price).
+    #[serde(default)]
+    pub estimated_requests: i64,
     /// `saved_usd / active_persons × seats`, scaled to a 30-day month
     /// (enterprise#20, Doc 04): "if every configured seat saved like the
     /// currently active users, this is the monthly org-wide savings".
@@ -169,7 +181,9 @@ SELECT person, project, model, provider,
        sum(output_tokens)::BIGINT  AS output_tokens,
        sum(cost_usd)               AS cost_usd,
        sum(saved_tokens)::BIGINT   AS saved_tokens,
-       sum(saved_usd)              AS saved_usd
+       sum(saved_usd)              AS saved_usd,
+       count(*) FILTER (WHERE cost_source = 'provider')  AS measured_requests,
+       count(*) FILTER (WHERE cost_source = 'heuristic') AS estimated_requests
 FROM usage_events
 WHERE ts >= $1 AND ts <= $2
 GROUP BY person, project, model, provider
@@ -180,7 +194,9 @@ SELECT count(*)                     AS requests,
        coalesce(sum(cost_usd), 0)   AS cost_usd,
        coalesce(sum(saved_usd), 0)  AS saved_usd,
        coalesce(sum(reference_cost_usd), 0) AS reference_cost_usd,
-       count(DISTINCT person)       AS active_persons
+       count(DISTINCT person)       AS active_persons,
+       count(*) FILTER (WHERE cost_source = 'provider')  AS measured_requests,
+       count(*) FILTER (WHERE cost_source = 'heuristic') AS estimated_requests
 FROM usage_events
 WHERE ts >= $1 AND ts <= $2";
 
@@ -261,16 +277,22 @@ pub async fn usage_breakdown(
             cost_usd: r.get("cost_usd"),
             saved_tokens: r.get("saved_tokens"),
             saved_usd: r.get("saved_usd"),
+            measured_requests: r.get("measured_requests"),
+            estimated_requests: r.get("estimated_requests"),
         })
         .collect();
 
     let t = client.query_one(USAGE_TOTALS_SQL, &[&from, &to]).await?;
     let totals = build_totals(
-        t.get("requests"),
-        t.get("cost_usd"),
-        t.get("saved_usd"),
-        t.get("reference_cost_usd"),
-        t.get("active_persons"),
+        Aggregates {
+            requests: t.get("requests"),
+            cost_usd: t.get("cost_usd"),
+            saved_usd: t.get("saved_usd"),
+            reference_cost_usd: t.get("reference_cost_usd"),
+            active_persons: t.get("active_persons"),
+            measured_requests: t.get("measured_requests"),
+            estimated_requests: t.get("estimated_requests"),
+        },
         seats,
         to - from,
     );
@@ -283,32 +305,38 @@ pub async fn usage_breakdown(
     })
 }
 
-/// Pure projection math (unit-tested): per-active-person savings × seats,
-/// normalized from the window length to a 30-day month.
-fn build_totals(
+/// Raw window aggregates from the totals query, fed into [`build_totals`].
+#[derive(Debug, Clone, Copy, Default)]
+struct Aggregates {
     requests: i64,
     cost_usd: f64,
     saved_usd: f64,
     reference_cost_usd: f64,
     active_persons: i64,
-    seats: Option<u32>,
-    window: chrono::Duration,
-) -> UsageTotals {
+    measured_requests: i64,
+    estimated_requests: i64,
+}
+
+/// Pure projection math (unit-tested): per-active-person savings × seats,
+/// normalized from the window length to a 30-day month.
+fn build_totals(agg: Aggregates, seats: Option<u32>, window: chrono::Duration) -> UsageTotals {
     let window_days = window.num_seconds() as f64 / 86_400.0;
     let projection = seats
-        .filter(|_| active_persons > 0 && window_days > 0.0)
+        .filter(|_| agg.active_persons > 0 && window_days > 0.0)
         .map(|s| {
             #[allow(clippy::cast_precision_loss)]
             let per_person_per_month =
-                saved_usd / active_persons as f64 / window_days * PROJECTION_MONTH_DAYS;
+                agg.saved_usd / agg.active_persons as f64 / window_days * PROJECTION_MONTH_DAYS;
             per_person_per_month * f64::from(s)
         });
     UsageTotals {
-        requests,
-        cost_usd,
-        saved_usd,
-        reference_cost_usd,
-        active_persons,
+        requests: agg.requests,
+        cost_usd: agg.cost_usd,
+        saved_usd: agg.saved_usd,
+        reference_cost_usd: agg.reference_cost_usd,
+        active_persons: agg.active_persons,
+        measured_requests: agg.measured_requests,
+        estimated_requests: agg.estimated_requests,
         projection_seats: seats.filter(|_| projection.is_some()),
         projection_usd_per_month: projection,
     }
@@ -323,11 +351,14 @@ mod tests {
         // 10 active persons saved $500 over a 15-day window → $100/person/month;
         // 800 seats → $80k/month.
         let t = build_totals(
-            1_000,
-            2_000.0,
-            500.0,
-            3_000.0,
-            10,
+            Aggregates {
+                requests: 1_000,
+                cost_usd: 2_000.0,
+                saved_usd: 500.0,
+                reference_cost_usd: 3_000.0,
+                active_persons: 10,
+                ..Default::default()
+            },
             Some(800),
             chrono::Duration::days(15),
         );
@@ -339,11 +370,21 @@ mod tests {
     #[test]
     fn projection_absent_without_seats_or_activity() {
         // No seats configured → no projection, ever.
-        let t = build_totals(10, 1.0, 1.0, 0.0, 5, None, chrono::Duration::days(30));
+        let t = build_totals(
+            Aggregates {
+                requests: 10,
+                cost_usd: 1.0,
+                saved_usd: 1.0,
+                active_persons: 5,
+                ..Default::default()
+            },
+            None,
+            chrono::Duration::days(30),
+        );
         assert_eq!(t.projection_usd_per_month, None);
         assert_eq!(t.projection_seats, None);
         // Seats configured but zero active persons → nothing to extrapolate from.
-        let t = build_totals(0, 0.0, 0.0, 0.0, 0, Some(800), chrono::Duration::days(30));
+        let t = build_totals(Aggregates::default(), Some(800), chrono::Duration::days(30));
         assert_eq!(t.projection_usd_per_month, None);
         assert_eq!(t.projection_seats, None, "seats hidden when unusable");
     }
@@ -382,13 +423,19 @@ mod tests {
                 cost_usd: 312.40,
                 saved_tokens: 3_100_000,
                 saved_usd: 210.11,
+                measured_requests: 40,
+                estimated_requests: 3,
             }],
             totals: build_totals(
-                1240,
-                312.40,
-                210.11,
-                522.51,
-                1,
+                Aggregates {
+                    requests: 1240,
+                    cost_usd: 312.40,
+                    saved_usd: 210.11,
+                    reference_cost_usd: 522.51,
+                    active_persons: 1,
+                    measured_requests: 40,
+                    estimated_requests: 3,
+                },
                 Some(800),
                 chrono::Duration::days(30),
             ),
@@ -396,6 +443,8 @@ mod tests {
         let json = serde_json::to_value(&resp).expect("serializes");
         assert_eq!(json["rows"][0]["person"], "alice@example.com");
         assert_eq!(json["totals"]["active_persons"], 1);
+        assert_eq!(json["totals"]["measured_requests"], 40);
+        assert_eq!(json["rows"][0]["estimated_requests"], 3);
         assert!(json["totals"]["projection_usd_per_month"].is_f64());
         let parsed: UsageBreakdownResponse = serde_json::from_value(json).expect("round-trips");
         assert_eq!(parsed, resp);

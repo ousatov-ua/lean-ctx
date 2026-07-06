@@ -1,5 +1,6 @@
 pub mod bridge_status;
 pub mod gain_score;
+pub mod live_pricing;
 pub mod model_pricing;
 pub mod task_classifier;
 

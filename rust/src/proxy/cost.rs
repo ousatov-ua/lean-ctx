@@ -15,7 +15,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 
-use crate::core::gain::model_pricing::{ModelPricing, PricingMatchKind};
+use crate::core::gain::model_pricing::ModelPricing;
 
 #[derive(Default, Clone)]
 struct ModelAccum {
@@ -89,7 +89,7 @@ pub fn snapshot() -> Vec<ModelStat> {
             let quote = pricing.quote(Some(model));
             // Compression removes *input* tokens, so price against the input rate.
             let usd_saved = acc.tokens_saved as f64 / 1_000_000.0 * quote.cost.input_per_m;
-            let pricing_estimated = !matches!(quote.match_kind, PricingMatchKind::Exact);
+            let pricing_estimated = quote.match_kind.is_estimated();
             ModelStat {
                 model: model.clone(),
                 requests: acc.requests,

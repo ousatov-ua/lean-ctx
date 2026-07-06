@@ -77,6 +77,10 @@ pub async fn start(
     open_mode: Option<String>,
     auth_enabled: Option<bool>,
 ) {
+    // Live model prices (#1179): the measured-spend card prices with the
+    // cached provider list — loaded from disk, kept fresh in the background.
+    crate::core::gain::live_pricing::spawn_background_refresh();
+
     // How to reveal the URL once the server is up: --open= flag > env > browser.
     let open = resolve_open_mode(open_mode.as_deref());
     let port = port.unwrap_or_else(|| {

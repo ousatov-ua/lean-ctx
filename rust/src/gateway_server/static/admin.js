@@ -102,10 +102,12 @@ function exportDetailCsv() {
   const rows = visibleDetailRows().map((r) => [
     r.person, r.project, r.model, r.provider, r.requests, r.input_tokens,
     r.output_tokens, r.saved_tokens, r.saved_usd.toFixed(6), r.cost_usd.toFixed(6),
+    r.measured_requests ?? 0, r.estimated_requests ?? 0,
   ]);
   downloadCsv(`gateway-segments-${state.windowDays}d-${stamp()}.csv`,
     ['person', 'project', 'model', 'provider', 'requests', 'input_tokens',
-      'output_tokens', 'saved_tokens', 'saved_usd', 'cost_usd'], rows);
+      'output_tokens', 'saved_tokens', 'saved_usd', 'cost_usd',
+      'measured_requests', 'estimated_requests'], rows);
 }
 
 /* ── formatters ────────────────────────────────────────────────────── */
@@ -192,6 +194,12 @@ function renderHealth() {
     ? pill('st-ok', 'routing', aliasCount > 0 ? `active · ${aliasCount} alias${aliasCount === 1 ? '' : 'es'}` : 'active')
     : pill('st-warn', 'routing', 'off'));
   if (s.reference_model) parts.push(pill('st-ok', 'baseline', esc(s.reference_model)));
+  if (s.live_pricing) {
+    parts.push(pill('st-ok', 'pricing',
+      `live · ${num(s.live_pricing.lookup_keys)} models · ${relTime(new Date(s.live_pricing.fetched_at * 1000).toISOString())}`));
+  } else {
+    parts.push(pill('st-warn', 'pricing', 'embedded table only — live prices not loaded yet'));
+  }
   for (const p of s.providers) {
     const st = !p.injects_credential ? 'st-ok' : (p.credential_present ? 'st-ok' : 'st-err');
     const cred = !p.injects_credential ? 'caller keys' : (p.credential_present ? 'key injected' : 'KEY MISSING');
@@ -204,8 +212,18 @@ function renderHealth() {
 function renderKpis() {
   const t = state.usage.totals;
   $('#kpi-spend').textContent = usd(t.cost_usd);
-  $('#kpi-spend-foot').textContent = t.reference_cost_usd > 0
+  // Cost provenance (#1179): say when the spend figure is provider-billed —
+  // and never present heuristic estimates as exact numbers.
+  const provenance = [];
+  if (t.measured_requests > 0 && t.requests > 0) {
+    provenance.push(`${Math.round((t.measured_requests / t.requests) * 100)}% provider-billed`);
+  }
+  if (t.estimated_requests > 0) provenance.push(`${num(t.estimated_requests)} req estimated`);
+  const baselineFoot = t.reference_cost_usd > 0
     ? `baseline would have cost ${usd(t.reference_cost_usd)}` : '';
+  $('#kpi-spend-foot').textContent = provenance.length
+    ? [baselineFoot, provenance.join(' · ')].filter(Boolean).join(' · ')
+    : baselineFoot;
   $('#kpi-saved').textContent = usd(t.saved_usd);
   const pct = t.cost_usd + t.saved_usd > 0 ? (t.saved_usd / (t.cost_usd + t.saved_usd)) * 100 : 0;
   $('#kpi-saved-foot').textContent = t.saved_usd > 0 ? `${pct.toFixed(1)}% of would-be spend` : '';
@@ -413,6 +431,19 @@ function visibleDetailRows() {
   return sortBy(rows.slice(), state.sort);
 }
 
+function costMark(r) {
+  // Cost provenance (#1179): ✓ = the provider itself billed every request in
+  // this segment (usage accounting); ~ = part of the cost is a heuristic
+  // estimate (no exact or live price for the model).
+  if (r.measured_requests >= r.requests && r.requests > 0) {
+    return ' <span class="cost-mark cost-measured" title="Provider-billed: cost reported by the provider itself, not derived from a price table">✓</span>';
+  }
+  if (r.estimated_requests > 0) {
+    return ' <span class="cost-mark cost-estimated" title="Estimated: no exact or live price for this model — heuristic family match">~</span>';
+  }
+  return '';
+}
+
 function renderDetail() {
   const rows = visibleDetailRows();
   $('#detail-body').innerHTML = rows.map((r) => `
@@ -422,7 +453,7 @@ function renderDetail() {
       <td class="num">${num(r.input_tokens)}</td>
       <td class="num">${num(r.output_tokens)}</td>
       <td class="num saved-cell">${usd(r.saved_usd)}</td>
-      <td class="num">${usd(r.cost_usd)}</td>
+      <td class="num">${usd(r.cost_usd)}${costMark(r)}</td>
     </tr>`).join('');
   $('#detail-empty').hidden = rows.length > 0;
   $$('#detail-table th').forEach((th) => {

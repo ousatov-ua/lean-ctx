@@ -64,6 +64,18 @@ pub struct StatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference_model: Option<String>,
     pub local_shadow_rate_per_mtok: f64,
+    /// Live provider price list (#1179): present when the snapshot is loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live_pricing: Option<LivePricingStatus>,
+}
+
+/// Freshness of the live model-price table on the status card.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LivePricingStatus {
+    /// Unix seconds of the successful fetch that produced the active table.
+    pub fetched_at: u64,
+    /// Number of resolvable model lookup keys.
+    pub lookup_keys: usize,
 }
 
 pub(super) async fn get_status(State(state): State<Arc<AdminState>>) -> Response {
@@ -102,6 +114,12 @@ pub async fn build_status(state: &AdminState) -> StatusResponse {
         routing_aliases: state.routing_aliases.clone(),
         reference_model: state.reference_model.clone(),
         local_shadow_rate_per_mtok: state.local_shadow_rate,
+        live_pricing: crate::core::gain::live_pricing::status().map(|(fetched_at, lookup_keys)| {
+            LivePricingStatus {
+                fetched_at,
+                lookup_keys,
+            }
+        }),
     }
 }
 
@@ -199,6 +217,10 @@ mod tests {
             )]),
             reference_model: Some("claude-opus-4.5".into()),
             local_shadow_rate_per_mtok: 0.25,
+            live_pricing: Some(LivePricingStatus {
+                fetched_at: 1_780_000_000,
+                lookup_keys: 340,
+            }),
         };
         let json = serde_json::to_value(&resp).expect("serializes");
         assert_eq!(json["store"]["connected"], true);
@@ -207,6 +229,7 @@ mod tests {
             json["routing_aliases"]["zuehlke/fast"],
             "foundry:deepseek-v4-flash"
         );
+        assert_eq!(json["live_pricing"]["lookup_keys"], 340);
         let parsed: StatusResponse = serde_json::from_value(json).expect("round-trips");
         assert_eq!(parsed, resp);
     }

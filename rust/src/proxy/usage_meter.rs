@@ -16,7 +16,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::gain::model_pricing::{ModelPricing, PricingMatchKind};
+use crate::core::gain::model_pricing::ModelPricing;
 
 /// Cumulative real token counts for one model. Cost is derived at read time so a
 /// pricing-table change re-values historical usage consistently.
@@ -41,6 +41,35 @@ pub struct ModelUsage {
     /// cache read + cache write) — same request, same moment, no confound.
     #[serde(default)]
     pub counterfactual_billed_tokens: u64,
+    /// The turns whose response carried the provider's own USD charge
+    /// (OpenRouter usage accounting, #1179). Their tokens are *inside* the
+    /// totals above; pricing subtracts this slice and books its measured USD
+    /// instead of a table estimate. `serde(default)` keeps older files loadable.
+    #[serde(default)]
+    pub measured: MeasuredSlice,
+}
+
+/// Token/cost sums of the turns that reported a measured provider charge.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct MeasuredSlice {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    /// Sum of provider-reported USD for those turns — the bill, not a table.
+    pub cost_usd: f64,
+}
+
+impl MeasuredSlice {
+    fn merge(&mut self, other: &Self) {
+        self.requests += other.requests;
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
+        self.cost_usd += other.cost_usd;
+    }
 }
 
 impl ModelUsage {
@@ -51,6 +80,16 @@ impl ModelUsage {
         self.cache_read_tokens += u.cache_read_tokens;
         self.cache_write_tokens += u.cache_write_tokens;
         self.reasoning_tokens += u.reasoning_tokens;
+        if let Some(cost) = u.provider_cost_usd {
+            self.measured.merge(&MeasuredSlice {
+                requests: 1,
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                cache_read_tokens: u.cache_read_tokens,
+                cache_write_tokens: u.cache_write_tokens,
+                cost_usd: cost,
+            });
+        }
         // Verified-savings pair (#701): only when the probe answered by the
         // time the billed usage arrived — both sides of the pair or neither.
         if let Some(counted) = u
@@ -82,7 +121,13 @@ pub struct ModelSpend {
     pub cache_write_tokens: u64,
     pub reasoning_tokens: u64,
     pub cost_usd: f64,
-    /// True when pricing came from a heuristic/fallback match, not an exact one.
+    /// Share of `cost_usd` the provider itself reported (OpenRouter usage
+    /// accounting, #1179) — a bill, not a table estimate.
+    pub measured_cost_usd: f64,
+    /// Requests covered by that provider-reported cost.
+    pub measured_requests: u64,
+    /// True when part of the cost had to be priced from a heuristic/fallback
+    /// match — never set by measured or exactly-priced spend.
     pub pricing_estimated: bool,
 }
 
@@ -187,6 +232,7 @@ pub fn resume_from_disk() {
         acc.counterfactual_requests += usage.counterfactual_requests;
         acc.counterfactual_input_tokens += usage.counterfactual_input_tokens;
         acc.counterfactual_billed_tokens += usage.counterfactual_billed_tokens;
+        acc.measured.merge(&usage.measured);
     }
     drop(map);
     let mut cohorts = cohort_store()
@@ -209,25 +255,30 @@ pub fn record(u: &super::usage::RealUsage) {
 
     // Budget windows (enterprise#25): book this turn's measured cost against
     // the person/day and project/month accumulators the policy gate checks.
-    // Local turns book the shadow rate — the same valuation the usage store
-    // applies — so local-only budgets stay meaningful.
+    // The provider's own reported charge wins (#1179); local turns book the
+    // shadow rate — the same valuation the usage store applies — so
+    // local-only budgets stay meaningful.
     if let Some(wire) = u.wire.as_deref()
         && (wire.person.is_some() || wire.project.is_some())
     {
-        let pricing = crate::core::gain::model_pricing::ModelPricing::load();
         let baseline = crate::core::config::Config::load().proxy.baseline.clone();
         #[allow(clippy::cast_precision_loss)]
         let cost_usd = if wire.is_local {
             let billable =
                 u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens;
             baseline.effective_local_shadow_rate() / 1_000_000.0 * billable as f64
+        } else if let Some(measured) = u.provider_cost_usd {
+            measured
         } else {
-            pricing.quote(Some(&u.model)).cost.estimate_usd(
-                u.input_tokens,
-                u.output_tokens,
-                u.cache_write_tokens,
-                u.cache_read_tokens,
-            )
+            crate::core::gain::model_pricing::ModelPricing::load()
+                .quote(Some(&u.model))
+                .cost
+                .estimate_usd(
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_write_tokens,
+                    u.cache_read_tokens,
+                )
         };
         super::policy_gate::record_spend(wire.person.as_deref(), wire.project.as_deref(), cost_usd);
     }
@@ -375,12 +426,18 @@ pub fn price_models(map: &HashMap<String, ModelUsage>) -> Vec<ModelSpend> {
 
 fn price_one(pricing: &ModelPricing, model: &str, usage: &ModelUsage) -> ModelSpend {
     let quote = pricing.quote(Some(model));
-    let cost_usd = quote.cost.estimate_usd(
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.cache_write_tokens,
-        usage.cache_read_tokens,
+    // Measured-first (#1179): turns whose response carried the provider's own
+    // USD charge book that exact amount; only the remainder is table-priced.
+    let m = &usage.measured;
+    let derived_cost = quote.cost.estimate_usd(
+        usage.input_tokens.saturating_sub(m.input_tokens),
+        usage.output_tokens.saturating_sub(m.output_tokens),
+        usage
+            .cache_write_tokens
+            .saturating_sub(m.cache_write_tokens),
+        usage.cache_read_tokens.saturating_sub(m.cache_read_tokens),
     );
+    let derived_requests = usage.requests.saturating_sub(m.requests);
     ModelSpend {
         model: model.to_string(),
         requests: usage.requests,
@@ -389,8 +446,11 @@ fn price_one(pricing: &ModelPricing, model: &str, usage: &ModelUsage) -> ModelSp
         cache_read_tokens: usage.cache_read_tokens,
         cache_write_tokens: usage.cache_write_tokens,
         reasoning_tokens: usage.reasoning_tokens,
-        cost_usd,
-        pricing_estimated: !matches!(quote.match_kind, PricingMatchKind::Exact),
+        cost_usd: m.cost_usd + derived_cost,
+        measured_cost_usd: m.cost_usd,
+        measured_requests: m.requests,
+        // Fully measured spend is never an estimate, whatever the table says.
+        pricing_estimated: quote.match_kind.is_estimated() && derived_requests > 0,
     }
 }
 
@@ -619,6 +679,65 @@ mod tests {
         let rows = price_models(&map);
         assert!(rows[0].pricing_estimated, "fallback pricing is estimated");
         assert!(rows[0].cost_usd > 0.0);
+    }
+
+    /// #1179: turns carrying the provider's own charge book that USD; only the
+    /// remaining (unmeasured) turns are table-priced — and a fully measured
+    /// model is never flagged as estimated, even when the table has no entry.
+    /// (Model name chosen to never hit the embedded or live price tables.)
+    #[test]
+    fn measured_provider_cost_replaces_table_estimate() {
+        const MODEL: &str = "vendor/unlisted-model-20990101";
+        let mut acc = ModelUsage::default();
+        let mut measured = usage(MODEL, 431_600, 22_700, 126_700);
+        measured.provider_cost_usd = Some(0.05);
+        acc.add(&measured);
+
+        let mut map = HashMap::new();
+        map.insert(MODEL.to_string(), acc.clone());
+        let row = &price_models(&map)[0];
+        assert!(
+            (row.cost_usd - 0.05).abs() < 1e-12,
+            "the bill, not the table"
+        );
+        assert!((row.measured_cost_usd - 0.05).abs() < 1e-12);
+        assert_eq!(row.measured_requests, 1);
+        assert!(
+            !row.pricing_estimated,
+            "fully measured spend is not an estimate"
+        );
+
+        // A second, unmeasured turn on the same model: its tokens are priced
+        // from the table ON TOP of the measured USD, never double-counted
+        // (10k tokens at the $2.50/M blended fallback ≈ $0.025).
+        acc.add(&usage(MODEL, 10_000, 0, 0));
+        let mut map = HashMap::new();
+        map.insert(MODEL.to_string(), acc);
+        let row = &price_models(&map)[0];
+        assert!(row.cost_usd > 0.05, "unmeasured remainder adds table cost");
+        assert!(row.cost_usd < 0.2, "measured slice must not be re-priced");
+        assert!(
+            row.pricing_estimated,
+            "unmeasured remainder is heuristically priced"
+        );
+    }
+
+    #[test]
+    fn measured_slice_roundtrips_and_defaults_for_legacy_files() {
+        let legacy = r#"{"ts":1,"models":{"m":{"requests":1,"input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"reasoning_tokens":0}}}"#;
+        let p: PersistedUsage = serde_json::from_str(legacy).expect("legacy file loads");
+        assert_eq!(p.models["m"].measured, MeasuredSlice::default());
+
+        let mut p = PersistedUsage::default();
+        let mut acc = ModelUsage::default();
+        let mut m = usage("m", 100, 10, 0);
+        m.provider_cost_usd = Some(0.5);
+        acc.add(&m);
+        p.models.insert("m".into(), acc);
+        let back: PersistedUsage =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.models["m"].measured.requests, 1);
+        assert!((back.models["m"].measured.cost_usd - 0.5).abs() < 1e-12);
     }
 
     #[test]

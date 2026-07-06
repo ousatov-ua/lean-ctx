@@ -54,10 +54,17 @@ pub struct RealUsage {
     pub output_tokens: u64,
     /// Input tokens served from the prompt cache (billed at the cache-read rate).
     pub cache_read_tokens: u64,
-    /// Input tokens written to the prompt cache (Anthropic only; 0 elsewhere).
+    /// Input tokens written to the prompt cache (Anthropic + OpenRouter models
+    /// with explicit cache-write pricing; 0 elsewhere).
     pub cache_write_tokens: u64,
     /// Reasoning/thinking subset of `output_tokens` (display only).
     pub reasoning_tokens: u64,
+    /// USD the provider *actually charged* for this turn, when the response
+    /// reports it (OpenRouter: `usage.cost` in credits ≡ USD, plus the BYOK
+    /// upstream share from `cost_details.upstream_inference_cost`). The
+    /// measured figure beats any price-table estimate wherever both exist.
+    /// `None` for providers that report tokens only (Anthropic/OpenAI/Gemini).
+    pub provider_cost_usd: Option<f64>,
     /// Output-savings experiment arm for this turn (#895 Track B), or `None` when
     /// no holdout is active. Stamped from the request, not parsed from the
     /// response — it identifies whether this turn was output-shaped.
@@ -104,14 +111,16 @@ pub struct WireContext {
 }
 
 impl RealUsage {
-    /// True once any model or token field has been observed — the gate for
-    /// recording. Avoids emitting empty rows for streams that never reported usage.
+    /// True once any model, token or measured-cost field has been observed —
+    /// the gate for recording. Avoids emitting empty rows for streams that
+    /// never reported usage.
     fn is_meaningful(&self) -> bool {
         !self.model.is_empty()
             || self.input_tokens > 0
             || self.output_tokens > 0
             || self.cache_read_tokens > 0
             || self.cache_write_tokens > 0
+            || self.provider_cost_usd.is_some()
     }
 }
 
@@ -292,7 +301,14 @@ fn absorb_anthropic(u: &mut RealUsage, v: &Value) {
 /// under `response`; chat chunks and non-streaming bodies are top-level. Both
 /// `usage` dialects are accepted (Responses: `input_tokens`/`output_tokens`;
 /// Chat: `prompt_tokens`/`completion_tokens`). `cached_tokens` is the cache-read
-/// portion of the reported input; OpenAI bills no separate cache write.
+/// portion of the reported input; OpenAI bills no separate cache write, but
+/// OpenRouter reports one (`prompt_tokens_details.cache_write_tokens`) for
+/// models with explicit cache-write pricing.
+///
+/// OpenRouter usage accounting additionally carries the money actually charged:
+/// `usage.cost` (credits ≡ USD) and, for BYOK requests, the upstream provider's
+/// own bill under `cost_details.upstream_inference_cost`. Their sum is this
+/// turn's real price — measured, not table-derived.
 fn absorb_openai(u: &mut RealUsage, v: &Value) {
     let root = v.get("response").unwrap_or(v);
     if let Some(model) = root.get("model").and_then(Value::as_str)
@@ -308,6 +324,18 @@ fn absorb_openai(u: &mut RealUsage, v: &Value) {
         return;
     }
 
+    // Measured cost (OpenRouter dialect). Parsed before the token guard so a
+    // cost-bearing usage object is never lost, and `0` is preserved — a
+    // `:free` model's real price IS zero, not "unknown".
+    if let Some(cost) = usage.get("cost").and_then(Value::as_f64) {
+        let upstream = usage
+            .get("cost_details")
+            .and_then(|d| d.get("upstream_inference_cost"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        u.provider_cost_usd = Some(cost + upstream.max(0.0));
+    }
+
     let total_input = usage
         .get("input_tokens")
         .or_else(|| usage.get("prompt_tokens"))
@@ -318,10 +346,15 @@ fn absorb_openai(u: &mut RealUsage, v: &Value) {
         .or_else(|| usage.get("completion_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let cached = usage
+    let input_details = usage
         .get("input_tokens_details")
-        .or_else(|| usage.get("prompt_tokens_details"))
+        .or_else(|| usage.get("prompt_tokens_details"));
+    let cached = input_details
         .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = input_details
+        .and_then(|d| d.get("cache_write_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let reasoning = usage
@@ -334,9 +367,14 @@ fn absorb_openai(u: &mut RealUsage, v: &Value) {
     if total_input == 0 && total_output == 0 {
         return;
     }
-    u.input_tokens = total_input.saturating_sub(cached);
+    // OpenRouter counts cache writes inside prompt_tokens (unlike Anthropic's
+    // separate bucket) — subtract both cached reads and writes so the three
+    // buckets stay disjoint and are never double-priced.
+    u.input_tokens = total_input
+        .saturating_sub(cached)
+        .saturating_sub(cache_write);
     u.cache_read_tokens = cached;
-    u.cache_write_tokens = 0;
+    u.cache_write_tokens = cache_write;
     u.output_tokens = total_output;
     u.reasoning_tokens = reasoning;
 }
@@ -538,6 +576,54 @@ mod tests {
         assert_eq!(u.input_tokens, 400);
         assert_eq!(u.cache_read_tokens, 100);
         assert_eq!(u.output_tokens, 40);
+        assert_eq!(u.provider_cost_usd, None, "OpenAI reports no usage.cost");
+    }
+
+    #[test]
+    fn openrouter_cost_and_cache_writes_are_measured() {
+        // #1179: OpenRouter usage accounting — the final streamed chunk carries
+        // the billed USD (`cost`) and the cache-write bucket inside
+        // prompt_tokens_details. All three token buckets must stay disjoint.
+        let u = feed_lines(
+            Provider::OpenAi,
+            None,
+            &[
+                r#"data: {"choices":[{"delta":{"content":"hi"}}],"model":"deepseek/deepseek-v4-flash-20260423"}"#,
+                r#"data: {"choices":[],"model":"deepseek/deepseek-v4-flash-20260423","usage":{"prompt_tokens":700,"prompt_tokens_details":{"cached_tokens":150,"cache_write_tokens":50},"completion_tokens":40,"cost":0.0123,"cost_details":{"upstream_inference_cost":null},"total_tokens":740}}"#,
+                "data: [DONE]",
+            ],
+        )
+        .expect("usage");
+        assert_eq!(u.input_tokens, 500, "700 - 150 cached - 50 cache-write");
+        assert_eq!(u.cache_read_tokens, 150);
+        assert_eq!(u.cache_write_tokens, 50);
+        assert_eq!(u.output_tokens, 40);
+        let cost = u.provider_cost_usd.expect("measured cost");
+        assert!((cost - 0.0123).abs() < 1e-12);
+    }
+
+    #[test]
+    fn openrouter_byok_adds_upstream_inference_cost() {
+        let mut s = Scanner::new(Provider::OpenAi, None);
+        s.feed_body(
+            br#"{"model":"anthropic/claude-sonnet-5","usage":{"prompt_tokens":100,"completion_tokens":10,"cost":0.05,"cost_details":{"upstream_inference_cost":0.95}}}"#,
+        );
+        let u = s.finalize().expect("usage");
+        let cost = u.provider_cost_usd.expect("measured cost");
+        assert!(
+            (cost - 1.0).abs() < 1e-12,
+            "OpenRouter fee + BYOK upstream bill"
+        );
+    }
+
+    #[test]
+    fn openrouter_free_model_reports_zero_cost_as_measured() {
+        let mut s = Scanner::new(Provider::OpenAi, None);
+        s.feed_body(
+            br#"{"model":"poolside/laguna-xs-2.1:free","usage":{"prompt_tokens":80,"completion_tokens":20,"cost":0}}"#,
+        );
+        let u = s.finalize().expect("usage");
+        assert_eq!(u.provider_cost_usd, Some(0.0), "free is a price, not a gap");
     }
 
     #[test]

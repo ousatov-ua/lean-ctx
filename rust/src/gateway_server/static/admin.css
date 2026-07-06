@@ -204,6 +204,11 @@ body.loading .health-strip:empty{min-height:30px;border-radius:999px;
 .bar-label{position:absolute;inset:0;display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:10.5px;color:var(--text)}
 .saved-cell{color:var(--accent)!important}
 
+/* cost provenance (#1179): provider-billed vs heuristic-estimated */
+.cost-mark{font-family:var(--mono);font-size:10px;cursor:help}
+.cost-measured{color:var(--green)}
+.cost-estimated{color:var(--yellow)}
+
 .empty{padding:28px 8px;text-align:center;font-size:12px;color:var(--muted)}
 .empty-onboard{text-align:left;max-width:640px;margin:0 auto;padding:22px 8px}
 .empty-onboard p{margin-bottom:10px}

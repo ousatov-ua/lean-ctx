@@ -86,6 +86,8 @@ fn wants_tls(cfg: &tokio_postgres::Config) -> bool {
 }
 
 /// Idempotent DDL (Doc 08 §2): `IF NOT EXISTS` only, run on every start.
+/// Columns added after the first release ride along as idempotent
+/// `ALTER TABLE … ADD COLUMN IF NOT EXISTS` — same rule, no migration files.
 const USAGE_EVENTS_DDL: &str = r"
 CREATE TABLE IF NOT EXISTS usage_events (
   id                 BIGSERIAL PRIMARY KEY,
@@ -109,8 +111,11 @@ CREATE TABLE IF NOT EXISTS usage_events (
   uncompressed_input_tokens BIGINT    NOT NULL DEFAULT 0,
   reference_model    TEXT,
   reference_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
-  is_local           BOOLEAN          NOT NULL DEFAULT false
+  is_local           BOOLEAN          NOT NULL DEFAULT false,
+  -- Cost provenance (#1179): provider | shadow | list | live | heuristic.
+  cost_source        TEXT             NOT NULL DEFAULT 'list'
 );
+ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_source TEXT NOT NULL DEFAULT 'list';
 CREATE INDEX IF NOT EXISTS idx_usage_events_person_ts  ON usage_events (person, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_project_ts ON usage_events (project, ts);
 CREATE INDEX IF NOT EXISTS idx_usage_events_model_ts   ON usage_events (model, ts);
@@ -144,6 +149,21 @@ pub struct UsageEvent {
     pub reference_model: Option<String>,
     pub reference_cost_usd: f64,
     pub is_local: bool,
+    /// Where `cost_usd` came from (#1179): `provider` (the response's own
+    /// charge), `shadow` (local shadow rate), `live` (current provider price
+    /// list), `list` (embedded list price) or `heuristic` (estimate).
+    pub cost_source: &'static str,
+}
+
+/// Maps a pricing match onto the stored `cost_source` value for table-priced
+/// rows. `provider`/`shadow` are decided before pricing is consulted.
+fn cost_source_of(kind: crate::core::gain::model_pricing::PricingMatchKind) -> &'static str {
+    use crate::core::gain::model_pricing::PricingMatchKind as K;
+    match kind {
+        K::Exact => "list",
+        K::Live => "live",
+        K::Alias | K::Heuristic | K::Fallback => "heuristic",
+    }
 }
 
 /// Identity fallbacks when a request carried no gateway key/tags: the row must
@@ -158,8 +178,10 @@ impl UsageEvent {
     /// the compression saving with the shared pricing table, and stamping the
     /// counterfactual baseline (enterprise#15/#18):
     ///
-    /// - `cost_usd`: served model's list price — except `is_local`, which books
-    ///   the transparent `local_shadow_rate` (never $0; Doc 04 §6).
+    /// - `cost_usd`, in precedence order (#1179): the provider's own reported
+    ///   charge (`usage.cost`, OpenRouter) — except `is_local`, which books
+    ///   the transparent `local_shadow_rate` (never $0; Doc 04 §6) — then the
+    ///   live/list price table. `cost_source` records which one applied.
     /// - `reference_cost_usd`: the request's **uncompressed** input tokens
     ///   priced at the contract-frozen `reference_model`'s input rate (Doc 08
     ///   §2) — the counterfactual the avoided-cost ledger settles against.
@@ -176,19 +198,25 @@ impl UsageEvent {
         let quote = pricing.quote(Some(&usage.model));
         let is_local = wire.is_some_and(|w| w.is_local);
         #[allow(clippy::cast_precision_loss)]
-        let cost_usd = if is_local {
+        let (cost_usd, cost_source) = if is_local {
             let billable = usage.input_tokens
                 + usage.output_tokens
                 + usage.cache_read_tokens
                 + usage.cache_write_tokens;
-            baseline.effective_local_shadow_rate() / 1_000_000.0 * billable as f64
+            (
+                baseline.effective_local_shadow_rate() / 1_000_000.0 * billable as f64,
+                "shadow",
+            )
+        } else if let Some(measured) = usage.provider_cost_usd {
+            (measured, "provider")
         } else {
-            quote.cost.estimate_usd(
+            let estimated = quote.cost.estimate_usd(
                 usage.input_tokens,
                 usage.output_tokens,
                 usage.cache_write_tokens,
                 usage.cache_read_tokens,
-            )
+            );
+            (estimated, cost_source_of(quote.match_kind))
         };
         let saved_tokens = wire.map_or(0, |w| w.saved_tokens);
         // Input-side saving: input-rate USD per token × saved request tokens.
@@ -231,6 +259,7 @@ impl UsageEvent {
             reference_model,
             reference_cost_usd,
             is_local,
+            cost_source,
         }
     }
 }
@@ -250,8 +279,9 @@ pub async fn insert_event(
              (person, team, project, provider, model, routed_from, \
               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, \
               reasoning_tokens, cost_usd, saved_tokens, saved_usd, \
-              uncompressed_input_tokens, reference_model, reference_cost_usd, is_local) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
+              uncompressed_input_tokens, reference_model, reference_cost_usd, is_local, \
+              cost_source) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
             &[
                 &e.person,
                 &e.team,
@@ -271,6 +301,7 @@ pub async fn insert_event(
                 &e.reference_model,
                 &e.reference_cost_usd,
                 &e.is_local,
+                &e.cost_source,
             ],
         )
         .await?;
@@ -384,7 +415,9 @@ pub async fn evidence_rows(
                'cost_usd', round(sum(cost_usd)::numeric, 6),
                'saved_usd', round(sum(saved_usd)::numeric, 6),
                'reference_cost_usd', round(sum(reference_cost_usd)::numeric, 6),
-               'local_requests', count(*) FILTER (WHERE is_local)
+               'local_requests', count(*) FILTER (WHERE is_local),
+               'measured_requests', count(*) FILTER (WHERE cost_source = 'provider'),
+               'estimated_requests', count(*) FILTER (WHERE cost_source = 'heuristic')
              )
              FROM usage_events WHERE ts >= $1 AND ts <= $2
              GROUP BY
@@ -446,6 +479,7 @@ mod tests {
             cache_read_tokens: 200,
             cache_write_tokens: 100,
             reasoning_tokens: 50,
+            provider_cost_usd: None,
             cohort: None,
             wire,
         }
@@ -484,6 +518,10 @@ mod tests {
         assert_eq!(event.uncompressed_input_tokens, 5000);
         assert!(!event.is_local);
         assert!(event.cost_usd > 0.0, "known model must be priced");
+        assert_eq!(
+            event.cost_source, "list",
+            "exact table match books list price"
+        );
         assert!(
             event.saved_usd > 0.0,
             "saved tokens on a priced model must yield saved USD"
@@ -492,6 +530,69 @@ mod tests {
         // claude-opus-4.5's $5/MTok input rate = $0.025.
         assert_eq!(event.reference_model.as_deref(), Some("claude-opus-4.5"));
         assert!((event.reference_cost_usd - 0.025).abs() < 1e-9);
+    }
+
+    #[test]
+    fn provider_reported_cost_beats_the_price_table() {
+        // #1179: OpenRouter's `usage.cost` is the bill — the table estimate for
+        // these tokens (claude-sonnet at list price) would be ~50× higher and
+        // must NOT be booked when a measured figure exists.
+        let mut usage = usage_with_wire(Some(Box::new(WireContext {
+            provider: "openrouter".into(),
+            person: Some("nicolas".into()),
+            team: None,
+            project: Some("bot".into()),
+            saved_tokens: 0,
+            uncompressed_input_tokens: 1000,
+            is_local: false,
+            routed_from: None,
+            counterfactual: None,
+        })));
+        usage.provider_cost_usd = Some(0.0123);
+        let event =
+            UsageEvent::from_usage(&usage, &ModelPricing::load(), &BaselineConfig::default());
+        assert!((event.cost_usd - 0.0123).abs() < 1e-12);
+        assert_eq!(event.cost_source, "provider");
+
+        // A measured zero (":free" model) is a real price, not a missing one.
+        usage.provider_cost_usd = Some(0.0);
+        let event =
+            UsageEvent::from_usage(&usage, &ModelPricing::load(), &BaselineConfig::default());
+        assert_eq!(event.cost_usd, 0.0);
+        assert_eq!(event.cost_source, "provider");
+    }
+
+    #[test]
+    fn unknown_model_is_marked_heuristic_and_local_shadow_beats_measured() {
+        // An unpriced model falls into the blended fallback → cost_source
+        // must say so instead of presenting the estimate as exact.
+        let mut usage = usage_with_wire(None);
+        usage.model = "vendor/brand-new-model-20990101".into();
+        let event =
+            UsageEvent::from_usage(&usage, &ModelPricing::load(), &BaselineConfig::default());
+        assert_eq!(event.cost_source, "heuristic");
+
+        // Local turns book the shadow rate even if a cost slipped through —
+        // the shadow rate is the contract for local inference (Doc 04 §6).
+        let mut usage = usage_with_wire(Some(Box::new(WireContext {
+            provider: "ollama".into(),
+            person: None,
+            team: None,
+            project: None,
+            saved_tokens: 0,
+            uncompressed_input_tokens: 0,
+            is_local: true,
+            routed_from: None,
+            counterfactual: None,
+        })));
+        usage.provider_cost_usd = Some(9.99);
+        let event =
+            UsageEvent::from_usage(&usage, &ModelPricing::load(), &BaselineConfig::default());
+        assert_eq!(event.cost_source, "shadow");
+        assert!(
+            event.cost_usd < 1.0,
+            "shadow rate, not the stray measured figure"
+        );
     }
 
     #[test]
@@ -593,7 +694,8 @@ mod tests {
     #[test]
     fn schema_ddl_is_idempotent_by_construction() {
         // The gateway runs this DDL on every start against a live database, so
-        // every CREATE must carry IF NOT EXISTS.
+        // every CREATE must carry IF NOT EXISTS, and post-release columns ride
+        // along as ALTER TABLE … ADD COLUMN IF NOT EXISTS.
         for stmt in ["CREATE TABLE", "CREATE INDEX"] {
             for (i, _) in USAGE_EVENTS_DDL.match_indices(stmt) {
                 let tail = &USAGE_EVENTS_DDL[i..(i + stmt.len() + 14).min(USAGE_EVENTS_DDL.len())];
@@ -603,12 +705,20 @@ mod tests {
                 );
             }
         }
+        for (i, _) in USAGE_EVENTS_DDL.match_indices("ADD COLUMN") {
+            let tail = &USAGE_EVENTS_DDL[i..(i + 25).min(USAGE_EVENTS_DDL.len())];
+            assert!(
+                tail.contains("IF NOT EXISTS"),
+                "non-idempotent ALTER statement: {tail}"
+            );
+        }
         // And the baseline fields (enterprise#18) are part of the schema.
         for col in [
             "uncompressed_input_tokens",
             "reference_model",
             "reference_cost_usd",
             "is_local",
+            "cost_source",
         ] {
             assert!(
                 USAGE_EVENTS_DDL.contains(col),

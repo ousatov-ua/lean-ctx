@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Gateway console showed ~15x the real OpenRouter bill for unknown models
+  (GL #1179).** An external gateway run (Claude Code → lean-ctx → OpenRouter,
+  `deepseek/deepseek-v4-flash`) was billed $0.05 by OpenRouter while the
+  console reported $0.74: the embedded price table had no V4 entry, so the
+  heuristic matcher silently fell back to 2025-era `deepseek-v3` list prices —
+  and presented the estimate as COST. Cost accounting is now three-layered and
+  honest: (1) **measured provider cost** — OpenRouter chat requests opt into
+  `usage: {include: true}` (only when the effective upstream is openrouter.ai;
+  api.openai.com never sees the non-standard field), and the response scanner
+  absorbs `usage.cost` plus `cost_details.upstream_inference_cost` (BYOK) as
+  the authoritative billed charge, which beats every table estimate in the
+  meter, the policy gate and `usage_events`; (2) **live prices for all
+  models** — a new `core::gain::live_pricing` module fetches the public
+  OpenRouter models catalog (~320 models) with a 24h disk cache, atomic swap,
+  background refresh at proxy/gateway/dashboard startup, slug normalization
+  (vendor prefixes, date suffixes, `:free`/`:extended` variants) and a
+  `LEAN_CTX_LIVE_PRICING=off` kill switch, slotted between exact embedded
+  matches and the heuristic in `ModelPricing::quote`; (3) **cost provenance**
+  — every usage event now records `cost_source`
+  (`provider`|`live`|`list`|`heuristic`|`shadow`), the admin console marks
+  measured vs estimated spend (✓/~ badges, KPI foot line, CSV columns
+  `measured_requests`/`estimated_requests`), `lean-ctx spend` prints ✓/\*
+  markers per model, and `/api/status` + the health strip expose live-pricing
+  freshness. Result: OpenRouter-billed turns show the exact invoice amount;
+  everything else shows current list prices instead of stale hardcoded ones,
+  and estimates are visibly labeled as such.
+
 ### Added
 - **Personas now drive the whole pipeline (persona-spec-v1 runtime wiring,
   GL #1178).** The five declared persona fields were spec +

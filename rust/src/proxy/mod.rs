@@ -45,6 +45,7 @@ pub mod tool_output;
 #[cfg(test)]
 mod upstream_tests;
 pub mod usage;
+pub mod usage_accounting;
 pub mod usage_meter;
 pub mod usage_sink;
 pub mod verbosity;
@@ -428,6 +429,11 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     // Seed the measured-spend meter from disk so a proxy restart never zeroes
     // the user's cumulative real provider bill.
     usage_meter::resume_from_disk();
+    // Live model prices (#1179): load the cached provider price list and keep
+    // it fresh in the background, so new models are billed at their real
+    // market rates instead of family heuristics. Fail-open, kill switch:
+    // LEAN_CTX_LIVE_PRICING=off.
+    crate::core::gain::live_pricing::spawn_background_refresh();
     // Seed the cold-prefix baselines too so a long idle gap that straddles a
     // proxy restart is still detected and the repack can fire (#499).
     cold_prefix::resume_from_disk();
