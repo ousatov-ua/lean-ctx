@@ -151,6 +151,26 @@ held across the entire edit, so concurrent agents editing *different* files seri
 the second edit could hit the 10s write-lock timeout. Same-file edit correctness is still guaranteed
 by the TOCTOU preimage guard plus the atomic temp-file rename inside `run_io`, not by the cache lock.
 
+**Read path Two-Phase Read (Issue #1098 fix):** `ctx_read` now follows the same pattern as
+`ctx_edit` in its slow path (spawned thread):
+
+1. **Phase 1 (shared lock):** Try the `[unchanged]` stub under `cache.try_read()`. This is the
+   ~70% case (re-reads of unchanged files) and avoids the write lock entirely. Previously
+   missing in the slow path, forcing *every* slow-path call into the write lock.
+2. **Phase 2a (no lock):** Disk I/O (`read_file_lossy`) under per-file lock only, *without*
+   the cache lock. This is the main contention fix — parallel reads of different files no
+   longer serialize on the global cache lock during disk I/O.
+3. **Phase 2b (brief write lock):** `handle_with_preread()` receives the pre-read content and
+   performs the cache store + compression under the write lock. The lock hold time is reduced
+   to CPU-bound work only (hash computation, compression), no longer including disk I/O.
+4. **Graph hints:** `graph_related_hint()` (SQLite query, ~50–200ms) is computed *after* the
+   cache lock is released, in the registered handler. Previously computed inside
+   `handle_with_options_inner` under the write lock.
+
+The fast path (inline, no thread) retains the existing Phase 1 read-lock stub check and uses
+the original `handle_with_task_resolved_tuned` (which may still do disk I/O under the
+immediately-acquired write lock for the ~10% of calls that miss the fast path).
+
 **Bounded waits (Issue #229 fix):** All lock acquisitions inside the spawned thread use
 `try_lock()`/`try_write()` loops with 25s deadlines (inside the 30s `recv_timeout` guard).
 When the `recv_timeout` fires, a cancellation flag is set so the thread exits promptly
@@ -161,7 +181,9 @@ instead of holding locks indefinitely. The auto-mode selection before the thread
 thread::spawn {
     L17 outer (FILE_LOCKS map)       — held briefly to clone Arc, then dropped
      └─► L17 inner (per-file Mutex)  — try_lock() with 25s deadline
-          └─► cache (session RwLock) — try_write() with 25s deadline
+          ├─► Phase 1: cache.try_read() — stub hit? → return early
+          ├─► Phase 2a: read_file_lossy() — disk I/O, NO cache lock
+          └─► Phase 2b: cache.try_write() — brief store + compress
 }
 ```
 
@@ -242,5 +264,3 @@ across any other lock acquisition.
 3. Assign a lock number (append to Section 1) and document the acquisition order here.
 4. If nesting is required, document the outer → inner relationship in Section 3.
 5. Run `cargo check --all-features` to verify `Send`/`Sync` bounds.
-
-

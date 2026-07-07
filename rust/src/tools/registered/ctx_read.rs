@@ -431,8 +431,6 @@ impl CtxReadTool {
                 std::thread::spawn(move || {
                     let file_lock = per_file_lock(&path_owned);
 
-                    // Bounded per-file lock: if a zombie thread still holds it, don't
-                    // wait forever. 25s keeps us inside the 30s recv_timeout.
                     let _file_guard = {
                         let deadline =
                             std::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -461,8 +459,37 @@ impl CtxReadTool {
                         return;
                     }
 
-                    // Bounded cache write-lock: avoids indefinite block when a zombie
-                    // thread from a previous timed-out call still holds the lock.
+                    // ── Two-Phase Read (#1098) ──────────────────────────
+                    //
+                    // Phase 1 (read lock): try the [unchanged] stub — this is the
+                    // ~70% case (repeated reads of unchanged files). Previously
+                    // missing in the slow path, forcing every slow-path call into
+                    // the expensive write-lock branch.
+                    if !fresh
+                        && (mode == "full" || mode == "auto")
+                        && let Ok(cache) = cache_lock.try_read()
+                        && let Some(read_output) =
+                            crate::tools::ctx_read::try_stub_hit_readonly(&cache, &path_owned)
+                    {
+                        let content = read_output.content;
+                        let rmode = read_output.resolved_mode;
+                        let orig = cache.get(&path_owned).map_or(0, |e| e.original_tokens);
+                        let hit = true;
+                        let fref = cache.file_ref_map().get(path_owned.as_str()).cloned();
+                        let stats = cache.get_stats();
+                        let stats_snapshot = (stats.total_reads(), stats.cache_hits());
+                        let _ = tx.send((content, rmode, orig, hit, fref, stats_snapshot));
+                        return;
+                    }
+
+                    // Phase 2a: disk I/O under per-file lock but WITHOUT cache lock.
+                    let preread = crate::tools::ctx_read::read_file_lossy(&path_owned).ok();
+
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        return;
+                    }
+
+                    // Phase 2b: brief cache write-lock — compute + store.
                     let mut cache = {
                         let deadline =
                             std::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -494,7 +521,19 @@ impl CtxReadTool {
                     };
 
                     let task_ref = task_owned.as_deref();
-                    let read_output = if fresh {
+                    let read_output = if let Some(content) = preread {
+                        crate::tools::ctx_read::handle_with_preread(
+                            &mut cache,
+                            &path_owned,
+                            &mode,
+                            fresh,
+                            crp_mode,
+                            task_ref,
+                            aggressiveness,
+                            &protect_owned,
+                            content,
+                        )
+                    } else if fresh {
                         crate::tools::ctx_read::handle_fresh_with_task_resolved_tuned(
                             &mut cache,
                             &path_owned,
@@ -729,6 +768,20 @@ impl CtxReadTool {
             crate::core::agent_budget::record_consumption(aid, output_tokens);
         }
 
+        // #1098: graph-related hints (callers/callees) are now computed AFTER the
+        // cache lock is released. They involve SQLite queries (~50-200ms) that
+        // previously blocked all parallel reads while holding the write lock.
+        let graph_hint = if !is_cache_hit
+            && !resolved_mode.starts_with("lines:")
+            && crate::core::profiles::active_profile()
+                .output_hints
+                .related_hint()
+        {
+            crate::tools::ctx_read::graph_related_hint(path)
+        } else {
+            None
+        };
+
         // Cross-source hints: if the property graph has cross-source edges
         // pointing to this file, append compact hints so the agent knows about
         // related issues/PRs/schemas without a separate tool call (#682). Only
@@ -765,12 +818,16 @@ impl CtxReadTool {
         if let Some(ref w) = delta_explicit_note {
             warnings.push(w.as_str());
         }
+        let graph_suffix = graph_hint.map(|h| format!("\n{h}")).unwrap_or_default();
         let final_output = if !warnings.is_empty() {
-            format!("{output}{hints_suffix}\n\n{}", warnings.join("\n"))
-        } else if hints_suffix.is_empty() {
+            format!(
+                "{output}{hints_suffix}{graph_suffix}\n\n{}",
+                warnings.join("\n")
+            )
+        } else if hints_suffix.is_empty() && graph_suffix.is_empty() {
             output
         } else {
-            format!("{output}{hints_suffix}")
+            format!("{output}{hints_suffix}{graph_suffix}")
         };
 
         Ok(ToolOutput {

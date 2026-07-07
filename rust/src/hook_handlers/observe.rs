@@ -63,36 +63,37 @@ fn emit_dedicated_session_context(input: &str) {
         return;
     }
     let cfg = crate::core::config::Config::load();
-    if !cfg.dedicated_session_context_active() {
-        return;
+
+    if cfg.dedicated_session_context_active() {
+        // Full Bare rules for dedicated-mode hosts (Claude Code, Codex, CodeBuddy)
+        // where the static rules file is skipped.
+        let summary = crate::core::rules_canonical::render(
+            cfg.shadow_mode,
+            crate::core::rules_canonical::Wrapper::Bare,
+            crate::core::config::CompressionLevel::Off,
+        );
+        emit_session_start_additional_context(&summary);
+    } else {
+        // Short reinforcement nudge for shared-mode hosts (Cursor) that already
+        // have static rules but benefit from in-conversation emphasis on exclusive
+        // tools. Models weight in-conversation context above static instructions.
+        emit_session_start_additional_context(
+            "lean-ctx reminder: ALWAYS call ctx_compose FIRST to orient before \
+             individual Read/Grep calls. Exclusive tools with no native equivalent: \
+             ctx_compose, ctx_semantic_search, ctx_callgraph, ctx_knowledge, ctx_session.",
+        );
     }
-    // Canonical Bare rules (same SSOT as the MCP instructions) reinforced at
-    // session start: models weight in-conversation context above static server
-    // instructions, so this nudge lifts ctx_* adoption where it is honoured (#1031).
-    let summary = crate::core::rules_canonical::render(
-        cfg.shadow_mode,
-        crate::core::rules_canonical::Wrapper::Bare,
-        crate::core::config::CompressionLevel::Off,
-    );
-    emit_session_start_additional_context(&summary);
 }
 
-/// True only for SessionStart payloads from hosts that actually honour
-/// `additionalContext` — Claude/Codex/CodeBuddy, tagged with `session_id`.
+/// True for SessionStart payloads from hosts that honour `additionalContext`.
 ///
-/// Cursor also registers `hook observe` on sessionStart, but it discards
-/// SessionStart `additionalContext` (confirmed Cursor bug) and already receives
-/// the rules from the static `.cursor/rules/lean-ctx.mdc`. Its payload is tagged
-/// with `conversation_id`, so it is excluded here to avoid a dead, duplicated
-/// emit (#1031).
+/// Cursor fixed SessionStart `additionalContext` support circa Q1 2026 —
+/// confirmed on the Cursor community forum as the only hook event where
+/// `additional_context` works end-to-end. The prior exclusion (#1031) is
+/// therefore removed: Cursor sessions now receive the same dedicated rules
+/// reinforcement as Claude/Codex/CodeBuddy.
 fn session_start_honours_additional_context(v: &serde_json::Value) -> bool {
-    let is_session_start =
-        v.get("hook_event_name").and_then(|e| e.as_str()) == Some("SessionStart");
-    let is_cursor = v
-        .get("conversation_id")
-        .and_then(|c| c.as_str())
-        .is_some_and(|c| !c.is_empty());
-    is_session_start && !is_cursor
+    v.get("hook_event_name").and_then(|e| e.as_str()) == Some("SessionStart")
 }
 
 #[derive(serde::Serialize)]
@@ -721,15 +722,14 @@ mod tests {
     }
 
     #[test]
-    fn session_start_skipped_for_cursor_payload() {
-        // Cursor sessionStart is tagged with conversation_id (+ model) and discards
-        // the additionalContext field, so it must be excluded (#1031).
+    fn session_start_honoured_for_cursor_payload() {
+        // Cursor fixed SessionStart additionalContext ~Q1 2026 — now included.
         let v = serde_json::json!({
             "hook_event_name": "SessionStart",
             "conversation_id": "0e1f4ed8-d858-4557-9fc5-6cbf5298eb8b",
             "model": "claude-opus"
         });
-        assert!(!session_start_honours_additional_context(&v));
+        assert!(session_start_honours_additional_context(&v));
     }
 
     #[test]

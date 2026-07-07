@@ -284,6 +284,32 @@ pub fn handle_with_task_resolved_tuned(
     )
 }
 
+/// Like [`handle_with_task_resolved_tuned`] but accepts pre-read file content,
+/// avoiding disk I/O under the cache write-lock (Two-Phase Read pattern, #1098).
+#[allow(clippy::too_many_arguments)]
+pub fn handle_with_preread(
+    cache: &mut SessionCache,
+    path: &str,
+    mode: &str,
+    fresh: bool,
+    crp_mode: CrpMode,
+    task: Option<&str>,
+    aggressiveness: Option<f64>,
+    protect: &[String],
+    preread: String,
+) -> ReadOutput {
+    handle_with_options_resolved_preread(
+        cache,
+        path,
+        mode,
+        fresh,
+        crp_mode,
+        task,
+        ReadTuning::resolve(aggressiveness, protect),
+        Some(preread),
+    )
+}
+
 /// Fresh read with task-aware filtering (invalidates cache first).
 pub fn handle_fresh_with_task(
     cache: &mut SessionCache,
@@ -387,17 +413,23 @@ fn handle_with_options_resolved(
     task: Option<&str>,
     tuning: ReadTuning<'_>,
 ) -> ReadOutput {
-    // Subagent reads no longer force-fresh wholesale: conversation scoping gives
-    // each subagent its own `task:{id}` scope, so the stub gate already withholds
-    // any cross-agent stub while keeping the subagent's own re-reads cheap (#956).
-    // The blanket force-fresh remains only when scoping is off, and an explicit
-    // `LEAN_CTX_FORCE_FRESH` always wins.
+    handle_with_options_resolved_preread(cache, path, mode, fresh, crp_mode, task, tuning, None)
+}
+
+fn handle_with_options_resolved_preread(
+    cache: &mut SessionCache,
+    path: &str,
+    mode: &str,
+    fresh: bool,
+    crp_mode: CrpMode,
+    task: Option<&str>,
+    tuning: ReadTuning<'_>,
+    preread: Option<String>,
+) -> ReadOutput {
     let effective_fresh = fresh
         || force_fresh_env()
         || (is_subagent_context() && !crate::core::conversation::scope_enabled());
 
-    // Plugin seam: notify listeners before the read resolves. Guarded so the hot
-    // path never allocates or spawns a thread unless a plugin opts into pre_read.
     if PluginManager::has_listener("pre_read") {
         PluginManager::fire_hook_background(HookPoint::PreRead {
             path: path.to_string(),
@@ -407,8 +439,16 @@ fn handle_with_options_resolved(
     if let Ok(mut bt) = crate::core::bounce_tracker::global().lock() {
         bt.next_seq();
     }
-    let mut result =
-        handle_with_options_inner(cache, path, mode, effective_fresh, crp_mode, task, tuning);
+    let mut result = handle_with_options_inner(
+        cache,
+        path,
+        mode,
+        effective_fresh,
+        crp_mode,
+        task,
+        tuning,
+        preread,
+    );
 
     if let Some(entry) = cache.get_mut(path) {
         entry.last_mode.clone_from(&result.resolved_mode);
@@ -701,6 +741,7 @@ fn handle_with_options_inner(
     crp_mode: CrpMode,
     task: Option<&str>,
     tuning: ReadTuning<'_>,
+    preread: Option<String>,
 ) -> ReadOutput {
     let file_ref = cache.get_file_ref(path);
     let short = protocol::shorten_path(path);
@@ -872,16 +913,24 @@ fn handle_with_options_inner(
         cache.invalidate(path);
     }
 
-    let content = match read_file_lossy(path) {
-        Ok(c) => c,
-        Err(e) => {
-            let msg = format!("ERROR: {e}");
-            let tokens = count_tokens(&msg);
-            return ReadOutput {
-                content: msg,
-                resolved_mode: "error".into(),
-                output_tokens: tokens,
-            };
+    // Two-Phase Read (#1098): when pre-read content was provided (disk I/O
+    // already happened outside the cache lock), use it directly. Otherwise
+    // fall back to reading from disk (legacy path, still used by fast-path
+    // inline calls where the write lock was immediately available).
+    let content = if let Some(pr) = preread {
+        pr
+    } else {
+        match read_file_lossy(path) {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!("ERROR: {e}");
+                let tokens = count_tokens(&msg);
+                return ReadOutput {
+                    content: msg,
+                    resolved_mode: "error".into(),
+                    output_tokens: tokens,
+                };
+            }
         }
     };
 
@@ -897,11 +946,11 @@ fn handle_with_options_inner(
     } else {
         None
     };
-    let graph_hint = if !is_line_range && is_repeat_read && hints.related_hint() {
-        build_graph_related_hint(path)
-    } else {
-        None
-    };
+    // #1098: graph hints moved to background — `graph_related_hint()` does a
+    // SQLite query that can block for 50-200ms on Windows, which is unacceptable
+    // while holding the global cache write-lock. The registered handler calls it
+    // after releasing the lock and appends it to the response.
+    let graph_hint: Option<String> = None;
 
     if mode == "full" {
         cache.mark_full_delivered(path);
@@ -1118,7 +1167,9 @@ fn detect_project_root(path: &str) -> String {
     crate::core::protocol::detect_project_root_or_cwd(path)
 }
 
-fn build_graph_related_hint(path: &str) -> Option<String> {
+/// Build graph-related hints (callers/callees) — exported for the registered
+/// handler to call in a background thread after releasing the cache lock (#1098).
+pub fn graph_related_hint(path: &str) -> Option<String> {
     let project_root = detect_project_root(path);
     crate::core::graph_context::build_related_hint(path, &project_root, 5)
 }

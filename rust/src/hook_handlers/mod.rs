@@ -872,7 +872,17 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) -> String {
         // the banner back into the real file (it corrupted config.toml). The
         // shadow nudge rides the model-visible `additionalContext` side channel
         // instead, and the intercept is still recorded in shadow.log.
-        if !output.is_empty() && std::fs::write(&temp_path, &output).is_ok() {
+        //
+        // Redirect-suffix (post-#1019): when the model hasn't called any ctx_*
+        // tool recently, we append a single-line separator at the end. This is
+        // safe because edits write to the *original* path, not the temp file.
+        let mut final_output = output;
+        if let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir()
+            && crate::server::bypass_hint::model_is_drifting(&data_dir)
+        {
+            final_output.extend_from_slice(crate::server::bypass_hint::REDIRECT_SUFFIX.as_bytes());
+        }
+        if !final_output.is_empty() && std::fs::write(&temp_path, &final_output).is_ok() {
             let temp_str = temp_path.to_str().unwrap_or("");
             debug_log::log_hook_decision(
                 "redirect",

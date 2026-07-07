@@ -222,7 +222,8 @@ Exclusive tools (no native trigger): ctx_compose (understand code, call first), 
 pub const HOOK_COVERED_HEADER: &str = "\
 lean-ctx hooks cover this session: native Shell, Read and Grep are compressed \
 transparently (PreToolUse rewrite/redirect) — using them is fine for single known files.\n\
-PRIORITY: call ctx_compose FIRST to orient before scattering individual Read/Grep calls.";
+CRITICAL: ALWAYS call ctx_compose FIRST to orient before scattering individual \
+Read/Grep calls. ACTUALLY EMIT the call — describing it is not calling it.";
 
 /// The tools worth an explicit MCP call on a hook-covered host: capabilities
 /// with *no* native equivalent the hooks could intercept. Kept in sync with

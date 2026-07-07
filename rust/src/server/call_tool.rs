@@ -778,7 +778,10 @@ impl LeanCtxServer {
             }
         }
 
-        if !minimal && !is_raw_shell {
+        // Bypass hints are decoupled from minimal_overhead: they ride MCP
+        // tool responses (which vary anyway) and don't break provider prompt
+        // caching (#498). The `bypass_hints` config key gates them independently.
+        if !is_raw_shell && bypass_hint::is_enabled() {
             if let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir() {
                 let session = self.session.read().await;
                 bypass_hint::set_session_id(&session.id);
