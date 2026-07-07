@@ -60,9 +60,10 @@ pub struct RealUsage {
     /// Reasoning/thinking subset of `output_tokens` (display only).
     pub reasoning_tokens: u64,
     /// USD the provider *actually charged* for this turn, when the response
-    /// reports it (OpenRouter: `usage.cost` in credits ≡ USD, plus the BYOK
-    /// upstream share from `cost_details.upstream_inference_cost`). The
-    /// measured figure beats any price-table estimate wherever both exist.
+    /// reports it. OpenRouter: `usage.cost` in credits (≡ USD); for BYOK
+    /// requests the separate `cost_details.upstream_inference_cost` is added
+    /// when it differs from `cost` (#746 — non-BYOK mirrors cost there).
+    /// The measured figure beats any price-table estimate wherever both exist.
     /// `None` for providers that report tokens only (Anthropic/OpenAI/Gemini).
     pub provider_cost_usd: Option<f64>,
     /// Output-savings experiment arm for this turn (#895 Track B), or `None` when
@@ -353,7 +354,16 @@ fn absorb_openai(u: &mut RealUsage, v: &Value) {
             .and_then(|d| d.get("upstream_inference_cost"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
-        u.provider_cost_usd = Some(cost + upstream.max(0.0));
+        // #746: non-BYOK responses may mirror `cost` in upstream_inference_cost;
+        // summing both would double-count. BYOK responses split the total:
+        // `cost` = OpenRouter fee (small), `upstream` = provider bill (large,
+        // always different from cost). Only add when genuinely distinct.
+        let byok_upstream = if upstream > 0.0 && upstream != cost {
+            upstream
+        } else {
+            0.0
+        };
+        u.provider_cost_usd = Some(cost + byok_upstream);
     }
 
     let total_input = usage
@@ -633,6 +643,22 @@ mod tests {
         assert!(
             (cost - 1.0).abs() < 1e-12,
             "OpenRouter fee + BYOK upstream bill"
+        );
+    }
+
+    /// #746: non-BYOK responses mirror `cost` in `upstream_inference_cost`.
+    /// The gateway must not sum both — that would double-count.
+    #[test]
+    fn non_byok_upstream_equal_to_cost_is_not_doubled() {
+        let mut s = Scanner::new(Provider::OpenAi, None);
+        s.feed_body(
+            br#"{"model":"deepseek/deepseek-v4-flash","usage":{"prompt_tokens":50,"completion_tokens":5,"cost":0.000001568,"cost_details":{"upstream_inference_cost":0.000001568}}}"#,
+        );
+        let u = s.finalize().expect("usage");
+        let cost = u.provider_cost_usd.expect("measured cost");
+        assert!(
+            (cost - 0.000001568).abs() < 1e-15,
+            "#746: must book cost once, not 2x; got {cost}"
         );
     }
 
