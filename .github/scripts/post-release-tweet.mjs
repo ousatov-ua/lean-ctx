@@ -187,6 +187,10 @@ async function main() {
   }
 
   const res = await postTweet(tweet);
+  if (res.status === 403 && res.body.includes("duplicate content")) {
+    console.log("Tweet already posted (duplicate) — treating as success.");
+    return;
+  }
   if (res.status !== 201) {
     console.error(`Twitter API error ${res.status}: ${res.body}`);
     process.exit(1);
@@ -204,3 +208,4 @@ main().catch((e) => {
   console.error("Fatal:", e);
   process.exit(1);
 });
+
