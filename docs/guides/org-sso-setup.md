@@ -5,8 +5,13 @@ Let your team sign in to lean-ctx Cloud through your own identity provider
 Self-serve, no support ticket. Configure it once on the billing page, verify
 your domain via DNS, and optionally require SSO for everyone in the org.
 
-> **Plan:** SSO is included with **Team** and **Enterprise**. The org owner
-> configures it; members just sign in.
+> **Plan:** Self-serve OIDC SSO is available on **Business** ($149/mo) and
+> **Enterprise** plans. SAML SSO with SCIM provisioning is Enterprise-only.
+> The org owner configures it; members just sign in.
+>
+> *Grandfather note:* orgs that configured OIDC while it was Team-gated
+> (pre-GL #533) keep their existing SSO working. New SSO setup requires
+> the `sso_oidc` entitlement (Business or Enterprise).
 
 ---
 
@@ -163,3 +168,4 @@ Full protocol contract: `docs/contracts/org-sso-oidc-v1.md`.
 
 Still stuck? `hello@leanctx.com` or the
 [Discord community](https://discord.gg/pTHkG9Hew9).
+

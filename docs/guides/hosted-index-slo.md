@@ -1,7 +1,10 @@
 # Hosted Index — SLO Gate & Operations Runbook
 
 > GL #391 · The reliability gate that must hold before the hosted semantic
-> index is sold at the $29 price point.
+> index is sold at a premium price point. (Note: the "$29" figure referenced
+> in GL #374 is a **planned future add-on price** for hosted-index storage,
+> not yet mapped to any shipped plan. Current hosted-index quotas are included
+> in Pro/Team/Business/Enterprise plans per `billing-plane-v1-catalog.json`.)
 
 ## The three objectives
 
@@ -94,3 +97,4 @@ The $29 hosted-index price move requires **30 consecutive days** with all
 three SLOs green, measured by the control-plane probe (external) and
 cross-checked against the server-side `/v1/metrics` series. Evidence is the
 probe's monthly SLO report — keep it with the release notes of the GA tag.
+

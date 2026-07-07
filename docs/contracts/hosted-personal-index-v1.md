@@ -63,8 +63,8 @@ Local-Free Invariant).
 ## Quota (display-first, never billed)
 
 The account-wide cap is `entitlements.hosted_index_mb` (Pro: **1000 MB**,
-Team: 5000 MB, Enterprise: unbounded; open deployments without a billing
-plane: 1000 MB default). A push that would exceed the cap returns
+Team: 5000 MB, Business: 20000 MB, Enterprise: unbounded; open deployments
+without a billing plane: 1000 MB default). A push that would exceed the cap returns
 `413 quota_exceeded` with current usage in the body — it **warns and blocks,
 it never bills** (consistent with the billing-plane-v2 display-first rollout).
 
@@ -101,3 +101,4 @@ One bundle per `(account, project_hash)`, last-writer-wins; the server keeps
 `updated_at` + `sha256` so clients can skip no-op pushes and detect drift
 (`lean-ctx sync index status`). Conflicts are impossible by construction —
 the bundle is device-generated derived state, not a merged document.
+

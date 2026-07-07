@@ -105,7 +105,10 @@ followed, hard links count once, and reports are cached for 60 s per process.
 - `usedBytes` (required) is what the metering job samples and bills against.
 - `quotaBytes` (always present) resolves as: `LEANCTX_TEAM_STORAGE_QUOTA_BYTES`
   env override → `storageQuotaBytes` from `team.json` (rendered per plan by
-  provisioning, #282: Team 5 GiB, Enterprise 50 GiB) → Team-tier 5 GiB default.
+  provisioning, #282: Team 5 GiB, Enterprise unbounded per catalog) → Team-tier
+  5 GiB default. (Note: "50 GiB" was the initial team-server provisioning
+  default; the Enterprise entitlement is `UNBOUNDED` per
+  `billing-plane-v1-catalog.json`.)
   A concrete quota keeps the control plane's metering out of the degenerate
   `quota = 0 ⇒ state "none"` path.
 - `components`: the server data root (audit log, savings store, hosted indices)
@@ -199,3 +202,4 @@ it is additive and changes no v1 plan/entitlement or local-free semantics.
 Adding further metered dimensions (connector sync volume, retrieval queries)
 under the same display-first, signed/server-measured, Local-Free rules stays
 `v2`.
+

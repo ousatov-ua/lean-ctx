@@ -488,7 +488,7 @@ local stays best-in-class and ungated; only **team coordination** is paid.
    *meters* local savings; it never gates a local capability:
 
 ```bash
-lean-ctx billing plans               # free · team · enterprise (additive entitlements)
+lean-ctx billing plans               # free · supporter · pro · team · business · enterprise
 lean-ctx billing usage --json        # metered from the signed ledger, read-only
 ```
 
@@ -595,3 +595,4 @@ regenerated from code.
 - **The gateway in depth:** [Advanced & Integrations §10](reference/05-advanced.md)
 - **Security surface:** [Security & Governance](reference/13-security-and-governance.md)
 - **Always-current tool list:** [generated MCP tools](reference/generated/mcp-tools.md)
+

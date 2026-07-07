@@ -1,7 +1,7 @@
 # Email Digest v1 (GL #386)
 
 Pillar: Money-Hooks / Stickiness
-Scope: monthly Pro digest, weekly Team digest, opt-out
+Scope: monthly Pro digest, weekly Team/Business/Enterprise digest, opt-out
 
 ## Behaviour
 
@@ -12,7 +12,7 @@ digest per period:
 | Plan | Cadence | Period key | Data source |
 |------|---------|------------|-------------|
 | Pro | monthly | previous calendar month, `YYYY-MM` | synced CEP snapshots (`cep_scores`) — same aggregation as `/api/account/cloud` |
-| Team / Enterprise | weekly | previous ISO week, `YYYY-Www` | hosted team server savings summary, proxied via the billing plane (audit-only control token) |
+| Team / Business / Enterprise | weekly | previous ISO week, `YYYY-Www` | hosted team server savings summary, proxied via the billing plane (audit-only control token) |
 
 Rules:
 
@@ -23,8 +23,8 @@ Rules:
   (`INSERT … ON CONFLICT DO NOTHING`). A failed SMTP send releases the claim,
   so the next hourly tick retries. Catch-up after downtime is automatic
   because periods reference the *previous* month/week.
-- **Eligibility.** Verified email + Pro/Team plan (resolved live from the
-  billing plane). No SMTP configured ⇒ the job is a no-op and claims nothing.
+- **Eligibility.** Verified email + Pro/Team/Business/Enterprise plan
+  (resolved live from the billing plane). No SMTP configured ⇒ the job is a no-op and claims nothing.
 - **Billing-plane outages** are errors (no claim), not empty digests.
 
 ## Opt-out
@@ -79,3 +79,4 @@ Full dashboard: https://leanctx.com/account/team/
   cost is one `users` scan per hour.
 - CORS on the cloud server allows `PUT`/`PATCH` (needed by the digest toggle
   and the team settings endpoint, GL #388).
+

@@ -1,6 +1,14 @@
 # Contract: Billing Plane v1 (`billing-plane-v1`)
 
-Status: stable · Plane: commercial (Team/Cloud) · Source: `rust/src/core/billing/`
+Status: **frozen baseline** · Plane: commercial (Team/Cloud) · Source: `rust/src/core/billing/`
+
+> **Note (2026-07-07):** This document is the frozen v1 baseline. The current
+> plan catalog has evolved: **Pro** now includes 1000 MB hosted index (not 0),
+> and the **Business** plan ($149/mo flat, OIDC SSO) was added in
+> [`billing-plane-v3`](billing-plane-v3.md). For the authoritative tier ladder
+> and entitlements, see [`billing-plane-v1-catalog.json`](billing-plane-v1-catalog.json)
+> (golden fixture, test-pinned) and [`docs/business/product-architecture.md`](../business/product-architecture.md).
+> The six-plan ladder is: `free ⊂ supporter ⊂ pro ⊂ team ⊂ business ⊂ enterprise`.
 
 The commercial-plane billing substrate (EPIC 13.6). It turns the existing
 plan-upgrade flow into **real plans + entitlements** and **usage-based metering**
@@ -140,3 +148,4 @@ unchanged.)
 The metered **hosted-index storage-overage** add-on is documented separately in
 [`billing-plane-v2`](billing-plane-v2.md): a new metered surface layered on top
 of these plans, additive and Local-Free-preserving.
+
