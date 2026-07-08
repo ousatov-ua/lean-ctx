@@ -180,28 +180,9 @@ fn has_provider_api_key_empty_bearer_rejected() {
 // --- #334: opt-in strict proxy auth (proxy_require_token) ---
 
 #[test]
-fn provider_key_fallback_allowed_in_default_mode() {
-    // Default (require_token = false): a provider key on a provider route is
-    // sufficient. This is what lets a local AI tool authenticate with its own
-    // key and no lean-ctx Bearer token (the loopback-friendly behavior).
-    assert!(provider_key_fallback_allowed(false, true, true));
-}
-
-#[test]
-fn provider_key_fallback_denied_in_strict_mode() {
-    // Strict (require_token = true, e.g. shared/multi-user host): the
-    // provider-key fallback is disabled, so even a valid provider key on a
-    // provider route is not enough — the Bearer token becomes mandatory.
-    assert!(!provider_key_fallback_allowed(true, true, true));
-}
-
-#[test]
-fn provider_key_fallback_requires_key_and_provider_route() {
-    // The fallback never fires without a provider key, nor off a provider
-    // route — regardless of mode.
-    assert!(!provider_key_fallback_allowed(false, false, true));
-    assert!(!provider_key_fallback_allowed(false, true, false));
-    assert!(!provider_key_fallback_allowed(true, false, true));
+fn proxy_request_requires_bearer_in_strict_mode_only() {
+    assert!(!proxy_request_requires_bearer(false));
+    assert!(proxy_request_requires_bearer(true));
 }
 
 #[test]
@@ -210,6 +191,16 @@ fn proxy_require_token_defaults_off() {
     // behavior so existing local setups (Claude Code, OpenCode, Codex) keep
     // working without a token.
     assert!(!crate::core::config::Config::default().proxy_require_token);
+}
+
+#[test]
+fn proxy_require_token_effective_policy_respects_loopback_and_config() {
+    // Local proxy mode never requires lean-ctx Bearer auth. Gateway mode requires
+    // it only when config explicitly enables strict auth.
+    assert!(!effective_proxy_auth_requires_token(false, true));
+    assert!(!effective_proxy_auth_requires_token(false, false));
+    assert!(!effective_proxy_auth_requires_token(true, true));
+    assert!(effective_proxy_auth_requires_token(true, false));
 }
 
 // --- enterprise#11: identity tags + x-leanctx-project header ---

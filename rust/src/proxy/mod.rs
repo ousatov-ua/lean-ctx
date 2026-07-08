@@ -381,10 +381,9 @@ pub async fn start_proxy(port: u16) -> anyhow::Result<()> {
     start_proxy_with_token(port, Some(token)).await
 }
 
-/// Security invariant: the proxy NEVER runs unauthenticated. `None` does not
-/// mean "no auth" — it means "resolve the session token for me". Provider
-/// routes additionally accept provider API keys (see `proxy_auth_guard`), so
-/// IDE clients keep working without any setup.
+/// Security invariant: the proxy always resolves a token, but strict Bearer auth
+/// is controlled by `effective_proxy_auth_requires_token`. Local-tool mode
+/// allows guarded routes without a Bearer token.
 fn effective_auth_token(auth_token: Option<String>) -> String {
     auth_token
         .filter(|t| !t.trim().is_empty())
@@ -442,11 +441,10 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     // Read once at startup — avoids a Config::load() on every proxied request.
     let bind_host = cfg.resolved_proxy_bind_host();
     let loopback_bind = bind_host.is_loopback();
-    // Gateway mode (non-loopback bind, enterprise#8) hard-requires the Bearer
-    // token: the provider-key fallback's whole justification is "loopback only",
-    // so it is disabled by construction once the listener is reachable from the
-    // network — regardless of the config flag.
-    let require_token = cfg.proxy_require_token || !loopback_bind;
+    // Honour the explicit strict-auth switch. Non-loopback binds are still
+    // protected by Host allowlisting and gateway keys when configured, but
+    // `proxy_require_token = false` must keep provider-key fallback available.
+    let require_token = effective_proxy_auth_requires_token(cfg.proxy_require_token, loopback_bind);
     let allowed_hosts: Arc<Vec<String>> = Arc::new(
         cfg.proxy_allowed_hosts
             .iter()
@@ -566,9 +564,9 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
 
     // Governed MCP reverse proxy (GL#91/#100): `/mcp/{server}` fronts the
     // `[[gateway_server.mcp_servers]]` registry. Registered before the guard
-    // layers, so the same Bearer auth + host allowlist + rate limit wrap the
-    // tool channel — and `/mcp/*` is not a provider route, so the loopback
-    // provider-key fallback never authenticates it.
+    // layers, so Host allowlist, optional Bearer auth and rate limit wrap the
+    // tool channel. Local-tool mode (`require_token = false`) intentionally lets
+    // MCP clients connect without LEAN_CTX_PROXY_TOKEN.
     #[cfg(feature = "gateway-server")]
     {
         use crate::gateway_server::mcp::proxy::handler as mcp_handler;
@@ -624,11 +622,17 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     app = app.layer(axum::middleware::from_fn(normalize_provider_path));
 
     let addr = SocketAddr::from((bind_host, port));
-    println!("lean-ctx proxy listening on http://{addr} (token auth enabled)");
-    if !loopback_bind {
+    println!(
+        "lean-ctx proxy listening on http://{addr} (strict token auth {})",
+        if require_token { "enabled" } else { "disabled" }
+    );
+    if !loopback_bind && require_token {
         println!(
-            "  ⚠ gateway mode: non-loopback bind — Bearer token REQUIRED (provider-key \
-             fallback disabled), Host allowlist + rate limit active"
+            "  ⚠ gateway mode: non-loopback bind — Bearer token REQUIRED, Host allowlist + rate limit active"
+        );
+    } else if !loopback_bind {
+        println!(
+            "  ⚠ gateway mode: non-loopback bind — Bearer token NOT required by config, Host allowlist + rate limit active"
         );
     }
     println!("  Anthropic: POST /v1/messages → {anthropic_upstream}");
@@ -836,6 +840,13 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
     (StatusCode::OK, axum::Json(body))
 }
 
+/// Effective strict-auth policy. Loopback binds are local-tool mode and never
+/// require lean-ctx Bearer auth. Non-loopback binds require it only when
+/// explicitly enabled by config.
+fn effective_proxy_auth_requires_token(proxy_require_token: bool, loopback_bind: bool) -> bool {
+    proxy_require_token && !loopback_bind
+}
+
 #[allow(clippy::result_large_err)]
 async fn proxy_auth_guard(
     mut req: axum::extract::Request,
@@ -873,16 +884,7 @@ async fn proxy_auth_guard(
         return Ok(next.run(req).await);
     }
 
-    // Accept provider API keys on provider routes (loopback-only, host_guard runs first).
-    // AI tools like Claude Code send x-api-key, not Bearer tokens. Since the proxy
-    // only binds to 127.0.0.1, the presence of a valid API key header is sufficient
-    // to authenticate the request as coming from a local AI tool. Disabled when
-    // `proxy_require_token` is set — strict hosts then require the Bearer token.
-    if provider_key_fallback_allowed(
-        require_token,
-        has_provider_api_key(&req),
-        is_provider_route(path),
-    ) {
+    if !proxy_request_requires_bearer(require_token) {
         attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
         return Ok(next.run(req).await);
     }
@@ -955,6 +957,7 @@ fn me_shell_path(path: &str) -> bool {
     }
 }
 
+#[cfg(test)]
 fn has_provider_api_key(req: &axum::extract::Request) -> bool {
     let headers = req.headers();
     // Provider-specific key headers: Anthropic `x-api-key`, Google
@@ -989,6 +992,7 @@ fn has_provider_api_key(req: &axum::extract::Request) -> bool {
     false
 }
 
+#[cfg(test)]
 fn is_provider_route(path: &str) -> bool {
     path.starts_with("/v1/")
         || path.starts_with("/v1beta/")
@@ -1001,20 +1005,10 @@ fn is_provider_route(path: &str) -> bool {
         || path == "/models"
 }
 
-/// Decides whether a request authenticates via a provider API key alone, without
-/// the lean-ctx Bearer token. True only in the default, loopback-friendly mode
-/// where a local AI tool's own provider key is accepted on a provider route. When
-/// `require_token` is set the fallback is disabled and the Bearer token becomes
-/// mandatory — the startup path forces this whenever the listener binds a
-/// non-loopback address (gateway mode, enterprise#8), because the fallback's
-/// justification is strictly "loopback only". Pure, so the policy is
-/// unit-testable without axum middleware plumbing.
-fn provider_key_fallback_allowed(
-    require_token: bool,
-    has_provider_key: bool,
-    is_provider_route: bool,
-) -> bool {
-    !require_token && has_provider_key && is_provider_route
+/// Decides whether a request without a valid lean-ctx Bearer token may continue.
+/// In local-tool mode this includes non-provider guarded routes such as `/mcp/*`.
+fn proxy_request_requires_bearer(require_token: bool) -> bool {
+    require_token
 }
 
 /// Maps a bare provider endpoint to its canonical `/v1/...` form, preserving any

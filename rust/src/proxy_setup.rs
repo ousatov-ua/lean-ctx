@@ -780,20 +780,21 @@ fn install_codex_env_at_mode(
     // NOTHING and leaves Codex talking directly to chatgpt.com (#597) — an empty
     // `entries` still lets `render_codex_config` auto-heal stale lean-ctx entries.
     //
-    // The opt-in `[proxy] codex_chatgpt_proxy` routes a ChatGPT subscription
-    // through the proxy for compression: it pins the generated `leanctx-chatgpt`
-    // provider (model turns → `/backend-api/codex/responses`, where the proxy
-    // strips the responses-lite marker so every model incl. gpt-5.5 works) and
-    // sets `chatgpt_base_url`. Pinning a provider scopes Codex history to it
-    // (#597), so it stays opt-in; flipping it back off strips the entries and
-    // restores native history + cloud/remote.
+    // The opt-in `[proxy] codex_chatgpt_proxy` routes only ChatGPT subscription
+    // model turns through the generated `leanctx-chatgpt` provider
+    // (`/backend-api/codex/responses`, where the proxy strips the responses-lite
+    // marker so every model incl. gpt-5.5 works). Keep `chatgpt_base_url` native:
+    // Codex Apps MCP and other ChatGPT aux rails require first-party ChatGPT
+    // request cookies/headers (otherwise upstream returns
+    // `no_biscuit_no_service`), and model-turn compression does not need those
+    // rails. Pinning a provider scopes Codex history (#597), so it stays opt-in;
+    // flipping it back off strips the entries and restores native history.
     let base = format!("http://127.0.0.1:{port}");
     let entries: Vec<(&str, String)> = match mode {
         CodexProxyMode::ApiKey => vec![("openai_base_url", format!("{base}/v1"))],
-        CodexProxyMode::ChatGpt if chatgpt_proxy => vec![
-            ("model_provider", CODEX_CHATGPT_PROVIDER_ID.to_string()),
-            ("chatgpt_base_url", format!("{base}/backend-api/")),
-        ],
+        CodexProxyMode::ChatGpt if chatgpt_proxy => {
+            vec![("model_provider", CODEX_CHATGPT_PROVIDER_ID.to_string())]
+        }
         CodexProxyMode::ChatGpt => Vec::new(),
     };
     let provider_block = match mode {
@@ -1528,14 +1529,12 @@ $env:GEMINI_API_BASE_URL = "{base}"
             "ChatGPT mode must replace stale top-level model_provider, got:\n{cfg}"
         );
         assert!(
-            cfg.contains(&format!(
-                "chatgpt_base_url = \"http://127.0.0.1:{port}/backend-api/\""
-            )),
-            "ChatGPT mode must write the backend rail, got:\n{cfg}"
-        );
-        assert!(
             !cfg.contains("https://chatgpt.example.com"),
             "ChatGPT mode must replace stale top-level chatgpt_base_url, got:\n{cfg}"
+        );
+        assert!(
+            !cfg.contains("chatgpt_base_url"),
+            "ChatGPT mode must leave aux/apps rail native, got:\n{cfg}"
         );
         assert!(
             cfg.contains(&format!("[model_providers.{CODEX_CHATGPT_PROVIDER_ID}]")),
@@ -1616,8 +1615,9 @@ $env:GEMINI_API_BASE_URL = "{base}"
         assert!(off.contains("model = \"gpt-5.5\""), "user keys preserved");
     }
 
-    /// With the opt-in enabled, ChatGPT subscription mode writes the provider
-    /// config. Also covers idempotency and API-key toggle cleanup.
+    /// With the opt-in enabled, ChatGPT subscription mode writes only the model
+    /// provider. It must leave `chatgpt_base_url` native so Codex Apps MCP keeps
+    /// first-party ChatGPT auth cookies/headers.
     #[test]
     fn codex_env_chatgpt_mode_writes_backend_url_idempotently() {
         let dir = tempfile::tempdir().unwrap();
@@ -1635,14 +1635,12 @@ $env:GEMINI_API_BASE_URL = "{base}"
             "ChatGPT mode must pin the lean-ctx provider, got:\n{cfg}"
         );
         assert!(
-            cfg.contains(&format!(
-                "chatgpt_base_url = \"http://127.0.0.1:{port}/backend-api/\""
-            )),
-            "ChatGPT mode must point chatgpt_base_url at the proxy backend-api rail, got:\n{cfg}"
+            !cfg.contains("chatgpt_base_url"),
+            "ChatGPT mode must not proxy aux/apps via chatgpt_base_url, got:\n{cfg}"
         );
         assert!(
             !cfg.contains("openai_base_url"),
-            "ChatGPT mode routes via chatgpt_base_url, not the /v1 openai_base_url, got:\n{cfg}"
+            "ChatGPT mode routes via the generated provider, not the /v1 openai_base_url, got:\n{cfg}"
         );
         assert!(
             cfg.contains("model = \"gpt-5.5\""),
@@ -1665,8 +1663,8 @@ $env:GEMINI_API_BASE_URL = "{base}"
         assert!(off.contains("model = \"gpt-5.5\""));
     }
 
-    /// Upgrade over old ChatGPT-proxy entries strips stale values first, then
-    /// writes the current ChatGPT subscription provider config.
+    /// Upgrade over old ChatGPT-proxy entries strips stale aux/app routing first,
+    /// then writes the current ChatGPT subscription model provider config.
     #[test]
     fn codex_chatgpt_upgrade_strips_legacy_leanctx_provider() {
         let dir = tempfile::tempdir().unwrap();
@@ -1697,10 +1695,8 @@ $env:GEMINI_API_BASE_URL = "{base}"
             "current ChatGPT provider must be written, got:\n{cfg}"
         );
         assert!(
-            cfg.contains(&format!(
-                "chatgpt_base_url = \"http://127.0.0.1:{port}/backend-api/\""
-            )),
-            "current ChatGPT backend URL must be written, got:\n{cfg}"
+            !cfg.contains("chatgpt_base_url"),
+            "stale ChatGPT aux/app routing must be removed, got:\n{cfg}"
         );
         assert!(cfg.contains("model = \"gpt-5.5\""));
     }
