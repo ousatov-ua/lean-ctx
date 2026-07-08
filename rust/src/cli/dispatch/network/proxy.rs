@@ -396,7 +396,7 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
             println!();
             println!("Commands:");
             println!(
-                "  start     Run the compression proxy (foreground; --autostart installs a service)"
+                "  start     Run the compression proxy (foreground; -d/--detach for background; --autostart installs a service)"
             );
             println!("  stop      Stop the proxy on the given port");
             println!(
@@ -423,6 +423,11 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
                 let autostart = rest.iter().any(|a| a == "--autostart");
                 if autostart {
                     crate::proxy_autostart::install(port, false);
+                    return;
+                }
+                let detach = rest.iter().any(|a| a == "--detach" || a == "-d");
+                if detach {
+                    start_detached(port);
                     return;
                 }
                 if let Err(e) = crate::cli::dispatch::run_async(crate::proxy::start_proxy(port)) {
@@ -625,6 +630,51 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
             }
         }
     }
+    /// Fork a child process running `lean-ctx proxy start --port=N` with
+    /// stdout/stderr redirected to a log file, then exit the parent immediately.
+    /// The child's PID is written to the proxy PID file so `lean-ctx proxy stop`
+    /// can find and kill it (#758).
+    #[cfg(feature = "http-server")]
+    fn start_detached(port: u16) {
+        let exe = std::env::current_exe().unwrap_or_else(|_| "lean-ctx".into());
+        let log_dir = crate::core::paths::state_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("lean-ctx"));
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = log_dir.join("proxy.log");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap_or_else(|e| {
+                eprintln!("Cannot open {}: {e}", log_path.display());
+                std::process::exit(1);
+            });
+        let stderr_file = log_file.try_clone().unwrap_or_else(|e| {
+            eprintln!("Cannot clone log fd: {e}",);
+            std::process::exit(1);
+        });
+        match std::process::Command::new(&exe)
+            .args(["proxy", "start", &format!("--port={port}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
+            .spawn()
+        {
+            Ok(child) => {
+                println!(
+                    "\x1b[32m✓\x1b[0m Proxy started in background (PID {}, port {port})",
+                    child.id()
+                );
+                println!("  Logs: {}", log_path.display());
+                println!("  Stop: lean-ctx proxy stop --port={port}");
+            }
+            Err(e) => {
+                eprintln!("Failed to start detached proxy: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     #[cfg(not(feature = "http-server"))]
     {
         eprintln!("lean-ctx proxy is not available in this build");
