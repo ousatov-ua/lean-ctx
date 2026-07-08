@@ -125,7 +125,7 @@ fn has_provider_api_key_azure() {
 #[test]
 fn has_provider_api_key_bearer_sk() {
     let req = build_request(
-        &[("authorization", "Bearer sk-proj-abc123")],
+        &[("authorization", "Bearer [REDACTED:Bearer token]")],
         "/v1/chat/completions",
     );
     assert!(has_provider_api_key(&req));
@@ -151,10 +151,10 @@ fn has_provider_api_key_accepts_non_sk_bearer() {
     // must authenticate on a loopback provider route. The upstream validates
     // the real key — the proxy never injects one.
     for key in [
-        "Bearer or-v1-9f8e7d6c", // OpenRouter
-        "Bearer gsk_live_1234",  // (still works)
-        "Bearer abc.def.ghi",    // gateway/service token
-        "Bearer 0123456789",     // opaque
+        "Bearer [REDACTED:Bearer token]", // OpenRouter
+        "Bearer [REDACTED:Bearer token]", // (still works)
+        "Bearer [REDACTED:Bearer token]", // gateway/service token
+        "Bearer [REDACTED:Bearer token]", // opaque
     ] {
         let req = build_request(&[("authorization", key)], "/v1/responses");
         assert!(
@@ -206,10 +206,30 @@ fn provider_key_fallback_requires_key_and_provider_route() {
 
 #[test]
 fn proxy_require_token_defaults_off() {
-    // The strict mode must be opt-in: a fresh config keeps the loopback
-    // behavior so existing local setups (Claude Code, OpenCode, Codex) keep
-    // working without a token.
     assert!(!crate::core::config::Config::default().proxy_require_token);
+}
+
+#[test]
+fn proxy_loopback_open_defaults_off() {
+    assert!(!crate::core::config::Config::default().proxy_loopback_open);
+}
+
+#[test]
+fn auth_error_response_mcp_hint() {
+    let resp = auth_error_response("/mcp/sse");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn auth_error_response_provider_hint() {
+    let resp = auth_error_response("/v1/messages");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn auth_error_response_generic_hint() {
+    let resp = auth_error_response("/status");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 // --- enterprise#11: identity tags + x-leanctx-project header ---

@@ -132,6 +132,29 @@ pub(crate) fn shell_aliases_outcome() -> Outcome {
         }
     }
 }
+pub(crate) fn skip_agent_aliases_outcome() -> Outcome {
+    let cfg = crate::core::config::Config::load();
+    if !cfg.skip_agent_aliases {
+        return Outcome {
+            ok: true,
+            line: format!("{BOLD}Agent aliases{RST}  {DIM}enabled (claude, codex, gemini){RST}"),
+        };
+    }
+    let warn = if cfg.shell_activation == crate::core::config::ShellActivation::AgentsOnly {
+        format!(
+            "  {YELLOW}hint: shell_activation=agents-only — compression still active via _lc() hook{RST}"
+        )
+    } else {
+        String::new()
+    };
+    Outcome {
+        ok: true,
+        line: format!(
+            "{BOLD}Agent aliases{RST}  {GREEN}skipped (skip_agent_aliases = true){RST}{warn}"
+        ),
+    }
+}
+
 pub(crate) fn mcp_config_outcome() -> Outcome {
     let Some(home) = dirs::home_dir() else {
         return Outcome {

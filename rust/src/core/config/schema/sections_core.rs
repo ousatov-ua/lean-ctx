@@ -471,6 +471,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         ),
     );
     root.insert(
+        "skip_agent_aliases".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.skip_agent_aliases),
+            "Do not install agent CLI aliases (claude, codex, gemini) into shell rc files. Existing alias blocks are removed on next setup",
+        ),
+    );
+    root.insert(
         "update_check_disabled".into(),
         key_with_env(
             "bool",
@@ -598,6 +606,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "bool",
             serde_json::json!(cfg.proxy_require_token),
             "Require lean-ctx Bearer token authentication and disable provider API key fallback",
+        ),
+    );
+    root.insert(
+        "proxy_loopback_open".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.proxy_loopback_open),
+            "Skip ALL proxy authentication on loopback binds. MCP/HTTP clients work without tokens. Ignored on non-loopback (gateway mode)",
         ),
     );
     root.insert(

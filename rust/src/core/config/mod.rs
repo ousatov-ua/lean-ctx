@@ -149,6 +149,14 @@ pub struct Config {
     /// require the token; clients must then send `Authorization: Bearer <token>`.
     #[serde(default)]
     pub proxy_require_token: bool,
+    /// Skip ALL proxy authentication on loopback-bound listeners (#755).
+    /// When true **and** the proxy binds a loopback address, every request is
+    /// accepted without a Bearer token or provider API key — MCP clients,
+    /// browser dashboards, and CLI tools all work without auth setup.
+    /// Ignored on non-loopback binds (gateway mode always requires auth).
+    /// Env override: `LEAN_CTX_PROXY_LOOPBACK_OPEN`.
+    #[serde(default)]
+    pub proxy_loopback_open: bool,
     /// Bind address for the proxy listener (gateway mode, enterprise#8).
     /// Default `None` = `127.0.0.1` — local-safe, nothing changes for existing
     /// installs. Set `"0.0.0.0"` (or a specific interface IP) to serve a whole
@@ -439,6 +447,14 @@ pub struct Config {
     /// Override via `LEAN_CTX_SHELL_ACTIVATION` env var.
     #[serde(default)]
     pub shell_activation: ShellActivation,
+    /// Do not install agent CLI aliases (`claude`, `codex`, `gemini`,
+    /// `codebuddy`) into `~/.zshrc` / `~/.bashrc` during `onboard` / `setup`.
+    /// Existing alias blocks are removed when this is toggled on (#754).
+    /// Does NOT affect the shell compression hook (`_lc()`) — use
+    /// `shell_hook_disabled` for that. Orthogonal to `shell_activation` which
+    /// controls *when* aliases activate, not *whether* they are installed.
+    #[serde(default)]
+    pub skip_agent_aliases: bool,
     /// Controls the native-Read → `ctx_read` redirect hook (#637).
     /// - `auto`: (Default) redirect everywhere except hosts with a native
     ///   read-before-write guard (Claude Code / CodeBuddy), where the path-swap
@@ -699,6 +715,7 @@ impl Default for Config {
             proxy_port: None,
             proxy_timeout_ms: None,
             proxy_require_token: false,
+            proxy_loopback_open: false,
             proxy_bind_host: None,
             proxy_allowed_hosts: Vec::new(),
             proxy_max_rps: None,
@@ -751,6 +768,7 @@ impl Default for Config {
             shadow_mode: false,
             debug_log: false,
             shell_activation: ShellActivation::default(),
+            skip_agent_aliases: false,
             read_redirect: ReadRedirect::default(),
             read_dedup: ReadDedup::default(),
             update_check_disabled: false,
@@ -1824,6 +1842,9 @@ impl Config {
         }
         if local.shell_hook_disabled {
             self.shell_hook_disabled = true;
+        }
+        if local.skip_agent_aliases {
+            self.skip_agent_aliases = true;
         }
         if local.shell_activation != ShellActivation::default() {
             self.shell_activation = local.shell_activation.clone();

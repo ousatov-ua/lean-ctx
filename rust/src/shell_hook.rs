@@ -346,7 +346,12 @@ pub fn install_all_with_style(quiet: bool, style: Style) {
     if shell_available("bash") {
         install_bashenv(&home, quiet, style, &stamp);
     }
-    install_aliases(&home, quiet, style, &stamp);
+    let cfg = crate::core::config::Config::load();
+    if cfg.skip_agent_aliases {
+        remove_agent_aliases(&home, quiet);
+    } else {
+        install_aliases(&home, quiet, style, &stamp);
+    }
 }
 
 /// Returns `true` if the given shell binary is installed on the system.
@@ -519,6 +524,58 @@ fn install_aliases(home: &Path, quiet: bool, style: Style, stamp: &BackupStamp) 
         let target = pick_target(home, slot, style);
         strip_other_style(home, slot, &target, quiet, &label, stamp);
         target.upsert(&block, quiet, &label);
+    }
+}
+
+/// Remove agent alias blocks from rc files without touching the env hook.
+/// Called when `skip_agent_aliases = true` to clean up previously installed blocks.
+fn remove_agent_aliases(home: &Path, quiet: bool) {
+    for slot in &[SLOT_ZSHRC, SLOT_BASHRC] {
+        let rc = home.join(slot.rc_file);
+        if !rc.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&rc)
+            && content.contains(ALIAS_START)
+        {
+            let filtered: Vec<&str> = content
+                .lines()
+                .scan(false, |inside, line| {
+                    if line.trim() == ALIAS_START {
+                        *inside = true;
+                        return Some(None);
+                    }
+                    if *inside && line.trim() == ALIAS_END {
+                        *inside = false;
+                        return Some(None);
+                    }
+                    if *inside {
+                        Some(None)
+                    } else {
+                        Some(Some(line))
+                    }
+                })
+                .flatten()
+                .collect();
+            let _ = std::fs::write(&rc, filtered.join("\n") + "\n");
+            if !quiet {
+                println!(
+                    "  \x1b[33m⊖\x1b[0m Removed agent aliases from ~/{}",
+                    slot.rc_file
+                );
+            }
+        }
+        // Remove drop-in file
+        let dropin = home.join(slot.dropin_dir).join(slot.dropin_file);
+        if dropin.exists() {
+            let _ = std::fs::remove_file(&dropin);
+            if !quiet {
+                println!(
+                    "  \x1b[33m⊖\x1b[0m Removed drop-in ~/{}/{}",
+                    slot.dropin_dir, slot.dropin_file
+                );
+            }
+        }
     }
 }
 

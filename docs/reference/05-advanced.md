@@ -85,7 +85,7 @@ on the smaller history. Tune via `[proxy].history_mode` (or
 >   the lean-ctx MCP tools instead (`ctx_read` / `ctx_search` / `ctx_shell`).
 >   Other providers (OpenAI/Codex, Gemini, Ollama) are still routed through the
 >   proxy.
-> - **Pay-as-you-go?** Export `ANTHROPIC_API_KEY=…`, then run
+> - **Pay-as-you-go?** Export `ANTHROPIC_API_KEY=[REDACTED:API key param], then run
 >   `lean-ctx proxy enable` (or `--force` to override detection). Claude traffic is
 >   then compressed by the proxy.
 
@@ -214,7 +214,7 @@ proxy_max_rps = 100                               # optional; gateway default: 5
 
 - The provider-API-key auth fallback is **hard-disabled** (its justification is
   strictly "loopback only") — every caller must send `Authorization: Bearer
-  <LEAN_CTX_PROXY_TOKEN>`, regardless of `proxy_require_token`.
+  [REDACTED:Authorization header] regardless of `proxy_require_token`.
 - The Host allowlist extends the loopback-only guard; loopback names always pass.
 - A token-bucket rate limit activates (default 50 rps, burst 100; `proxy_max_rps`
   overrides, `0` disables). `/health` is exempt for orchestrator liveness probes.
@@ -236,7 +236,7 @@ team       = "platform"          # optional
 default_project = "billing"      # optional
 ```
 
-- A request whose `Authorization: Bearer <key>` hash matches an entry
+- A request whose `Authorization: Bearer [REDACTED:Authorization header] hash matches an entry
   authenticates **and** tags the turn's measured usage with
   `person`/`team`/`project` — the basis for per-person/per-project metering.
 - The `x-leanctx-project: <name>` request header overrides the key's
@@ -274,6 +274,45 @@ premium  = ""                                 # premium work is never auto-downg
   the serving provider, so the savings ledger can prove what the router did.
 - Gemini (model in URL path) and the ChatGPT/Codex OAuth route stay passthrough
   in M1.
+
+**Loopback-open mode** (`proxy_loopback_open`). When enabled, the proxy skips
+ALL authentication on loopback-bound listeners. MCP clients, browser dashboards,
+and CLI tools work without setting up tokens. Ignored on non-loopback binds
+(gateway mode always requires auth):
+
+```toml
+proxy_loopback_open = true   # env: LEAN_CTX_PROXY_LOOPBACK_OPEN
+```
+
+Retrieve the current proxy token for manual use:
+```bash
+lean-ctx proxy token          # prints token to stdout
+lean-ctx proxy token --quiet  # no trailing newline (for scripts)
+```
+
+### Agent CLI aliases (`skip_agent_aliases`)
+
+`lean-ctx onboard` / `setup` installs shell aliases (`claude`, `codex`, `gemini`,
+`codebuddy`) that set `LEAN_CTX_AGENT=1` and `BASH_ENV` so compression activates
+automatically in agent sessions. If these aliases conflict with external launchers,
+GUI wrappers, or WSL agent detection, disable them:
+
+```toml
+skip_agent_aliases = true
+```
+
+Or at install time:
+```bash
+lean-ctx onboard --no-agent-aliases
+lean-ctx setup --no-agent-aliases
+```
+
+When toggled on, existing alias blocks are removed from `~/.zshrc` and `~/.bashrc`
+on the next `setup` / `onboard` run.
+
+This does **not** affect the shell compression hook (`_lc()`) — use
+`shell_hook_disabled` to disable that. The `shell_activation` setting controls
+*when* aliases activate, `skip_agent_aliases` controls *whether* they are installed.
 
 **Counterfactual baseline — `[proxy.baseline]`.** The parameters that make
 avoided-cost claims auditable. Frozen per deployment (contract annex), not
@@ -716,3 +755,5 @@ gateway at an arbitrary command or endpoint. It is a complete no-op until you se
   `proxy status`, `.bak` backup).
 - "profile" is overloaded: tool profile (Journey 2) vs. context profile (here).
   Both journeys cross-reference each other to defuse the confusion.
+
+--- lean-ctx: ctx_compose bundles search+read+symbols in one call ---

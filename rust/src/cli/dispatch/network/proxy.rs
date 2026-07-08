@@ -390,7 +390,7 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
         // `--help` anywhere must never execute the verb (GH #393).
         if wants_help(rest) {
             println!(
-                "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|codex-chatgpt> [--port=4444]"
+                "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|token|codex-chatgpt> [--port=4444]"
             );
             println!();
             println!("Commands:");
@@ -405,6 +405,7 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
             println!("  enable    Enable the proxy: config flag, autostart service, env wiring");
             println!("  disable   Disable the proxy and restore the original endpoint");
             println!("  cleanup   Remove stale proxy URLs from AI tool configs");
+            println!("  token     Print the current proxy Bearer token (for MCP/HTTP clients)");
             println!(
                 "  codex-chatgpt <on|off|status>  Route a Codex ChatGPT-subscription login through the proxy"
             );
@@ -607,9 +608,18 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
                     }
                 }
             }
+            "token" => {
+                let token = crate::core::session_token::resolve_proxy_token("LEAN_CTX_PROXY_TOKEN");
+                let quiet = rest.iter().any(|a| a == "--quiet" || a == "-q");
+                if quiet {
+                    print!("{token}");
+                } else {
+                    println!("{token}");
+                }
+            }
             _ => {
                 println!(
-                    "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|codex-chatgpt> [--port=4444]"
+                    "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|token|codex-chatgpt> [--port=4444]"
                 );
             }
         }

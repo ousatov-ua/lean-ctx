@@ -290,6 +290,7 @@ pub fn run() {
                     "--json",
                     "--no-auto-approve",
                     "--skip-rules",
+                    "--no-agent-aliases",
                 ];
                 if let Some(unknown) = rest
                     .iter()
@@ -305,6 +306,11 @@ pub fn run() {
                 let json = rest.iter().any(|a| a == "--json");
                 let no_auto_approve = rest.iter().any(|a| a == "--no-auto-approve");
                 let skip_rules = rest.iter().any(|a| a == "--skip-rules");
+                let no_agent_aliases = rest.iter().any(|a| a == "--no-agent-aliases");
+
+                if no_agent_aliases {
+                    let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
+                }
 
                 if non_interactive || fix || json || yes {
                     let opts = setup::SetupOptions {
@@ -340,13 +346,20 @@ pub fn run() {
                 return;
             }
             "onboard" => {
-                // Same #476-class guard as `setup`: help must not run onboard.
                 if rest.iter().any(|a| a == "--help" || a == "-h") {
-                    println!("Usage: lean-ctx onboard");
+                    println!("Usage: lean-ctx onboard [--no-agent-aliases]");
                     println!("Connect your AI tools with one command: detects installed");
                     println!("agents, installs hooks/rules/MCP registrations, verifies.");
+                    println!();
+                    println!(
+                        "  --no-agent-aliases  Do not install claude/codex/gemini shell aliases"
+                    );
+                    println!();
                     println!("Fine-grained control: lean-ctx setup --help");
                     return;
+                }
+                if rest.iter().any(|a| a == "--no-agent-aliases") {
+                    let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
                 }
                 setup::run_onboard();
                 return;

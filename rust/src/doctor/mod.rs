@@ -343,7 +343,11 @@ pub fn run() -> u32 {
     let aliases = shell_aliases_outcome();
     board.check(&aliases);
 
-    // 7) MCP
+    // 7b) Agent aliases opt-out
+    let agent_aliases = skip_agent_aliases_outcome();
+    board.check(&agent_aliases);
+
+    // 8) MCP
     let mcp = mcp_config_outcome();
     board.check(&mcp);
     let user_scope_mcp_locations = dirs::home_dir()

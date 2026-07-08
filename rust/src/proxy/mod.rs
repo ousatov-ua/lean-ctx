@@ -447,6 +447,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     // so it is disabled by construction once the listener is reachable from the
     // network — regardless of the config flag.
     let require_token = cfg.proxy_require_token || !loopback_bind;
+    let loopback_open = cfg.proxy_loopback_open && loopback_bind;
     let allowed_hosts: Arc<Vec<String>> = Arc::new(
         cfg.proxy_allowed_hosts
             .iter()
@@ -607,7 +608,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
         app = app.layer(axum::middleware::from_fn(move |req, next| {
             let expected = expected.clone();
             let keys = keys.clone();
-            proxy_auth_guard(req, next, expected, require_token, keys)
+            proxy_auth_guard(req, next, expected, require_token, loopback_open, keys)
         }));
     }
 
@@ -624,7 +625,11 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
     app = app.layer(axum::middleware::from_fn(normalize_provider_path));
 
     let addr = SocketAddr::from((bind_host, port));
-    println!("lean-ctx proxy listening on http://{addr} (token auth enabled)");
+    if loopback_open {
+        println!("lean-ctx proxy listening on http://{addr} (loopback-open: auth disabled)");
+    } else {
+        println!("lean-ctx proxy listening on http://{addr} (token auth enabled)");
+    }
     if !loopback_bind {
         println!(
             "  ⚠ gateway mode: non-loopback bind — Bearer token REQUIRED (provider-key \
@@ -842,10 +847,17 @@ async fn proxy_auth_guard(
     next: axum::middleware::Next,
     expected_token: String,
     require_token: bool,
+    loopback_open: bool,
     gateway_keys: Arc<gateway_identity::GatewayKeys>,
 ) -> Result<Response, Response> {
     let path = req.uri().path();
     if path == "/health" || me_shell_path(path) {
+        return Ok(next.run(req).await);
+    }
+
+    // #755: loopback-open mode skips all auth — every local process is trusted.
+    if loopback_open {
+        attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
         return Ok(next.run(req).await);
     }
 
@@ -874,10 +886,6 @@ async fn proxy_auth_guard(
     }
 
     // Accept provider API keys on provider routes (loopback-only, host_guard runs first).
-    // AI tools like Claude Code send x-api-key, not Bearer tokens. Since the proxy
-    // only binds to 127.0.0.1, the presence of a valid API key header is sufficient
-    // to authenticate the request as coming from a local AI tool. Disabled when
-    // `proxy_require_token` is set — strict hosts then require the Bearer token.
     if provider_key_fallback_allowed(
         require_token,
         has_provider_api_key(&req),
@@ -887,15 +895,18 @@ async fn proxy_auth_guard(
         return Ok(next.run(req).await);
     }
 
-    let cfg = crate::core::config::Config::load();
-    let hint = match cfg.proxy_enabled {
-        Some(true) => {
-            "lean-ctx proxy requires authentication. Use a Bearer token (LEAN_CTX_PROXY_TOKEN) or configure your AI tool's API key."
-        }
-        Some(false) => "lean-ctx proxy is disabled but still running. Run: lean-ctx proxy cleanup",
-        None => {
-            "lean-ctx proxy is not configured. Your AI tool's ANTHROPIC_BASE_URL may be pointing here by mistake. Fix: lean-ctx proxy cleanup  OR  lean-ctx proxy enable"
-        }
+    Err(auth_error_response(path))
+}
+
+fn auth_error_response(path: &str) -> Response {
+    let is_mcp = path.starts_with("/mcp");
+    let hint = if is_mcp {
+        "MCP Streamable HTTP requires a Bearer token. Get it with: lean-ctx proxy token"
+    } else if is_provider_route(path) {
+        "Provider route requires authentication. Set your API key header or use: lean-ctx proxy token"
+    } else {
+        "This endpoint requires a lean-ctx Bearer token. Get it with: lean-ctx proxy token  \
+         — or set proxy_loopback_open = true to disable auth on localhost"
     };
 
     let body = serde_json::json!({
@@ -906,7 +917,7 @@ async fn proxy_auth_guard(
         }
     });
 
-    Err((StatusCode::UNAUTHORIZED, axum::Json(body)).into_response())
+    (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response()
 }
 
 /// Resolves the final identity tags for an authenticated request and inserts

@@ -45,6 +45,9 @@ pub fn classify(key: &str) -> Option<ConfigRisk> {
         "proxy_require_token" => {
             "Proxy token policy controls whether provider API keys can authenticate local proxy requests without the lean-ctx Bearer token."
         }
+        "proxy_loopback_open" => {
+            "Disables ALL proxy authentication on loopback binds. Any local process can access the proxy without a token."
+        }
         "proxy.anthropic_upstream"
         | "proxy.openai_upstream"
         | "proxy.chatgpt_upstream"
@@ -76,6 +79,7 @@ mod tests {
             "secret_detection.redact",
             "boundary_policy",
             "proxy_require_token",
+            "proxy_loopback_open",
             "proxy.openai_upstream",
             "proxy.chatgpt_upstream",
             "proxy.anthropic_upstream",
