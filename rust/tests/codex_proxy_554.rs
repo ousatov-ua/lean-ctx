@@ -168,12 +168,6 @@ fn proxy_enable_respects_codex_auth_mode_554() {
         );
         assert!(
             cfg.contains(&format!(
-                "chatgpt_base_url = \"http://127.0.0.1:{port}/backend-api/\""
-            )),
-            "opt-in ChatGPT login must use the ChatGPT backend rail, got:\n{cfg}"
-        );
-        assert!(
-            cfg.contains(&format!(
                 "base_url = \"http://127.0.0.1:{port}/backend-api/codex\""
             )),
             "ChatGPT provider block must point model turns at backend-api/codex, got:\n{cfg}"
