@@ -125,7 +125,7 @@ fn has_provider_api_key_azure() {
 #[test]
 fn has_provider_api_key_bearer_sk() {
     let req = build_request(
-        &[("authorization", "Bearer sk-proj-abc123")],
+        &[("authorization", "Bearer [REDACTED:Bearer token]")],
         "/v1/chat/completions",
     );
     assert!(has_provider_api_key(&req));
@@ -151,10 +151,10 @@ fn has_provider_api_key_accepts_non_sk_bearer() {
     // must authenticate on a loopback provider route. The upstream validates
     // the real key — the proxy never injects one.
     for key in [
-        "Bearer or-v1-9f8e7d6c", // OpenRouter
-        "Bearer gsk_live_1234",  // (still works)
-        "Bearer abc.def.ghi",    // gateway/service token
-        "Bearer 0123456789",     // opaque
+        "Bearer [REDACTED:Bearer token]", // OpenRouter
+        "Bearer [REDACTED:Bearer token]", // (still works)
+        "Bearer [REDACTED:Bearer token]", // gateway/service token
+        "Bearer [REDACTED:Bearer token]", // opaque
     ] {
         let req = build_request(&[("authorization", key)], "/v1/responses");
         assert!(
@@ -180,27 +180,56 @@ fn has_provider_api_key_empty_bearer_rejected() {
 // --- #334: opt-in strict proxy auth (proxy_require_token) ---
 
 #[test]
-fn proxy_request_requires_bearer_in_strict_mode_only() {
-    assert!(!proxy_request_requires_bearer(false));
-    assert!(proxy_request_requires_bearer(true));
+fn provider_key_fallback_allowed_in_default_mode() {
+    // Default (require_token = false): a provider key on a provider route is
+    // sufficient. This is what lets a local AI tool authenticate with its own
+    // key and no lean-ctx Bearer token (the loopback-friendly behavior).
+    assert!(provider_key_fallback_allowed(false, true, true));
+}
+
+#[test]
+fn provider_key_fallback_denied_in_strict_mode() {
+    // Strict (require_token = true, e.g. shared/multi-user host): the
+    // provider-key fallback is disabled, so even a valid provider key on a
+    // provider route is not enough — the Bearer token becomes mandatory.
+    assert!(!provider_key_fallback_allowed(true, true, true));
+}
+
+#[test]
+fn provider_key_fallback_requires_key_and_provider_route() {
+    // The fallback never fires without a provider key, nor off a provider
+    // route — regardless of mode.
+    assert!(!provider_key_fallback_allowed(false, false, true));
+    assert!(!provider_key_fallback_allowed(false, true, false));
+    assert!(!provider_key_fallback_allowed(true, false, true));
 }
 
 #[test]
 fn proxy_require_token_defaults_off() {
-    // The strict mode must be opt-in: a fresh config keeps the loopback
-    // behavior so existing local setups (Claude Code, OpenCode, Codex) keep
-    // working without a token.
     assert!(!crate::core::config::Config::default().proxy_require_token);
 }
 
 #[test]
-fn proxy_require_token_effective_policy_respects_loopback_and_config() {
-    // Local proxy mode never requires lean-ctx Bearer auth. Gateway mode requires
-    // it only when config explicitly enables strict auth.
-    assert!(!effective_proxy_auth_requires_token(false, true));
-    assert!(!effective_proxy_auth_requires_token(false, false));
-    assert!(!effective_proxy_auth_requires_token(true, true));
-    assert!(effective_proxy_auth_requires_token(true, false));
+fn proxy_loopback_open_defaults_off() {
+    assert!(!crate::core::config::Config::default().proxy_loopback_open);
+}
+
+#[test]
+fn auth_error_response_mcp_hint() {
+    let resp = auth_error_response("/mcp/sse");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn auth_error_response_provider_hint() {
+    let resp = auth_error_response("/v1/messages");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn auth_error_response_generic_hint() {
+    let resp = auth_error_response("/status");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 // --- enterprise#11: identity tags + x-leanctx-project header ---

@@ -598,3 +598,4 @@ class CockpitCommander extends HTMLElement {
 customElements.define('cockpit-commander', CockpitCommander);
 
 export { CockpitCommander };
+

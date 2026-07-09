@@ -361,11 +361,12 @@ fn codex_chatgpt_status(port: u16) {
     let codex_cfg = crate::core::home::resolve_codex_dir()
         .unwrap_or_else(|| home.join(".codex"))
         .join("config.toml");
-    let routed = std::fs::read_to_string(&codex_cfg).is_ok_and(|c| c.contains("chatgpt_base_url"));
+    let routed = std::fs::read_to_string(&codex_cfg)
+        .is_ok_and(|c| c.contains("leanctx-chatgpt") || c.contains("chatgpt_base_url"));
     println!(
         "  Codex cfg: {}",
         if routed {
-            "chatgpt_base_url → proxy (routed)"
+            "model_provider → leanctx-chatgpt (routed)"
         } else {
             "native (no proxy entry)"
         }
@@ -390,12 +391,12 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
         // `--help` anywhere must never execute the verb (GH #393).
         if wants_help(rest) {
             println!(
-                "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|codex-chatgpt> [--port=4444]"
+                "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|token|codex-chatgpt> [--port=4444]"
             );
             println!();
             println!("Commands:");
             println!(
-                "  start     Run the compression proxy (foreground; --autostart installs a service)"
+                "  start     Run the compression proxy (foreground; -d/--detach for background; --autostart installs a service)"
             );
             println!("  stop      Stop the proxy on the given port");
             println!(
@@ -405,6 +406,7 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
             println!("  enable    Enable the proxy: config flag, autostart service, env wiring");
             println!("  disable   Disable the proxy and restore the original endpoint");
             println!("  cleanup   Remove stale proxy URLs from AI tool configs");
+            println!("  token     Print the current proxy Bearer token (for MCP/HTTP clients)");
             println!(
                 "  codex-chatgpt <on|off|status>  Route a Codex ChatGPT-subscription login through the proxy"
             );
@@ -421,6 +423,11 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
                 let autostart = rest.iter().any(|a| a == "--autostart");
                 if autostart {
                     crate::proxy_autostart::install(port, false);
+                    return;
+                }
+                let detach = rest.iter().any(|a| a == "--detach" || a == "-d");
+                if detach {
+                    start_detached(port);
                     return;
                 }
                 if let Err(e) = crate::cli::dispatch::run_async(crate::proxy::start_proxy(port)) {
@@ -607,13 +614,67 @@ pub(crate) fn cmd_proxy(rest: &[String]) {
                     }
                 }
             }
+            "token" => {
+                let token = crate::core::session_token::resolve_proxy_token("LEAN_CTX_PROXY_TOKEN");
+                let quiet = rest.iter().any(|a| a == "--quiet" || a == "-q");
+                if quiet {
+                    print!("{token}");
+                } else {
+                    println!("{token}");
+                }
+            }
             _ => {
                 println!(
-                    "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|codex-chatgpt> [--port=4444]"
+                    "Usage: lean-ctx proxy <start|stop|restart|status|enable|disable|cleanup|token|codex-chatgpt> [--port=4444]"
                 );
             }
         }
     }
+    /// Fork a child process running `lean-ctx proxy start --port=N` with
+    /// stdout/stderr redirected to a log file, then exit the parent immediately.
+    /// The child's PID is written to the proxy PID file so `lean-ctx proxy stop`
+    /// can find and kill it (#758).
+    #[cfg(feature = "http-server")]
+    fn start_detached(port: u16) {
+        let exe = std::env::current_exe().unwrap_or_else(|_| "lean-ctx".into());
+        let log_dir = crate::core::paths::state_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("lean-ctx"));
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = log_dir.join("proxy.log");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .unwrap_or_else(|e| {
+                eprintln!("Cannot open {}: {e}", log_path.display());
+                std::process::exit(1);
+            });
+        let stderr_file = log_file.try_clone().unwrap_or_else(|e| {
+            eprintln!("Cannot clone log fd: {e}",);
+            std::process::exit(1);
+        });
+        match std::process::Command::new(&exe)
+            .args(["proxy", "start", &format!("--port={port}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
+            .spawn()
+        {
+            Ok(child) => {
+                println!(
+                    "\x1b[32m✓\x1b[0m Proxy started in background (PID {}, port {port})",
+                    child.id()
+                );
+                println!("  Logs: {}", log_path.display());
+                println!("  Stop: lean-ctx proxy stop --port={port}");
+            }
+            Err(e) => {
+                eprintln!("Failed to start detached proxy: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     #[cfg(not(feature = "http-server"))]
     {
         eprintln!("lean-ctx proxy is not available in this build");

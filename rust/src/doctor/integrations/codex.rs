@@ -121,7 +121,9 @@ pub(crate) fn classify_codex_proxy_entries(config: &str) -> CodexProxyState {
             chatgpt_rail = true;
         }
     }
-    if chatgpt_provider && chatgpt_rail && provider_block && provider_block_has_local_backend {
+    // Post-v3.9.4: chatgpt_base_url is no longer proxied (Codex Apps MCP
+    // needs first-party ChatGPT cookies). Accept both old and new layouts.
+    if chatgpt_provider && provider_block && provider_block_has_local_backend {
         CodexProxyState::OptInRouted
     } else if !chatgpt_provider && !chatgpt_rail && !provider_block {
         CodexProxyState::Native
