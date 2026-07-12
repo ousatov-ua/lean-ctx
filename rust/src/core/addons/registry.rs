@@ -404,25 +404,26 @@ mod tests {
     }
 
     #[test]
-    fn flagship_lmd_is_listed() {
-        let lmd = get("lmd").expect("lmd in registry");
+    fn flagship_lean_md_is_listed() {
+        let lmd = get("lean-md").expect("lean-md in registry");
         assert_eq!(lmd.addon.author, "dasTholo");
         assert!(!lmd.addon.homepage.is_empty());
-        // Listed-only until it publishes an MCP endpoint — never fabricated.
+        // Listed-only: the addon ships as a hosted pack (`addon add @dasTholo/lean-md`),
+        // the bundled entry is discovery only — never a fabricated endpoint.
         assert!(!lmd.is_installable());
     }
 
     #[test]
     fn search_matches_keywords_and_categories() {
-        assert!(search("markdown").iter().any(|m| m.addon.name == "lmd"));
-        assert!(search("plans").iter().any(|m| m.addon.name == "lmd"));
-        assert!(search("").iter().any(|m| m.addon.name == "lmd"));
+        assert!(search("markdown").iter().any(|m| m.addon.name == "lean-md"));
+        assert!(search("plans").iter().any(|m| m.addon.name == "lean-md"));
+        assert!(search("").iter().any(|m| m.addon.name == "lean-md"));
         assert!(search("definitely-no-such-term").is_empty());
     }
 
     #[test]
     fn get_is_case_insensitive() {
-        assert!(get("LMD").is_some());
-        assert!(get("  lmd ").is_some());
+        assert!(get("LEAN-MD").is_some());
+        assert!(get("  lean-md ").is_some());
     }
 }
