@@ -783,9 +783,10 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
     };
     const MAX_ENTRIES_VISITED: usize = 500_000;
     const MAX_FILE_SIZE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB per file
-    /// #685: per-batch size for the phase-2 fan-out, so the guardian gets a
-    /// say between batches instead of only before the whole corpus.
-    const SCAN_BATCH_FILES: usize = 2_000;
+    /// #790: per-batch size for the phase-2 fan-out. Lowered from 2000 to 500
+    /// (matching BM25's MAX_BATCH_FILES) — 2000-file batches hold ~40 MB of
+    /// ScanFileResult content inside par_iter().collect() with no pressure check.
+    const SCAN_BATCH_FILES: usize = 500;
     let scan_deadline = std::time::Instant::now() + std::time::Duration::from_mins(5);
 
     // #934: two-phase scan. Phase 1 walks the tree sequentially (cheap; it
@@ -904,21 +905,22 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
     );
     let parallel = admission.parallel_ok && !crate::core::memory_guard::is_under_pressure();
     for (batch_no, batch) in targets.chunks(SCAN_BATCH_FILES).enumerate() {
-        if batch_no > 0 {
-            if crate::core::memory_guard::abort_requested() {
-                tracing::warn!(
-                    "[graph_index: aborting scan after {} files due to critical memory pressure]",
-                    batch_no * SCAN_BATCH_FILES
-                );
-                break;
-            }
-            if crate::core::memory_guard::is_under_pressure() {
-                tracing::warn!(
-                    "[graph_index: stopping scan after {} files due to memory pressure]",
-                    batch_no * SCAN_BATCH_FILES
-                );
-                break;
-            }
+        // #790: check pressure on EVERY batch including batch 0 — previously
+        // batch 0 always ran unchecked, allowing 2000 (now 500) files to allocate
+        // freely even when the system was already under pressure.
+        if crate::core::memory_guard::abort_requested() {
+            tracing::warn!(
+                "[graph_index: aborting scan after {} files due to critical memory pressure]",
+                batch_no * SCAN_BATCH_FILES
+            );
+            break;
+        }
+        if batch_no > 0 && crate::core::memory_guard::is_under_pressure() {
+            tracing::warn!(
+                "[graph_index: stopping scan after {} files due to memory pressure]",
+                batch_no * SCAN_BATCH_FILES
+            );
+            break;
         }
         let results = process_scan_targets(batch, &old_files, existing.as_ref(), parallel);
         for r in results {

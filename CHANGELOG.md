@@ -46,6 +46,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
       allocations from compounding when the system is already low on RAM.
   11. **Graph scan admission control** — uses `index_admission` (same as BM25)
       before parallel fan-out; oversized corpora degrade to sequential.
+  12. **Graph scan batch size 2000 → 500** — matches BM25's `MAX_BATCH_FILES`;
+      reduces per-batch peak from ~40 MB to ~10 MB of `ScanFileResult` content.
+  13. **Batch-0 pressure check** — graph scan now checks `abort_requested` on
+      the very first batch (previously batch 0 always ran unchecked).
+  14. **Tightened guardian pressure thresholds** — Hard fires at 1.5× (was 2×),
+      Critical at 2× (was 3×) of `max_ram_percent`. On a 64 GB machine at 10%:
+      Hard = 9.6 GB (was 12.8 GB), Critical = 12.8 GB (was 19.2 GB).
+  15. **Edge parallel batches check `is_under_pressure`** — previously only
+      checked `abort_requested` (Hard+); Soft pressure now stops edge-building.
+  16. **`build-full` and `build-semantic` start the memory guardian** — previously
+      only `build` activated the guardian; full/semantic builds ran unprotected.
 - **Cursor Read redirect removed — savings jump from 9.5 % to 73+ % (GH #1250).**
   Cursor's `StrReplace` internally triggers a native `Read` that the
   redirect hook intercepted, producing verbatim `cli_full` output with

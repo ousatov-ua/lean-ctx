@@ -137,11 +137,16 @@ impl MemorySnapshot {
         let guard_cfg = super::config::MemoryGuardConfig::effective(&cfg);
         let base = f64::from(guard_cfg.max_ram_percent);
 
-        let level = if pct > base * 3.0 {
+        // #790: tightened multipliers so ABORT fires earlier:
+        // - Critical: 2× (was 3×) — e.g. 10% config on 64 GB → 12.8 GB (was 19.2 GB)
+        // - Hard:     1.5× (was 2×) — 9.6 GB (was 12.8 GB)
+        // - Medium:   1.2× (was 1.4×)
+        // Users expect max_ram_percent to be a meaningful cap, not a 3× suggestion.
+        let level = if pct > base * 2.0 {
             PressureLevel::Critical
-        } else if pct > base * 2.0 {
+        } else if pct > base * 1.5 {
             PressureLevel::Hard
-        } else if pct > base * 1.4 {
+        } else if pct > base * 1.2 {
             PressureLevel::Medium
         } else if pct > base {
             PressureLevel::Soft

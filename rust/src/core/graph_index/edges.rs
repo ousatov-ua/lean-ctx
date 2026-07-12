@@ -61,9 +61,18 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
         }
     } else {
         for (batch_no, batch) in file_paths.chunks(EDGE_BATCH_SIZE).enumerate() {
-            if batch_no > 0 && crate::core::memory_guard::abort_requested() {
+            // #790: check both abort AND soft pressure on every batch (including 0).
+            // Previously only checked abort_requested on batch > 0 — Soft pressure
+            // was invisible to the parallel edge path.
+            if crate::core::memory_guard::abort_requested() {
                 tracing::warn!(
-                    "[graph_index: aborting edge-building at batch {batch_no} due to memory pressure]",
+                    "[graph_index: aborting edge-building at batch {batch_no} due to critical memory pressure]",
+                );
+                break;
+            }
+            if batch_no > 0 && crate::core::memory_guard::is_under_pressure() {
+                tracing::warn!(
+                    "[graph_index: stopping edge-building at batch {batch_no} due to memory pressure]",
                 );
                 break;
             }
