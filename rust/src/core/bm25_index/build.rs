@@ -249,7 +249,7 @@ impl BM25Index {
         // between batches. `chunks()` keeps the sorted file order — identical
         // output to the sequential path.
         for (batch_no, batch) in files.chunks(batch_size.max(1)).enumerate() {
-            if batch_no > 0 && parallel_build_must_stop("bm25", batch_no * batch_size) {
+            if parallel_build_must_stop("bm25", batch_no * batch_size) {
                 break;
             }
             let prepared: Vec<Option<PreparedFile>> = batch
@@ -296,7 +296,7 @@ impl BM25Index {
         // rebuild iterates them — the foundation of identical output.
         let batch_size = effective_batch_size();
         for (batch_no, batch) in files.chunks(batch_size).enumerate() {
-            if batch_no > 0 && parallel_build_must_stop("bm25-incr", batch_no * batch_size) {
+            if parallel_build_must_stop("bm25-incr", batch_no * batch_size) {
                 break;
             }
             let prepared: Vec<Option<PreparedFile>> = batch

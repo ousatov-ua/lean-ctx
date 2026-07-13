@@ -42,7 +42,24 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
     // #934 + #790: fan out in 500-file batches with memory pressure checks
     // between them. Under pressure, fall back to sequential with 1000-file checks.
     const EDGE_BATCH_SIZE: usize = 500;
-    let mut per_file: Vec<FileEdges> = Vec::with_capacity(file_paths.len());
+    // #790: flush edges into index.edges after each batch instead of
+    // accumulating all FileEdges in a Vec. Only type_inputs (C#/Java/Go/Kotlin)
+    // are retained across batches for the cross-file type_ref pass.
+    let mut type_inputs: Vec<(String, String, crate::core::deep_queries::DeepAnalysis)> =
+        Vec::new();
+
+    let flush_batch =
+        |results: Vec<FileEdges>,
+         index: &mut ProjectIndex,
+         type_inputs: &mut Vec<(String, String, crate::core::deep_queries::DeepAnalysis)>| {
+            for fe in results {
+                index.edges.extend(fe.edges);
+                if let Some(ti) = fe.type_input {
+                    type_inputs.push(ti);
+                }
+            }
+        };
+
     if crate::core::memory_guard::is_under_pressure() {
         for (i, rel_path) in file_paths.iter().enumerate() {
             if i.is_multiple_of(1000) && crate::core::memory_guard::is_under_pressure() {
@@ -52,25 +69,21 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
                 );
                 break;
             }
-            per_file.push(resolve_file_edges(
-                rel_path,
-                content_cache,
-                &resolver_ctx,
-                root_path,
-            ));
+            let fe = resolve_file_edges(rel_path, content_cache, &resolver_ctx, root_path);
+            index.edges.extend(fe.edges);
+            if let Some(ti) = fe.type_input {
+                type_inputs.push(ti);
+            }
         }
     } else {
         for (batch_no, batch) in file_paths.chunks(EDGE_BATCH_SIZE).enumerate() {
-            // #790: check both abort AND soft pressure on every batch (including 0).
-            // Previously only checked abort_requested on batch > 0 — Soft pressure
-            // was invisible to the parallel edge path.
             if crate::core::memory_guard::abort_requested() {
                 tracing::warn!(
                     "[graph_index: aborting edge-building at batch {batch_no} due to critical memory pressure]",
                 );
                 break;
             }
-            if batch_no > 0 && crate::core::memory_guard::is_under_pressure() {
+            if crate::core::memory_guard::is_under_pressure() {
                 tracing::warn!(
                     "[graph_index: stopping edge-building at batch {batch_no} due to memory pressure]",
                 );
@@ -82,20 +95,7 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
                     resolve_file_edges(rel_path, content_cache, &resolver_ctx, root_path)
                 })
                 .collect();
-            per_file.extend(batch_results);
-        }
-    }
-
-    // Full analyses of C#/Java/Go/Kotlin files, kept to derive cross-file
-    // type_ref edges after the import pass (GH #398). Those languages resolve
-    // same-namespace/package types without an import, so the import list alone
-    // is not enough.
-    let mut type_inputs: Vec<(String, String, crate::core::deep_queries::DeepAnalysis)> =
-        Vec::new();
-    for fe in per_file {
-        index.edges.extend(fe.edges);
-        if let Some(ti) = fe.type_input {
-            type_inputs.push(ti);
+            flush_batch(batch_results, index, &mut type_inputs);
         }
     }
 

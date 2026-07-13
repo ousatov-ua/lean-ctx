@@ -307,6 +307,22 @@ pub fn ensure_all_background(project_root: &str) {
 /// callers own the threading. Requires the caller to have claimed the worker
 /// slot via [`try_claim_worker`]; releases it on exit.
 fn run_build_worker(root: &str) {
+    // #790: start memory guardian for daemon-spawned builds. Previously only
+    // the CLI path (index_cmd.rs) started the guardian, leaving background
+    // builds (MCP `ensure_all_background`, watcher, graph_coordinator) to run
+    // without RSS pressure checks — the guardian's abort/pressure flags never
+    // fired. `start_guard` is idempotent: a second call within the same
+    // process is a no-op.
+    crate::core::memory_guard::start_guard(std::sync::Arc::new(|level| {
+        tracing::warn!(
+            "[build_worker] memory pressure: {level:?} — background tasks will throttle"
+        );
+        if level >= crate::core::memory_guard::PressureLevel::Hard {
+            crate::core::content_cache::clear();
+        }
+        crate::core::memory_guard::force_purge();
+    }));
+
     // Pre-warm the resident line-search index in parallel (own thread,
     // deduped internally) so the first ctx_search hits the fast path.
     crate::core::search_index::ensure_background(root, true, false);

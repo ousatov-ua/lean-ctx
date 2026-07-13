@@ -143,11 +143,19 @@ pub struct MemoryGuardConfig {
 
 impl MemoryGuardConfig {
     pub fn effective(config: &Config) -> Self {
-        let pct = std::env::var("LEAN_CTX_MAX_RAM_PERCENT")
+        let base_pct = std::env::var("LEAN_CTX_MAX_RAM_PERCENT")
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
             .unwrap_or(config.max_ram_percent)
             .clamp(1, 50);
+        // memory_profile=low halves max_ram_percent so guardian thresholds
+        // fire earlier, preventing transient RSS spikes (#790).
+        let profile = MemoryProfile::effective(config);
+        let pct = if profile == MemoryProfile::Low {
+            (base_pct / 2).max(3)
+        } else {
+            base_pct
+        };
         Self {
             max_ram_percent: pct,
         }

@@ -915,7 +915,7 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
             );
             break;
         }
-        if batch_no > 0 && crate::core::memory_guard::is_under_pressure() {
+        if crate::core::memory_guard::is_under_pressure() {
             tracing::warn!(
                 "[graph_index: stopping scan after {} files due to memory pressure]",
                 batch_no * SCAN_BATCH_FILES
