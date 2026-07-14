@@ -125,13 +125,48 @@ pub(crate) fn format_anchored_output(
     content: &str,
     line_count: usize,
 ) -> (String, usize) {
+    format_anchored_output_window(file_ref, short, content, line_count, None)
+}
+
+/// Windowed variant of [`format_anchored_output`] (#811): when `window` is
+/// `Some((start, end))`, `content` is sliced to that 1-based inclusive span
+/// *before* anchoring, so a bounded anchored read never has to hash/render
+/// lines outside the requested window — only the slice is annotated, numbered
+/// from its true position in the file so anchors still line up with
+/// `ctx_patch`. `None` reproduces the whole-file behaviour above.
+pub(crate) fn format_anchored_output_window(
+    file_ref: &str,
+    short: &str,
+    content: &str,
+    line_count: usize,
+    window: Option<(usize, usize)>,
+) -> (String, usize) {
     let _mode_guard = crate::core::savings_footer::ModeGuard::new("anchored");
-    let header = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {
-        format!("{file_ref}={short} {line_count}L [anchored: N:hh|line → edit via ctx_patch]")
-    } else {
-        format!("{short} {line_count}L [anchored: N:hh|line → edit via ctx_patch]")
+    let (body, start_line, range_suffix) = match window {
+        Some((start, end)) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let total = lines.len();
+            let start = start.max(1).min(total.max(1));
+            let end = end.min(total);
+            let body = if total > 0 && end >= start {
+                lines[start - 1..end].join("\n")
+            } else {
+                String::new()
+            };
+            (body, start, format!(" lines:{start}-{end}"))
+        }
+        None => (content.to_string(), 1, String::new()),
     };
-    let annotated = crate::core::anchor::annotate(content, 1);
+    let header = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {
+        format!(
+            "{file_ref}={short} {line_count}L{range_suffix} [anchored: N:hh|line → edit via ctx_patch]"
+        )
+    } else {
+        format!(
+            "{short} {line_count}L{range_suffix} [anchored: N:hh|line → edit via ctx_patch]"
+        )
+    };
+    let annotated = crate::core::anchor::annotate(&body, start_line);
     let output = format!("{header}\n{annotated}");
     let sent = count_tokens(&output);
     (output, sent)
@@ -267,6 +302,11 @@ pub(crate) fn process_mode_tuned(
         ),
         "full-compact" => format_full_compact_output(content),
         "anchored" => format_anchored_output(file_ref, short, content, line_count),
+        mode if mode.starts_with("anchored:") => {
+            let range_str = &mode[9..];
+            let (start, end) = parse_anchored_range(range_str, line_count);
+            format_anchored_output_window(file_ref, short, content, line_count, Some((start, end)))
+        }
         "signatures" => render_signatures(content, ctx),
         "map" => render_map(content, ctx),
         "aggressive" => render_aggressive(content, ctx),
@@ -477,6 +517,21 @@ pub(crate) fn extract_line_range(content: &str, range_str: &str) -> String {
         "No lines matched the range.".to_string()
     } else {
         selected.join("\n")
+    }
+}
+
+/// Parses a single `"start-end"` (or bare `"start"`, meaning "to EOF") window
+/// payload for `anchored:N-M` (#811). Single-span only — unlike `lines:`,
+/// an anchored window feeds `ctx_patch`, which edits one contiguous region at
+/// a time, so comma multi-select isn't needed here.
+fn parse_anchored_range(range_str: &str, total: usize) -> (usize, usize) {
+    if let Some((s, e)) = range_str.split_once('-') {
+        let start = s.trim().parse::<usize>().unwrap_or(1).max(1);
+        let end = e.trim().parse::<usize>().unwrap_or(total).min(total);
+        (start, end)
+    } else {
+        let start = range_str.trim().parse::<usize>().unwrap_or(1).max(1);
+        (start, total)
     }
 }
 

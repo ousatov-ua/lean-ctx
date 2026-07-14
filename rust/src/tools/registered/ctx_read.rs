@@ -871,9 +871,23 @@ fn lines_mode(start: i64, limit: Option<i64>) -> String {
     }
 }
 
+/// Build the `anchored:N-M` mode string for a resolved window (#811) — mirrors
+/// `lines_mode`, keeping the `anchored:` prefix so the render path re-attaches
+/// hash anchors to the window instead of falling back to plain numbered lines.
+fn anchored_lines_mode(start: i64, limit: Option<i64>) -> String {
+    match limit {
+        Some(l) => format!("anchored:{start}-{}", start + l - 1),
+        None => format!("anchored:{start}-999999"),
+    }
+}
+
 /// Apply a resolved line window to `mode`/`fresh`. An explicit non-lines mode
 /// (map/signatures/…) is never clobbered (#259), and `start_line=1` with no
-/// limit is a no-op so it cannot disturb an auto/explicit read (#253).
+/// limit is a no-op so it cannot disturb an auto/explicit read (#253). An
+/// explicit `anchored` mode is windowed in place (`anchored:N-M`, #811)
+/// instead of being collapsed to `lines:N-M` — that would silently drop the
+/// hash anchors the caller asked for, and previously let a bounded anchored
+/// read fall through to rendering (and erroring on) the whole file.
 fn apply_line_window(
     mode: &mut String,
     fresh: &mut bool,
@@ -889,7 +903,9 @@ fn apply_line_window(
         return;
     }
     *fresh = true;
-    if !explicit_mode || mode.starts_with("lines") {
+    if mode == "anchored" {
+        *mode = anchored_lines_mode(start, limit);
+    } else if !explicit_mode || mode.starts_with("lines") {
         *mode = lines_mode(start, limit);
     }
 }
