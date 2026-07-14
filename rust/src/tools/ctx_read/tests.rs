@@ -1906,3 +1906,124 @@ fn gh775_cold_ranged_read_returns_only_window() {
 
     crate::test_env::remove_var("LEAN_CTX_SHOW_SAVINGS");
 }
+
+// ---------------------------------------------------------------------------
+// #811: the `anchored:N-M` disk-streaming short-circuit. A fresh, explicitly
+// windowed anchored read must never materialize the whole file — these tests
+// exercise `read_line_window`/`parse_disk_anchor_range` directly, and the
+// end-to-end case that motivated it: a file bigger than `LCTX_MAX_READ_BYTES`
+// must still serve a small anchored window instead of erroring "file too
+// large" (the bug that `read_file_lossy`'s own error message told the caller
+// to route around, but couldn't actually satisfy before this fix).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_disk_anchor_range_accepts_dash_form_only() {
+    assert_eq!(parse_disk_anchor_range("5-10"), Some((5, 10)));
+    assert_eq!(parse_disk_anchor_range("1-999999"), Some((1, 999_999)));
+    // Bare "N" (meaning "to EOF") needs a known total to resolve — the
+    // streaming path doesn't have one up front, so it declines rather than
+    // guess, and the caller falls back to the full-read path.
+    assert_eq!(parse_disk_anchor_range("5"), None);
+    assert_eq!(parse_disk_anchor_range("not-a-range"), None);
+}
+
+#[test]
+fn read_line_window_streams_only_the_requested_span() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("window.txt");
+    let body = (1..=50)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, format!("{body}\n")).unwrap();
+    let p = path.to_string_lossy().to_string();
+
+    let window = read_line_window(&p, 10, 12).expect("streamed read must succeed");
+    assert_eq!(window.total_lines, 50);
+    assert_eq!(window.start, 10);
+    assert_eq!(window.end, 12);
+    assert_eq!(window.body, "line 10\nline 11\nline 12");
+}
+
+#[test]
+fn read_line_window_clamps_end_to_eof() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("short.txt");
+    std::fs::write(&path, "a\nb\nc\n").unwrap();
+    let p = path.to_string_lossy().to_string();
+
+    let window = read_line_window(&p, 2, 999_999).expect("streamed read must succeed");
+    assert_eq!(window.total_lines, 3);
+    assert_eq!(window.end, 3, "end must clamp to the real EOF, not the sentinel");
+    assert_eq!(window.body, "b\nc");
+}
+
+/// The end-to-end regression case: a file over `LCTX_MAX_READ_BYTES` must
+/// still serve a bounded `anchored:N-M` read. Before #811's disk-streaming
+/// short-circuit, `handle_with_options_inner` always called `read_file_lossy`
+/// first regardless of mode, so a window request on an oversized file failed
+/// with the same "file too large" error as a `full` read — even though
+/// `read_file_lossy`'s own error message recommends a line-range read as the
+/// escape hatch.
+#[test]
+fn disk_windowed_anchored_read_serves_file_over_the_size_cap() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.rs");
+    let body = (1..=500)
+        .map(|i| format!("fn function_number_{i}() {{}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, format!("{body}\n")).unwrap();
+    let p = path.to_string_lossy().to_string();
+    let real_size = std::fs::metadata(&path).unwrap().len();
+
+    crate::test_env::set_var("LCTX_MAX_READ_BYTES", "512");
+    assert!(
+        real_size > 512,
+        "fixture must exceed the test cap to exercise the regression"
+    );
+
+    // Sanity: an ordinary full read of the oversized file is rejected.
+    let full_err = read_file_lossy(&p);
+    assert!(full_err.is_err(), "full read must hit the size cap");
+
+    let mut cache = SessionCache::new();
+    let out = handle_with_options_inner(
+        &mut cache,
+        &p,
+        "anchored:5-7",
+        /* fresh */ true,
+        CrpMode::Off,
+        None,
+        ReadTuning::default(),
+        None,
+    );
+    crate::test_env::remove_var("LCTX_MAX_READ_BYTES");
+
+    assert_eq!(out.resolved_mode, "anchored:5-7");
+    assert!(
+        out.content.contains("function_number_5")
+            && out.content.contains("function_number_7"),
+        "must contain the requested window: {}",
+        out.content
+    );
+    assert!(
+        !out.content.contains("function_number_1()")
+            && !out.content.contains("function_number_500"),
+        "must NOT contain lines outside the window: {}",
+        out.content
+    );
+    assert!(
+        out.content.contains("500L"),
+        "header must report the file's true total line count: {}",
+        out.content
+    );
+    assert!(
+        !out.content.to_lowercase().contains("too large")
+            && !out.content.to_lowercase().contains("error"),
+        "must not surface the size-cap error for a bounded window: {}",
+        out.content
+    );
+}

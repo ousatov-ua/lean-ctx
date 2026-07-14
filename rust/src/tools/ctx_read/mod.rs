@@ -166,6 +166,100 @@ pub fn read_file_lossy(path: &str) -> Result<String, std::io::Error> {
     Ok(crate::core::io_boundary::strip_utf8_bom(s))
 }
 
+/// A streamed line-window read (#811): only the requested span's raw lines,
+/// plus the file's true total line count for the header — the rest of the
+/// file is never buffered.
+struct LineWindow {
+    /// Raw lines within `[start, end]`, joined with `\n`.
+    body: String,
+    /// True total line count of the file.
+    total_lines: usize,
+    /// Clamped, 1-based inclusive bounds actually served.
+    start: usize,
+    end: usize,
+}
+
+/// Parses an `anchored:` window payload for the disk-streaming short-circuit
+/// below. Only the dash form (`"N-M"`) is fast-pathed — `anchored_lines_mode`
+/// (the registered handler) always emits it, using the `999999` EOF sentinel
+/// rather than a bare `"N"`. A hand-typed bare payload (meaning "N to EOF")
+/// returns `None` and falls through to the normal full-read path instead of
+/// guessing a total line count up front.
+fn parse_disk_anchor_range(payload: &str) -> Option<(usize, usize)> {
+    let (s, e) = payload.split_once('-')?;
+    let start = s.trim().parse::<usize>().ok()?.max(1);
+    let end = e.trim().parse::<usize>().ok()?;
+    Some((start, end))
+}
+
+/// Streams `path` line-by-line and extracts only `[start, end]` (1-based,
+/// inclusive) without ever holding the whole file in memory — the
+/// anchored-window counterpart to [`read_file_lossy`] (#811). Every line is
+/// still counted (one cheap UTF-8 pass, no per-line allocation outside the
+/// requested window) so the caller can report the true total. Returns `None`
+/// on anything that isn't a clean streamed text read (I/O error, a binary
+/// file, invalid UTF-8 anywhere in the file) so the caller can fall back to
+/// the existing, more permissive `read_file_lossy` path — behaviour never
+/// regresses, it just doesn't always get the fast path.
+fn read_line_window(path: &str, start: usize, end: usize) -> Option<LineWindow> {
+    if crate::core::binary_detect::is_binary_file(path) {
+        return None;
+    }
+    use std::io::BufRead;
+    let file = open_with_retry(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut total = 0usize;
+    let mut collected = Vec::new();
+    for line in reader.lines() {
+        let line = line.ok()?;
+        total += 1;
+        if total >= start && total <= end {
+            collected.push(line);
+        }
+    }
+    Some(LineWindow {
+        body: collected.join("\n"),
+        total_lines: total,
+        start: start.min(total.max(1)),
+        end: end.min(total),
+    })
+}
+
+/// #811: attempt the disk-streaming short-circuit for a fresh `anchored:N-M`
+/// read. `None` when the request isn't eligible (not a windowed anchored
+/// read, or a preread is already in hand — nothing to short-circuit) or the
+/// fast path can't run cleanly (binary file, invalid UTF-8, I/O error); the
+/// caller falls through to the normal full-read path in that case.
+fn try_disk_anchored_window(
+    path: &str,
+    mode: &str,
+    fresh: bool,
+    preread_is_none: bool,
+    file_ref: &str,
+    short: &str,
+) -> Option<ReadOutput> {
+    if !fresh || !preread_is_none {
+        return None;
+    }
+    let range = mode.strip_prefix("anchored:")?;
+    let (start, end) = parse_disk_anchor_range(range)?;
+    let window = read_line_window(path, start, end)?;
+    let (out, _) = format_anchored_output_window(
+        file_ref,
+        short,
+        &window.body,
+        window.total_lines,
+        Some((window.start, window.end)),
+    );
+    let out = crate::core::redaction::redact_text_if_enabled(&out);
+    let sent = count_tokens(&out);
+    Some(ReadOutput {
+        content: out,
+        resolved_mode: mode.to_string(),
+        output_tokens: sent,
+    })
+}
+
 /// Opens a file, retrying once after a brief pause on NotFound.
 /// Works around overlay/FUSE stat-cache races in container runtimes (Docker, Codex).
 /// Uses O_NOFOLLOW on Unix for TOCTOU symlink protection.
@@ -782,6 +876,13 @@ fn handle_with_options_inner(
             };
         }
         cache.invalidate(path);
+    }
+
+    // #811: a fresh, explicitly windowed `anchored:N-M` read never needs the
+    // cache (fresh always bypasses it) or the whole file in memory — try the
+    // disk-streaming short-circuit first.
+    if let Some(out) = try_disk_anchored_window(path, mode, fresh, preread.is_none(), &file_ref, &short) {
+        return out;
     }
 
     if mode == "diff" {

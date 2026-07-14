@@ -21,6 +21,7 @@ pub mod extractive;
 pub mod finops_export;
 pub mod information_bottleneck;
 pub mod json_crush;
+pub mod json_sample;
 pub mod markdown_compact;
 pub mod output_sanitizer;
 pub mod policy;
@@ -51,6 +52,7 @@ pub mod compression {
     pub use super::entropy;
     pub use super::information_bottleneck;
     pub use super::json_crush;
+    pub use super::json_sample;
     pub use super::pop_pruning;
     pub use super::preservation;
     pub use super::progressive_compression;

@@ -1166,9 +1166,23 @@ fn lines_mode(start: i64, limit: Option<i64>) -> String {
     }
 }
 
+/// Build the `anchored:N-M` mode string for a resolved window (#811) — mirrors
+/// `lines_mode`, keeping the `anchored:` prefix so the render path re-attaches
+/// hash anchors to the window instead of falling back to plain numbered lines.
+fn anchored_lines_mode(start: i64, limit: Option<i64>) -> String {
+    match limit {
+        Some(l) => format!("anchored:{start}-{}", start + l - 1),
+        None => format!("anchored:{start}-999999"),
+    }
+}
+
 /// Apply a resolved line window to `mode`/`fresh`. An explicit non-lines mode
 /// (map/signatures/…) is never clobbered (#259), and `start_line=1` with no
-/// limit is a no-op so it cannot disturb an auto/explicit read (#253).
+/// limit is a no-op so it cannot disturb an auto/explicit read (#253). An
+/// explicit `anchored` mode is windowed in place (`anchored:N-M`, #811)
+/// instead of being collapsed to `lines:N-M` — that would silently drop the
+/// hash anchors the caller asked for, and previously let a bounded anchored
+/// read fall through to rendering (and erroring on) the whole file.
 fn apply_line_window(
     mode: &mut String,
     fresh: &mut bool,
@@ -1184,15 +1198,14 @@ fn apply_line_window(
         return;
     }
     *fresh = true;
-    // #811: always switch to `lines:N-M` when a line window is requested,
-    // even with an explicit mode like "anchored". The old guard
-    // `!explicit_mode || mode.starts_with("lines")` caused anchored/full/map
-    // reads with start_line/limit to ignore the window and materialize the
-    // entire file — overflowing the token budget on large files.
-    // The line range is the caller's primary intent; the display format is
-    // secondary. A bare `ctx_read(mode="anchored")` without start_line still
-    // returns the full anchored view.
-    *mode = lines_mode(start, limit);
+    // #811: anchored gets its own windowed variant (preserves hashes for
+    // ctx_patch); every other mode switches to lines:N-M to prevent
+    // full-file materialization on large files.
+    if mode == "anchored" {
+        *mode = anchored_lines_mode(start, limit);
+    } else {
+        *mode = lines_mode(start, limit);
+    }
 }
 
 /// #513: resolve the `raw=true` convenience flag into the effective explicit
@@ -1470,14 +1483,14 @@ mod tests {
         assert!(fresh);
     }
 
-    /// #811: anchored + start_line + limit must switch to bounded lines
-    /// to prevent full-file materialization on large files.
+    /// #811: anchored + start_line + limit → anchored:N-M (preserves
+    /// anchor hashes for ctx_patch, streams only the window off disk).
     #[test]
-    fn anchored_with_start_line_and_limit_becomes_bounded_lines() {
+    fn anchored_with_start_line_and_limit_becomes_windowed_anchored() {
         let mut mode = "anchored".to_string();
         let mut fresh = false;
         super::apply_line_window(&mut mode, &mut fresh, true, Some(715), None, Some(3));
-        assert_eq!(mode, "lines:715-717");
+        assert_eq!(mode, "anchored:715-717");
         assert!(fresh);
     }
 
