@@ -14,7 +14,6 @@ ALLOWLIST=(
   rust/src/core/config/mod.rs
   rust/src/core/rules_canonical.rs
   rust/src/core/config/tests.rs
-  rust/src/tools/ctx_read/tests.rs
   rust/src/shell/compress/tests.rs
   rust/src/http_server/mod.rs
   rust/src/http_server/team/mod.rs
