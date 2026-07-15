@@ -30,14 +30,70 @@ pub fn redact_text_if_enabled(input: &str) -> String {
 /// the literal value — the value lives in a gitignored `.env`. Digits make a
 /// token secret-shaped (base64/hex), so any digit keeps the redaction
 /// (conservative: `password=hunter2` stays covered).
+/// #827: detect pure numeric values — integers, floats, scientific notation.
+/// These are never secrets even when the key contains `token` or `key`.
+fn looks_like_number(v: &str) -> bool {
+    if v.is_empty() {
+        return false;
+    }
+    let s = v.trim_start_matches(['+', '-']);
+    if s.is_empty() {
+        return false;
+    }
+    // Integer, float, or scientific notation (1.4e-06, 0.5, 600, 1e10)
+    s.parse::<f64>().is_ok()
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')
+}
+
+/// #827: env-variable reference patterns that should not be redacted.
+/// Matches: `os.environ/NAME`, `os.getenv("NAME")`, `process.env.NAME`,
+/// `inputEnv.NAME`, `${NAME}`, `$NAME`, `%NAME%` (Windows).
+fn is_env_reference(v: &str) -> bool {
+    if v.starts_with("os.environ/")
+        || v.starts_with("os.getenv(")
+        || v.starts_with("process.env.")
+        || v.starts_with("System.getenv(")
+        || v.starts_with("ENV[")
+        || v.starts_with("env(")
+    {
+        return true;
+    }
+    // Variable interpolation: ${VAR}, $VAR, %VAR%
+    if (v.starts_with("${") && v.ends_with('}'))
+        || (v.starts_with('$')
+            && v[1..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        || (v.starts_with('%') && v.ends_with('%') && v.len() > 2)
+    {
+        return true;
+    }
+    // Dotted identifier chains with an env-like prefix
+    if let Some(prefix) = v.split('.').next() {
+        let pl = prefix.to_ascii_lowercase();
+        if matches!(
+            pl.as_str(),
+            "env" | "inputenv" | "serverenv" | "secrets" | "vars" | "environ"
+        ) && v.contains('.')
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_identifier_reference(value: &str) -> bool {
     let v = value.trim();
-    if v.is_empty()
-        || v.starts_with('"')
-        || v.starts_with('\'')
-        || v.starts_with('`')
-        || v.contains(|c: char| c.is_ascii_digit())
-    {
+    if v.is_empty() || v.starts_with('"') || v.starts_with('\'') || v.starts_with('`') {
+        return false;
+    }
+    // #827: env-variable reference patterns are not secrets.
+    // `os.environ/MY_SERVICE_API_KEY`, `process.env.NAME`, `${VAR}`, `$VAR`.
+    if is_env_reference(v) {
+        return true;
+    }
+    if v.contains(|c: char| c.is_ascii_digit()) {
         return false;
     }
     v.split('.').all(|segment| {
@@ -85,6 +141,11 @@ fn is_non_secret_literal(value: &str) -> bool {
     let v = value
         .trim()
         .trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    // #827: pure numbers (integer, float, scientific notation) are never secrets.
+    // `input_cost_per_token: 1.4e-06` must not be redacted.
+    if looks_like_number(v) {
+        return true;
+    }
     // Type expressions are never flat secret tokens: real keys/tokens are drawn
     // from `[A-Za-z0-9+/=_-]`, whereas type annotations carry angle brackets,
     // unions, arrays or call/object syntax. `password: Promise<string>` and
@@ -475,5 +536,75 @@ mod tests {
         let (out, hits) = redact_with_patterns("nothing sensitive here", &patterns);
         assert_eq!(hits, 0);
         assert_eq!(out, "nothing sensitive here");
+    }
+
+    /// GH #827: scientific notation and plain numbers after keys containing
+    /// `token` must not be redacted — these are pricing/cost fields.
+    #[test]
+    fn keeps_numeric_values_827() {
+        for (input, desc) in [
+            ("input_cost_per_token: 1.4e-06", "scientific notation"),
+            ("output_cost_per_token: 4.4e-06", "scientific notation"),
+            (
+                "cache_read_input_token_cost: 1.9e-07",
+                "scientific notation",
+            ),
+            ("token: 600", "plain integer"),
+            ("secret: 0.5", "decimal float"),
+            ("api_key: 42", "small integer"),
+            ("password: 3.14", "pi float"),
+        ] {
+            assert_eq!(
+                redact_text(input),
+                input,
+                "must not redact numeric value ({desc}): {input}"
+            );
+        }
+    }
+
+    /// GH #827: env-variable references must not be redacted — they are
+    /// pointers to secrets, not the secrets themselves.
+    #[test]
+    fn keeps_env_references_827() {
+        for (input, desc) in [
+            (
+                "api_key: os.environ/MY_SERVICE_API_KEY",
+                "Python os.environ/",
+            ),
+            ("secret: os.getenv(MY_KEY)", "Python os.getenv()"),
+            ("token: process.env.API_TOKEN", "Node process.env"),
+            (
+                "password: inputEnv.POCKETBASE_SUPERUSER_PASSWORD",
+                "inputEnv dot ref",
+            ),
+            ("api_key: ${MY_API_KEY}", "shell interpolation ${}"),
+            ("secret: $MY_SECRET", "shell $VAR"),
+            ("token: %API_TOKEN%", "Windows %VAR%"),
+            ("api_key: ENV[API_KEY]", "Ruby ENV[]"),
+            ("secret: env(SECRET_KEY)", "Laravel env()"),
+            ("password: System.getenv(DB_PASS)", "Java System.getenv"),
+        ] {
+            assert_eq!(
+                redact_text(input),
+                input,
+                "must not redact env ref ({desc}): {input}"
+            );
+        }
+    }
+
+    /// GH #827: real secrets must STILL be redacted (regression guard).
+    #[test]
+    fn still_redacts_real_secrets_827() {
+        for input in [
+            "api_key: sk-1234567890abcdef1234567890abcdef",
+            "password: hunter2-super-secret-value",
+            "token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature",
+        ] {
+            let out = redact_text(input);
+            assert!(
+                out.contains("[REDACTED"),
+                "must redact real secret: {input} -> {out}"
+            );
+        }
     }
 }
