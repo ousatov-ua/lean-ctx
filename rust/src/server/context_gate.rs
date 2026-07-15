@@ -2,6 +2,22 @@ use crate::core::context_field::{ContextItemId, ContextState};
 use crate::core::context_ledger::{ContextLedger, PressureAction};
 use crate::core::context_overlay::{OverlayOp, OverlayStore};
 
+/// #843: precise, pinned reads (`diff`, `lines:N-M`, `anchored`/`anchored:N-M`)
+/// must pass through every mode-override path untouched — bounce-prevention,
+/// pressure-downgrade, and the graph/knowledge heuristics below must never
+/// silently reinterpret one of these to e.g. `full`, which would discard the
+/// exact window/anchors/delta the caller asked for. Classifies off the typed
+/// `ReadMode` (single source of truth, see `tools::ctx_read::mode`) rather than
+/// a hand-maintained string-prefix list, so a future precise mode has to be
+/// added to `ReadMode::is_precise_pinned_read` explicitly instead of silently
+/// falling through an allowlist. An unparseable mode is conservatively treated
+/// as *not* pinned, matching prior behaviour for anything outside this set.
+fn is_precise_pinned_mode(requested_mode: &str) -> bool {
+    requested_mode
+        .parse::<crate::tools::ctx_read::ReadMode>()
+        .is_ok_and(|m| m.is_precise_pinned_read())
+}
+
 #[derive(Debug, Clone)]
 pub struct PreDispatchResult {
     pub overridden_mode: Option<String>,
@@ -71,7 +87,7 @@ pub fn pre_dispatch_read_for_agent(
                 );
                 let mut result = no_change.clone();
                 result.budget_warning = Some(warning);
-                if requested_mode == "diff" || requested_mode.starts_with("lines") {
+                if is_precise_pinned_mode(requested_mode) {
                     return result;
                 }
                 let rest = pre_dispatch_inner(path, requested_mode, task, project_root, pressure);
@@ -102,7 +118,7 @@ fn pre_dispatch_inner(
         budget_warning: None,
     };
 
-    if requested_mode == "diff" || requested_mode.starts_with("lines") {
+    if is_precise_pinned_mode(requested_mode) {
         return no_change;
     }
 
@@ -471,6 +487,38 @@ mod tests {
     fn pre_dispatch_passthrough_for_diff() {
         let result = pre_dispatch_read("src/main.rs", "diff", None, None, None);
         assert!(result.overridden_mode.is_none());
+    }
+
+    #[test]
+    fn pre_dispatch_passthrough_for_anchored_window() {
+        // #843: a windowed anchored:N-M read must keep its hash anchors —
+        // bounce-prevention, pressure-downgrade, etc. must not clobber it to
+        // "full" and silently drop the window.
+        {
+            let mut bt = crate::core::bounce_tracker::global().lock().unwrap();
+            bt.set_seq(101);
+            bt.record_read("anchored-bouncy.yml", "map", 30, 400);
+            bt.set_seq(102);
+            bt.record_read("anchored-bouncy.yml", "full", 400, 400);
+            bt.set_seq(103);
+            bt.record_read("a2.yml", "map", 30, 400);
+            bt.set_seq(104);
+            bt.record_read("a2.yml", "full", 400, 400);
+            bt.set_seq(105);
+            bt.record_read("a3.yml", "map", 30, 400);
+            bt.set_seq(106);
+            bt.record_read("a3.yml", "full", 400, 400);
+        }
+        let result = pre_dispatch_read("anchored-new.yml", "anchored:10-40", None, None, None);
+        assert!(
+            result.overridden_mode.is_none(),
+            "anchored:N-M must not be overridden by bounce-prevention"
+        );
+        let bare = pre_dispatch_read("anchored-new.yml", "anchored", None, None, None);
+        assert!(
+            bare.overridden_mode.is_none(),
+            "bare anchored mode must not be overridden by bounce-prevention"
+        );
     }
 
     #[test]
