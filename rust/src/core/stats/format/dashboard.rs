@@ -221,7 +221,7 @@ pub fn format_gain_body() -> String {
 
 /// The standalone gain dashboard footer (contextual tip, Context OS, hints).
 pub fn format_gain_footer() -> String {
-    let store = crate::core::stats::load();
+    let store = crate::core::stats::load_for_display();
     let mut out = Vec::new();
     append_gain_footer(&mut out, &active_theme(), &store);
     out.join("\n")

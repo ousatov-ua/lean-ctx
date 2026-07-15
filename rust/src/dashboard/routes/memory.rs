@@ -106,7 +106,7 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
                         })
                 })
                 .unwrap_or_default();
-            let global = crate::core::stats::load();
+            let global = crate::core::stats::load_for_display();
             let g_cmds = global.total_commands;
             let g_input = global.total_input_tokens;
             let g_output = global.total_output_tokens;
@@ -136,7 +136,7 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
         // session, newest first, so users with several IDE windows can see
         // which projects lean-ctx serves and how fresh each one is.
         "/api/workspaces" => {
-            let last_use = crate::core::stats::load()
+            let last_use = crate::core::stats::load_for_display()
                 .last_use
                 .as_deref()
                 .and_then(|lu| chrono::DateTime::parse_from_rfc3339(lu).ok())

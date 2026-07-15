@@ -121,7 +121,7 @@ struct FileHeat {
 
 impl AppState {
     fn new() -> Self {
-        let store = crate::core::stats::load();
+        let store = crate::core::stats::load_for_display();
         let heatmap = crate::core::heatmap::HeatMap::load();
         let files = heatmap
             .entries

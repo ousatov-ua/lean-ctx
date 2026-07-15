@@ -152,7 +152,7 @@ fn build_report(project_root_override: Option<&str>) -> Result<(TokenReport, Pat
         warnings.push("no active session found".to_string());
     }
 
-    let store = crate::core::stats::load();
+    let store = crate::core::stats::load_for_display();
     let last_snapshot = store.cep.scores.last().map(|s| CepSnapshot {
         timestamp: s.timestamp.clone(),
         score: s.score,

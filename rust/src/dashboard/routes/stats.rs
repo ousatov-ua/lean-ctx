@@ -6,7 +6,7 @@ pub(super) fn handle(
 ) -> Option<(&'static str, &'static str, String)> {
     match path {
         "/api/stats" => {
-            let store = crate::core::stats::load();
+            let store = crate::core::stats::load_for_display();
             let mut value = serde_json::to_value(&store).unwrap_or_else(|_| serde_json::json!({}));
             if let Some(obj) = value.as_object_mut() {
                 let echo = crate::core::output_echo::load_stats();

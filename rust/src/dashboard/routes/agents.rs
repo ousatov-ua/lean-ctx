@@ -165,7 +165,7 @@ fn build_mcp_tools_json() -> String {
     // All-time per-tool aggregates from stats.json — the same source Home and
     // ROI use. The event log only holds the last N events, which silently
     // understated these counters as a pseudo all-time view (#492).
-    let store = crate::core::stats::load();
+    let store = crate::core::stats::load_for_display();
 
     let mut tool_stats: HashMap<String, ToolAgg> = HashMap::new();
 

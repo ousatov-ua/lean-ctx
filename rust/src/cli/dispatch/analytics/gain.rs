@@ -534,7 +534,7 @@ fn cmd_opportunity() {
     let history = crate::cli::common::load_shell_history();
     let result = crate::tools::ctx_discover::analyze_history(&history, 10);
 
-    let store = core::stats::load();
+    let store = core::stats::load_for_display();
     let optimized_cmds = store.total_commands;
 
     if result.missed_commands.is_empty() {

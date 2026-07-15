@@ -27,7 +27,7 @@ pub struct WrappedReport {
 
 impl WrappedReport {
     pub fn generate(period: &str) -> Self {
-        let store = stats::load();
+        let store = stats::load_for_display();
         let sessions = SessionState::list_sessions();
 
         let (gross_tokens_saved, tokens_input, total_commands) = match period {
