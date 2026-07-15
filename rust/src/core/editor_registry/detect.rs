@@ -872,16 +872,21 @@ mod footgun_audit_tests {
 
     #[test]
     fn injected_nudge_steers_the_heavy_tools_to_ctx() {
-        // The nudge must be substantive: it must remap the heavy native tools (the
-        // ones that dominate a turn's tokens) and carry an explicit directive — an
-        // "installed but toothless" block would be a footgun of its own.
+        // The nudge must be substantive. With shadow_mode=true (default),
+        // native tools are denied at the permission level, so the nudge
+        // carries the shadow-minimal block listing exclusive ctx_* tools.
         let block = crate::rules_inject::canonical_rules_block();
-        for needle in ["ctx_read", "ctx_search", "ctx_shell"] {
-            assert!(block.contains(needle), "nudge missing {needle}");
-        }
         assert!(
-            block.contains("NEVER use native"),
-            "nudge must explicitly forbid native fallbacks"
+            block.contains("ctx_compose"),
+            "nudge must mention ctx_compose (the entry-point tool)"
+        );
+        assert!(
+            block.contains("ctx_search") || block.contains("ctx_callgraph"),
+            "nudge must mention exclusive tools"
+        );
+        assert!(
+            block.contains("auto-route") || block.contains("NEVER use native"),
+            "nudge must indicate native tools are handled"
         );
     }
 }

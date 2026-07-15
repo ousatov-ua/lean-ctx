@@ -618,7 +618,7 @@ pub fn run() -> u32 {
         )
     } else {
         format!(
-            "{BOLD}Shadow mode{RST}  {DIM}disabled{RST}  {DIM}(enable: lean-ctx config set shadow_mode true){RST}"
+            "{BOLD}Shadow mode{RST}  {DIM}disabled{RST}  {DIM}(default: on — explicitly disabled via config){RST}"
         )
     };
     println!("  {shadow_line}");

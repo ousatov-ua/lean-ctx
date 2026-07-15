@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [3.9.9] — 2026-07-14
 
+### Changed
+- **`shadow_mode` default changed from `false` to `true`.**
+  Native tools (Read/Grep/Shell) are now denied at the permission level by
+  default, forcing agents to use ctx_* MCP tools for maximum compression.
+  Community feedback showed 60%+ token savings attributed to `ctx_read` alone
+  when shadow mode was enabled. Existing configs with an explicit
+  `shadow_mode = false` are not affected. Disable with
+  `lean-ctx config set shadow_mode false`.
+
 ### Fixed
 - **CRITICAL: Worktree data-loss prevention for `ctx_patch replace_symbol` (#803).**
   When both `name_path` and `path` are provided, the resolved symbol location

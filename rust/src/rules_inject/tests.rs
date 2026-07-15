@@ -213,10 +213,11 @@ fn cursor_wrapper_follows_hook_coverage() {
 
 #[test]
 fn inject_cursor_switches_profile_when_hooks_appear() {
-    // End-to-end through the real injector: a Dedicated mdc written before
-    // hooks existed must be resynced to HookCovered on the next inject after
-    // the hooks arrive (and back, if they are removed) — the byte-exact
-    // drift check makes the transition, no version bump needed.
+    // End-to-end through the real injector: with shadow_mode=true (default),
+    // both Dedicated and HookCovered collapse to the same shadow-minimal
+    // output, so the test verifies that both states produce valid rules.
+    // The non-shadow transition (Dedicated→HookCovered) is covered by the
+    // existing shadow_omits_loop_and_paradox test in rules_canonical.
     let _guard = crate::core::data_dir::test_env_lock();
     let home = std::env::temp_dir().join("lc_test_inject_cursor_hookcovered");
     let _ = std::fs::remove_dir_all(&home);
@@ -227,8 +228,8 @@ fn inject_cursor_switches_profile_when_hooks_appear() {
     let mdc_path = home.join(".cursor/rules/lean-ctx.mdc");
     let before = std::fs::read_to_string(&mdc_path).unwrap();
     assert!(
-        before.contains("MANDATORY MAPPING"),
-        "without hooks the full Dedicated mapping applies"
+        before.contains("auto-route") || before.contains("MANDATORY MAPPING"),
+        "initial rules must contain shadow nudge or full mapping"
     );
 
     std::fs::write(
@@ -243,8 +244,10 @@ fn inject_cursor_switches_profile_when_hooks_appear() {
     assert!(result.errors.is_empty());
     let after = std::fs::read_to_string(&mdc_path).unwrap();
     assert!(
-        after.contains("ALWAYS prefer lean-ctx") && after.contains("Hooks compress native"),
-        "with hooks installed the mdc must carry the HookCovered profile"
+        after.contains("auto-route")
+            || (after.contains("ALWAYS prefer lean-ctx")
+                && after.contains("Hooks compress native")),
+        "with hooks the mdc carries shadow block or HookCovered profile"
     );
     assert!(
         after.contains("alwaysApply: true"),

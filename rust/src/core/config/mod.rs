@@ -428,11 +428,11 @@ pub struct Config {
     /// Override via LEAN_CTX_NO_HOOK env var.
     #[serde(default)]
     pub shell_hook_disabled: bool,
-    /// Shadow mode: transparently intercepts native tool calls (Read/Grep/Shell)
-    /// via hooks, strengthens MCP instructions to MUST-level, and activates
-    /// immediate bypass hints on first native tool use. Enables "transparent
-    /// replacement" so agents use ctx_* without explicit opt-in.
-    #[serde(default)]
+    /// Shadow mode (default: true): denies native tools (Read/Grep/Shell) at
+    /// the permission level, forcing agents to use ctx_* MCP tools for maximum
+    /// compression. Without this, many harnesses silently prefer native tools,
+    /// negating lean-ctx's token savings. Disable with `shadow_mode = false`.
+    #[serde(default = "serde_defaults::default_true")]
     pub shadow_mode: bool,
     /// Global hook mode override. When set, overrides the per-agent auto-detection.
     /// - `replace`: Native Read/Grep/Glob/Shell denied, lean-ctx MCP is the only path
@@ -780,7 +780,7 @@ impl Default for Config {
             llm: crate::core::llm_enhance::LlmConfig::default(),
             embedding: EmbeddingConfig::default(),
             shell_hook_disabled: false,
-            shadow_mode: false,
+            shadow_mode: true,
             hook_mode: None,
             debug_log: false,
             shell_activation: ShellActivation::default(),

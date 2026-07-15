@@ -420,8 +420,8 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "shadow_mode".into(),
             key_with_env(
                 "bool",
-                serde_json::json!(false),
-                "Opt-in (default off): transparently route native Read/Grep/Edit/Shell through lean-ctx — via hooks for hook-based agents, via the interception plugin for OpenCode",
+                serde_json::json!(true),
+                "Default on: denies native tools at the permission level, forcing agents to use ctx_* MCP tools for maximum compression. Disable with shadow_mode = false if you prefer native tools.",
                 "LEAN_CTX_SHADOW_MODE",
             ),
         );

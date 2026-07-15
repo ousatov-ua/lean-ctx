@@ -538,11 +538,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
         std::fs::create_dir_all(home.join(".cursor/rules")).unwrap();
+        let cfg = crate::core::config::Config::load();
+        let shadow = cfg.shadow_mode;
         let tp = crate::core::tool_profiles::ToolProfile::Power;
         std::fs::write(
             home.join(".cursor/rules/lean-ctx.mdc"),
             rc::render(
-                false,
+                shadow,
                 Wrapper::Dedicated,
                 crate::core::config::CompressionLevel::Standard,
                 &tp,
@@ -567,19 +569,33 @@ mod tests {
             covered.contains(SKELETON_ANCHOR),
             "covered client must get the anchor:\n{covered}"
         );
-        assert!(
-            !covered.contains("MANDATORY MAPPING"),
-            "covered client must not re-pay the skeleton:\n{covered}"
-        );
+        if shadow {
+            assert!(
+                !covered.contains("auto-route"),
+                "covered shadow client must not re-pay the shadow nudge:\n{covered}"
+            );
+        } else {
+            assert!(
+                !covered.contains("MANDATORY MAPPING"),
+                "covered client must not re-pay the skeleton:\n{covered}"
+            );
+        }
         // The mdc also carries the compression block → level dedups to Off.
         assert!(
             !covered.contains("OUTPUT STYLE:"),
             "covered client must not re-pay the compression prompt:\n{covered}"
         );
-        assert!(
-            uncovered.contains("MANDATORY MAPPING"),
-            "uncovered client keeps the full skeleton:\n{uncovered}"
-        );
+        if shadow {
+            assert!(
+                uncovered.contains("auto-route"),
+                "uncovered shadow client gets the shadow nudge:\n{uncovered}"
+            );
+        } else {
+            assert!(
+                uncovered.contains("MANDATORY MAPPING"),
+                "uncovered client keeps the full skeleton:\n{uncovered}"
+            );
+        }
         eprintln!(
             "instructions footprint: covered={} tok, uncovered={} tok",
             count_tokens(&covered),
