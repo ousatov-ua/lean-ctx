@@ -157,6 +157,9 @@ pub fn publish(
     let agent: ureq::Agent = ureq::config::Config::builder()
         .tls_config(crate::core::http_client::platform_tls_config())
         .http_status_as_error(false)
+        .timeout_resolve(Some(std::time::Duration::from_secs(5)))
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_recv_response(Some(std::time::Duration::from_mins(1)))
         .build()
         .into();
     let resp = agent
@@ -251,6 +254,9 @@ fn http_get(url: &str, token: Option<&str>) -> Result<String, String> {
     let agent: ureq::Agent = ureq::config::Config::builder()
         .tls_config(crate::core::http_client::platform_tls_config())
         .http_status_as_error(false)
+        .timeout_resolve(Some(std::time::Duration::from_secs(5)))
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
         .build()
         .into();
     let mut req = agent.get(url);
@@ -281,6 +287,9 @@ fn http_get_bytes(url: &str, token: Option<&str>) -> Result<Vec<u8>, String> {
     let agent: ureq::Agent = ureq::config::Config::builder()
         .tls_config(crate::core::http_client::platform_tls_config())
         .http_status_as_error(false)
+        .timeout_resolve(Some(std::time::Duration::from_secs(5)))
+        .timeout_connect(Some(std::time::Duration::from_secs(10)))
+        .timeout_recv_response(Some(std::time::Duration::from_mins(1)))
         .build()
         .into();
     let mut req = agent.get(url);
