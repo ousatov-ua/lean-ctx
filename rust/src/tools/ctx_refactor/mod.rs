@@ -605,7 +605,30 @@ fn handle_symbol_edit(action: &str, args: &Value, project_root: &str) -> String 
         expected_hash,
     };
 
-    // 4) Dispatch (IDE-first, headless fallback) + format.
+    // 4) Pre-write syntax gate (#836): reject edits that would break a cleanly
+    //    parsing file. Build the hypothetical new content and check it.
+    let ext = std::path::Path::new(&edit.abs_path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("");
+    {
+        let start_off =
+            crate::lsp::edit_apply::offset_of(&content, range.start_line, range.start_char)
+                .unwrap_or(0);
+        let end_off = crate::lsp::edit_apply::offset_of(&content, range.end_line, range.end_char)
+            .unwrap_or(content.len());
+        let mut hypothetical =
+            String::with_capacity(content.len() - (end_off - start_off) + edit.text.len());
+        hypothetical.push_str(&content[..start_off]);
+        hypothetical.push_str(&edit.text);
+        hypothetical.push_str(&content[end_off..]);
+        if let Some(reason) = crate::core::syntax_validate::gate_edit(ext, &content, &hypothetical)
+        {
+            return reason;
+        }
+    }
+
+    // 5) Dispatch (IDE-first, headless fallback) + format.
     match apply_symbol_edit(action, project_root, &edit) {
         Ok(res) => format_edit_result(action, &edit.abs_path, &res),
         Err(e) => format!("ERROR: {e}"),

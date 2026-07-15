@@ -385,6 +385,25 @@ postimage: bytes={}, mtime_ms={post_mtime_ms}, md5={post_md5}",
         out.push_str("\n\nevidence (diff, redacted, bounded):\n```diff\n");
         out.push_str(&diff);
         out.push_str("\n```");
+        let balance = brace_balance(new_content);
+        if balance == 0 {
+            out.push_str("\nbrace-balance: ok (matched)");
+        } else {
+            out.push_str(&format!(
+                "\n⚠ brace-balance: {} unmatched '{{' — verify file integrity",
+                balance.abs()
+            ));
+        }
     }
     out
+}
+
+/// Counts unmatched `{` vs `}` in the full post-edit content. Returns the
+/// difference: positive = excess `{`, negative = excess `}`, 0 = balanced.
+fn brace_balance(content: &str) -> i64 {
+    content.chars().fold(0i64, |acc, c| match c {
+        '{' => acc + 1,
+        '}' => acc - 1,
+        _ => acc,
+    })
 }
