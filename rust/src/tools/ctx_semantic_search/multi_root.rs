@@ -466,6 +466,8 @@ pub(crate) fn hybrid_results_for_root(
         }
     }
 
+    boost_with_complexity(&mut results, root.to_str().unwrap_or(""), 0.3);
+
     results.truncate(top_k);
     Ok((results, coverage))
 }
@@ -491,6 +493,36 @@ pub(crate) fn boost_with_splade(
         }
     }
 
+    results.sort_by(|a, b| {
+        b.rrf_score
+            .partial_cmp(&a.rrf_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
+/// Boost results by code-health complexity signal (#877, #882).
+///
+/// Symbols with higher cognitive complexity (handle, dispatch, orchestration
+/// functions) are more likely edit targets than small leaf helpers sharing
+/// vocabulary with the query.
+pub(crate) fn boost_with_complexity(
+    results: &mut [HybridResult],
+    project_root: &str,
+    weight: f64,
+) {
+    if weight <= 0.0 || results.is_empty() {
+        return;
+    }
+    for r in results.iter_mut() {
+        if r.symbol_name.is_empty() {
+            continue;
+        }
+        if let Some(cc) = crate::core::code_health::fabric::hotspot_cc(project_root, &r.symbol_name)
+        {
+            let boost = weight * (1.0 + cc as f64).ln() / 100.0;
+            r.rrf_score += boost;
+        }
+    }
     results.sort_by(|a, b| {
         b.rrf_score
             .partial_cmp(&a.rrf_score)
@@ -575,6 +607,8 @@ pub(crate) fn bm25_graph_search(
     if filter.is_active() {
         results.retain(|r| filter.matches(&r.file_path));
     }
+    boost_with_complexity(&mut results, root.to_str().unwrap_or(""), 0.3);
+
     results.truncate(top_k);
 
     if cfg.splade_weight > 0.0 {
