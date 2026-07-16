@@ -3,6 +3,94 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+
+## [3.9.11] — 2026-07-16
+
+### Fixed
+- **ctx_patch(replace_all) silently deleted matched text** when replacement was
+  passed as `new_text` instead of `new_string`. Now returns a clear validation
+  error (#879).
+- **ctx_read(mode=anchored) ignored offset/limit after file grew via ctx_patch**
+  — the anchored cache now tracks post-edit line counts (#885).
+- **ctx_read(mode=anchored) windowed reads dropped per-line hashes** after the
+  first call and fell back to a full dump (#875).
+- **Symbol index went stale after ctx_patch edits** — auto-reindex now triggers
+  on content changes (#889).
+- **RAM guardian evicted only the first MCP server's caches**, leaving other
+  servers' caches untouched during memory pressure (#856).
+- **Dashboard reported 100% Critical / 0 remaining tokens** while real usage was
+  ~59% — token accounting now uses the correct aggregation (#895).
+- **Dashboard showed only 1 of N concurrent agent sessions** due to a write race
+  in the agent registry (#907).
+- **ctx_shell write-detector false-positives on heredocs and `/dev/null`
+  redirects** — `cat <<EOF`, `> /dev/null`, and `git commit -F -` are no longer
+  blocked (#897).
+- **Shell allowlist tokenized heredoc body as separate commands**, blocking
+  `git commit -F -` and similar patterns (#876).
+- **ctx_patch anchor shift-recovery** extended to `replace_lines` and `delete`
+  spans — edits with stale line numbers now relocate via content hash (#860).
+- **ctx_patch replace_symbol** batchability, doc-comment span ambiguity, and
+  misleading syntax-error locations fixed (#886).
+- **Events: persist globally unique IDs across processes and restarts** — the
+  sequence file now recovers from corruption (#863).
+- **Semantic index auto-downloads model weights** but ONNX Runtime is now
+  managed alongside them (#869).
+- **Shell allowlist blocked scratchpad script execution** (`sh`/`bash`/`$var`
+- **ctx_shell: unquoted-delimiter heredoc bodies false-positived** on both the
+  write-detector (Gate 1: `>` in body read as file redirect) and the allowlist
+  (Gate 2: body words checked as commands). Both gates now strip all heredoc
+  bodies before scanning; substitution detection preserved for security (#931).
+  commands); now provides guidance toward `ctx_execute` (#888).
+- **ctx_shell and ctx_execute enforced different security policies** for
+  identical shell content — policies are now unified (#905).
+- **path-escapes-root error** now mentions `extra_roots` and `allow_paths` as
+  fix options (#887).
+- **Context gate silently overrode explicit read modes** — overrides are now
+  observable with `overridden_mode` and `reason` fields (#894).
+
+### Added
+- **ctx_search: exclude filters** — `exclude_glob` (path-level) and
+  `exclude_pattern` (line-level, grep -v style) for targeted result
+  filtering (#870).
+- **ctx_search: regex relevance ranking** — common-token patterns no longer bury
+  relevant hits under incidental matches (#883).
+- **ctx_search: batch/grouped multi-query mode** for combining multiple search
+  patterns in a single call (#871).
+- **ctx_shell: nudge to structured tools** — pure `grep`/`rg`/`ls`/`find`
+  commands suggest `ctx_search`/`ctx_glob`/`ctx_tree` alternatives (#872).
+- **ctx_compose: improved semantic ranking** — entry-point functions now rank
+  above private leaf helpers for edit-intent tasks (#877); type definitions
+  rank above handler functions for understanding tasks (#882).
+- **ctx_compose: cold-start resilience** — returns partial results with a
+  deferred-note when the BM25 index is still building (#902).
+- **ctx_read: read-only extra roots** — session-scoped `SESSION_READ_ONLY_ROOTS`
+  auto-detects Go/Cargo/Python module caches and allows read-only access
+  without loosening the global jail (#899).
+- **Native-search deny hook** now surfaces `ctx_search` capabilities in the
+  denial message so agents know what to use instead (#873).
+- **Pi extension: `PI_CODING_AGENT_DIR` support** — respects the env variable
+  to set a custom pi home directory (#930).
+
+### Changed
+- **perf(graph): borrowed previous-scan symbols** — incremental scans no longer
+  clone the complete prior index; symbols are borrowed and only cloned per-batch
+  for files that need re-parsing (#925).
+- **perf(graph): FileId newtype + PathInterner** (Phase 1) — graph-local path
+  interning with O(1) equality/hashing; `rebuild_interner()` at all load
+  sites (#923).
+
+### Internal
+- **Adaptive batch sizing** uses `clamp()` instead of manual `min`/`max` chains;
+  `EST_TRANSIENT_PER_FILE` constants documented with per-phase justifications (#918).
+- **LOCK_ORDERING.md** updated with `SESSION_READ_ONLY_ROOTS` (L64) and
+  `SESSIONS` (L65) static locks.
+- **Test-code `.lock().unwrap()`** no longer cascades unrelated panics on
+  poisoned mutexes (#911).
+- **179 `unsafe env::set_var/remove_var` sites** now carry `SAFETY` comments
+  instead of stale TODOs (#912).
+- **`try_specific_pattern()` 89-branch if-cascade** (CC~90) replaced with a
+  dispatch table (#914).
+
 ## [3.9.10] — 2026-07-15
 
 ### Fixed

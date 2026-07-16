@@ -334,21 +334,21 @@ fn strip_leaves_unquoted_heredoc_body_intact() {
 }
 
 #[test]
-fn heredoc_quoted_delims_variants() {
+fn heredoc_delims_variants() {
     assert_eq!(
-        heredoc_quoted_delims("cat <<-\"END\""),
+        heredoc_delims("cat <<-\"END\"", true),
         vec!["END".to_string()]
     );
     assert_eq!(
-        heredoc_quoted_delims("a <<'X' b <<'Y'"),
+        heredoc_delims("a <<'X' b <<'Y'", true),
         vec!["X".to_string(), "Y".to_string()]
     );
     // `<<` inside a quoted string is not an operator.
-    assert!(heredoc_quoted_delims("echo '<<NOPE'").is_empty());
+    assert!(heredoc_delims("echo '<<NOPE'", true).is_empty());
     // here-string `<<<` has no body.
-    assert!(heredoc_quoted_delims("cat <<<herestring").is_empty());
+    assert!(heredoc_delims("cat <<<herestring", true).is_empty());
     // unquoted delimiter → not a candidate for stripping.
-    assert!(heredoc_quoted_delims("cat <<EOF").is_empty());
+    assert!(heredoc_delims("cat <<EOF", true).is_empty());
 }
 
 #[test]
@@ -1627,4 +1627,72 @@ fn block_message_mentions_ctx_execute() {
         msg.contains("ctx_execute"),
         "block message must mention ctx_execute as the script execution path: {msg}"
     );
+}
+
+// --- GH #931: unquoted-delimiter heredoc body false-positives ---
+
+#[test]
+fn unquoted_heredoc_body_gt_not_a_redirect() {
+    // Gate 2: `>` inside an unquoted heredoc body must not trip the
+    // command-segment check or the redirect scanner.
+    // Use `psql` (not an interpreter) because interpreter+heredoc is independently blocked.
+    let cmd = "psql <<SQL\nSELECT * FROM t WHERE x > 0;\nSQL";
+    let list = allow(&["psql"]);
+    let stripped = strip_all_heredoc_bodies(cmd);
+    assert!(
+        !stripped.contains("SELECT"),
+        "body must be stripped: {stripped}"
+    );
+    let result = check_all_segments(&stripped, &list);
+    assert!(
+        result.is_ok(),
+        "unquoted heredoc body with > must not block: {result:?}"
+    );
+}
+
+#[test]
+fn unquoted_heredoc_body_stripped_for_segments() {
+    let cmd = "cat <<EOF\nrm -rf /\nEOF";
+    let stripped = strip_all_heredoc_bodies(cmd);
+    assert_eq!(stripped, "cat <<EOF", "body + terminator must be stripped");
+}
+
+#[test]
+fn quoted_heredoc_still_stripped() {
+    let cmd = "cat <<'DELIM'\nsome > redirect looking thing\nDELIM";
+    let stripped = strip_all_heredoc_bodies(cmd);
+    assert_eq!(stripped, "cat <<'DELIM'");
+}
+
+#[test]
+fn heredoc_with_append_redirect_in_body() {
+    let cmd = "python3 - <<PY\nwith open('f') as fh:\n    fh.write('data >> more')\nPY";
+    let stripped = strip_all_heredoc_bodies(cmd);
+    assert!(!stripped.contains(">>"), ">> in body must be stripped");
+}
+
+#[test]
+fn real_redirect_outside_heredoc_still_detected() {
+    let cmd = "echo hello > output.txt";
+    let stripped = strip_all_heredoc_bodies(cmd);
+    assert_eq!(stripped, cmd, "no heredoc = unchanged");
+}
+
+#[test]
+fn heredoc_delims_unquoted_found() {
+    let delims = heredoc_delims("cat <<EOF", false);
+    assert_eq!(delims, vec!["EOF"]);
+    let delims_quoted_only = heredoc_delims("cat <<EOF", true);
+    assert!(
+        delims_quoted_only.is_empty(),
+        "unquoted not returned with quoted_only=true"
+    );
+}
+
+#[test]
+fn heredoc_delims_mixed_quoted_unquoted() {
+    let delims = heredoc_delims("cmd <<'A' <<B", false);
+    assert_eq!(delims, vec!["A", "B"]);
+    let delims_q = heredoc_delims("cmd <<'A' <<B", true);
+    assert_eq!(delims_q, vec!["A"]);
 }

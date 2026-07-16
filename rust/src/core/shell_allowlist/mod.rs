@@ -63,8 +63,15 @@ fn enforce_shell_allowlist(command: &str) -> Result<(), ShellError> {
     // #876: a quoted-delimiter heredoc body (`<<'EOF' … EOF`) is literal stdin
     // data, not commands. Strip it before analysis so the operator-splitter can't
     // dice a commit message (`feat(...)`) into bogus "segments" and block them.
-    let normalized = strip_quoted_heredoc_bodies(&normalized);
-    let cmd = normalized.as_str();
+    // #876: quoted-delimiter heredoc body = literal stdin, not commands.
+    // Substitution checks ($(), backticks) need the quoted-only strip so they
+    // can still flag expanding substitutions in unquoted bodies.
+    let quoted_stripped = strip_quoted_heredoc_bodies(&normalized);
+    // #931: for command-segment and redirect checks, strip ALL heredoc bodies
+    // (quoted + unquoted) — a `>` or command word in any body is opaque data.
+    let all_stripped = strip_all_heredoc_bodies(&normalized);
+    let cmd = quoted_stripped.as_str();
+    let cmd_all = all_stripped.as_str();
 
     if has_dangerous_patterns(cmd) {
         return Err(format!(
@@ -82,10 +89,10 @@ fn enforce_shell_allowlist(command: &str) -> Result<(), ShellError> {
 
     let allowlist = effective_allowlist();
     if allowlist.is_empty() {
-        check_unconditional_blocked_only(cmd)?;
+        check_unconditional_blocked_only(cmd_all)?;
         return Ok(());
     }
-    check_all_segments(cmd, &allowlist)
+    check_all_segments(cmd_all, &allowlist)
 }
 
 /// Normalize the command string: remove backslash-newline continuations and
@@ -120,7 +127,7 @@ fn strip_quoted_heredoc_bodies(command: &str) -> String {
     for line in command.lines() {
         if pending.is_empty() {
             out.push(line);
-            pending = heredoc_quoted_delims(line);
+            pending = heredoc_delims(line, true);
         } else if line.trim_start_matches('\t').trim() == pending[0] {
             // Terminator line: drop it and resume. `<<-` allows leading tabs; be
             // lenient (over-stripping body data is harmless — a heredoc body is
@@ -132,10 +139,30 @@ fn strip_quoted_heredoc_bodies(command: &str) -> String {
     out.join("\n")
 }
 
+/// Like `strip_quoted_heredoc_bodies` but strips bodies for **all** heredocs
+/// (quoted *and* unquoted delimiters). Use for checks that must never interpret
+/// heredoc body content as commands or redirects (#931).
+pub fn strip_all_heredoc_bodies(command: &str) -> String {
+    if !command.contains("<<") {
+        return command.to_string();
+    }
+    let mut out: Vec<&str> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for line in command.lines() {
+        if pending.is_empty() {
+            out.push(line);
+            pending = heredoc_delims(line, false);
+        } else if line.trim_start_matches('\t').trim() == pending[0] {
+            pending.remove(0);
+        }
+    }
+    out.join("\n")
+}
+
 /// Scan one line for heredoc operators with a **quoted** delimiter and return
 /// their bare delimiter names in source order. Quote-aware, so a `<<` inside a
 /// quoted string is ignored; a `<<<` here-string (no body) is skipped.
-fn heredoc_quoted_delims(line: &str) -> Vec<String> {
+fn heredoc_delims(line: &str, quoted_only: bool) -> Vec<String> {
     let bytes = line.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -186,7 +213,7 @@ fn heredoc_quoted_delims(line: &str) -> Vec<String> {
                     j += 1;
                 }
                 if let Some((delim, quoted, next)) = read_heredoc_delim(bytes, j) {
-                    if quoted {
+                    if !quoted_only || quoted {
                         delims.push(delim);
                     }
                     i = next;

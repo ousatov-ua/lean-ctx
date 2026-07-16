@@ -99,16 +99,11 @@ export interface ResolvedPiConfig {
   loaded: boolean;
 }
 
-/** Absolute path to the Pi override file (Pi's per-extension config convention). */
+/** Absolute path to the Pi override file (Pi's per-extension config convention).
+ *  Respects `PI_CODING_AGENT_DIR` when set (#930). */
 export function piConfigPath(): string {
-  return resolve(
-    homedir(),
-    ".pi",
-    "agent",
-    "extensions",
-    "pi-lean-ctx",
-    "config.json",
-  );
+  const piHome = process.env.PI_CODING_AGENT_DIR || resolve(homedir(), ".pi");
+  return resolve(piHome, "agent", "extensions", "pi-lean-ctx", "config.json");
 }
 
 function envFlag(name: string): boolean {
