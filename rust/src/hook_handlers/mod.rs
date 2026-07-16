@@ -748,54 +748,44 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) -> String {
     let binary = resolve_binary();
     let temp_path = redirect_temp_path(&path);
 
-    // Re-read passthrough (#938): Marker tracks (mtime, read_count).
-    // - read_count == 1 (StrReplace internal Read): native passthrough.
-    // - read_count >= 2 + mtime unchanged: [unchanged] stub (zero tokens).
-    // - read_count >= 2 + mtime changed: file was edited, re-compress.
+    // Re-read passthrough (#938): when a marker exists for this path, the
+    // model already saw the compressed view. Pass through natively so any
+    // subsequent Write/Edit gets the real file content — regardless of IDE.
+    //
+    // The hook redirect path intentionally does NOT send [unchanged] stubs:
+    // we cannot know whether a host's Edit tool fires an internal Read that
+    // also triggers this hook. If it does, a stub would be served as "file
+    // content" and break the edit. The [unchanged] stub lives safely on the
+    // MCP ctx_read path (session cache) where it never touches the Edit flow.
+    //
+    // Marker format: "{mtime}\n{read_count}" — mtime detects file changes,
+    // read_count is reserved for future per-host tuning.
     let marker = redirect_read_marker(&path);
     if marker.exists() {
         if let Ok(marker_data) = std::fs::read_to_string(&marker) {
             let parts: Vec<&str> = marker_data.splitn(2, '\n').collect();
             let stored_mtime = parts.first().unwrap_or(&"");
-            let read_count: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
             let current_mtime = file_mtime_str(&path);
 
-            if read_count >= 2 && current_mtime.as_str() == *stored_mtime {
-                let line_count = std::fs::read_to_string(&path).map_or(0, |c| c.lines().count());
-                let stub = format!("{path} [unchanged, {line_count}L]");
-                let stub_temp = redirect_temp_path(&path);
-                if std::fs::write(&stub_temp, &stub).is_ok() {
-                    let stub_str = stub_temp.to_str().unwrap_or("");
-                    debug_log::log_hook_decision(
-                        "redirect",
-                        "Read",
-                        Route::LeanCtx,
-                        &path,
-                        "re-read stub (file unchanged since first read)",
-                    );
-                    let _ = std::fs::write(&marker, format!("{stored_mtime}\n{}", read_count + 1));
-                    return build_redirect_output(tool_input, path_field, stub_str, None);
-                }
-            } else if current_mtime.as_str() != *stored_mtime {
-                debug_log::log_hook_decision(
-                    "redirect",
-                    "Read",
-                    Route::LeanCtx,
-                    &path,
-                    "file changed since first read — re-compress",
-                );
-                let _ = std::fs::remove_file(&marker);
-            } else {
+            if current_mtime.as_str() == *stored_mtime {
                 debug_log::log_hook_decision(
                     "redirect",
                     "Read",
                     Route::Native,
                     &path,
-                    "re-read passthrough (edit-safe #938)",
+                    "re-read passthrough (edit-safe, all IDEs)",
                 );
-                let _ = std::fs::write(&marker, format!("{stored_mtime}\n{}", read_count + 1));
+                let _ = std::fs::remove_file(&marker);
                 return build_dual_allow_output();
             }
+            debug_log::log_hook_decision(
+                "redirect",
+                "Read",
+                Route::LeanCtx,
+                &path,
+                "file changed since first read — re-compress",
+            );
+            let _ = std::fs::remove_file(&marker);
         } else {
             let _ = std::fs::remove_file(&marker);
         }
