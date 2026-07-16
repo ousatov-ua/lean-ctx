@@ -55,7 +55,11 @@ fn anchor_hash_for_line(anchored: &str, line: usize) -> String {
 async fn anchored_window_survives_ctx_patch() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("grow.go");
-    let body: String = (1..=30).map(|i| format!("func f{i}() {{}}\n")).collect();
+    let mut body = String::new();
+    for i in 1..=30 {
+        use std::fmt::Write;
+        let _ = writeln!(body, "func f{i}() {{}}");
+    }
     std::fs::write(&path, format!("package main\n\n{body}")).unwrap();
     let p = path.to_string_lossy().to_string();
     let ctx = ctx_for(dir.path(), &p);

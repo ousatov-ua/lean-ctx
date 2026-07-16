@@ -329,7 +329,11 @@ mod tests {
 
     #[test]
     fn head_tail_elides_only_the_middle() {
-        let lines: String = (0..200).map(|i| format!("L{i}\n")).collect();
+        let mut lines = String::new();
+        for i in 0..200 {
+            use std::fmt::Write;
+            let _ = writeln!(lines, "L{i}");
+        }
         let out = compact_head_tail(&lines, 5, 5);
         assert!(out.contains("L0") && out.contains("L4"));
         assert!(out.contains("L195") && out.contains("L199"));
