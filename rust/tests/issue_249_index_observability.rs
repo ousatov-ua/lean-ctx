@@ -37,9 +37,13 @@ fn oversized_index_records_observable_not_persisted_note() {
 
     // Isolate the index store and force the "too large" branch for any non-empty
     // index by setting the disk ceiling to 0 MB.
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LEAN_CTX_BM25_MAX_CACHE_MB", "0") };
 
     // A small but non-empty source tree so the build produces real chunks.
@@ -83,8 +87,12 @@ fn oversized_index_records_observable_not_persisted_note() {
         "status_json must expose the non-persistence note, got: {status}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_BM25_MAX_CACHE_MB") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

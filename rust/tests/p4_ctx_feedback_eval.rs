@@ -8,7 +8,7 @@ async fn ctx_feedback_record_report_reset() {
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", &data_dir) };
     let engine = lean_ctx::engine::ContextEngine::with_project_root(dir.path());
 
@@ -61,6 +61,6 @@ async fn ctx_feedback_record_report_reset() {
         .expect("report2");
     assert!(report2.contains("No LLM feedback"), "report2: {report2}");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

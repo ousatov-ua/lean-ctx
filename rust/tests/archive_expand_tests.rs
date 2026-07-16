@@ -6,14 +6,14 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 fn with_test_dir<F: FnOnce()>(f: F) {
     let _guard = ENV_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", dir.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_ARCHIVE", "1") };
     f();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_ARCHIVE") };
 }
 
@@ -164,25 +164,25 @@ fn archive_format_hint_contains_expand() {
 #[test]
 fn archive_should_archive_respects_threshold() {
     let _guard = ENV_LOCK.lock().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_ARCHIVE", "1") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_ARCHIVE_THRESHOLD", "100") };
     assert!(!archive::should_archive("short"));
     assert!(archive::should_archive(&"x".repeat(101)));
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_ARCHIVE_THRESHOLD") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_ARCHIVE") };
 }
 
 #[test]
 fn archive_disabled_returns_false() {
     let _guard = ENV_LOCK.lock().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_ARCHIVE", "0") };
     assert!(!archive::should_archive(&"x".repeat(99999)));
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_ARCHIVE") };
 }
 

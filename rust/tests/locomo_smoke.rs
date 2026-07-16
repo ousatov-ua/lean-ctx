@@ -10,7 +10,7 @@ fn reference_suite_recall_and_savings() {
     let _g = lean_ctx::core::data_dir::test_env_lock();
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().join("data");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", &data_dir) };
     let ws = tmp.path().join("ws");
     std::fs::create_dir_all(&ws).unwrap();
@@ -37,7 +37,7 @@ fn reference_suite_recall_and_savings() {
     assert_eq!(report.questions, expected_questions);
     assert!(!report.by_category.is_empty());
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -45,7 +45,7 @@ fn reference_suite_recall_and_savings() {
 fn determinism_same_numbers_twice() {
     let _g = lean_ctx::core::data_dir::test_env_lock();
     let tmp = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path().join("data")) };
     let samples = dataset::reference_samples();
 
@@ -59,6 +59,6 @@ fn determinism_same_numbers_twice() {
     assert_eq!(a.overall.containment_rate, b.overall.containment_rate);
     assert_eq!(a.overall.mean_f1, b.overall.mean_f1);
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

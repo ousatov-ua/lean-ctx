@@ -7,7 +7,7 @@ async fn ctx_feedback_updates_adaptive_mode_policy() {
     let dir = tempfile::tempdir().expect("tempdir");
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", &data_dir) };
     assert_eq!(
         lean_ctx::core::data_dir::lean_ctx_data_dir().expect("data dir"),
@@ -74,6 +74,6 @@ async fn ctx_feedback_updates_adaptive_mode_policy() {
         .unwrap_or(0.0);
     assert!(p > 0.0, "expected penalty > 0, got {p} ({raw})");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

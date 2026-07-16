@@ -12,20 +12,20 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn set_compression(compression: &str) {
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_COMPRESSION", compression) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_TERSE_AGENT") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_OUTPUT_DENSITY") };
 }
 
 fn set_legacy_terse(terse: &str) {
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_COMPRESSION") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", terse) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_OUTPUT_DENSITY") };
     isolate_config_with_compression_off();
 }
@@ -34,18 +34,18 @@ fn isolate_config_with_compression_off() {
     let tmp = std::env::temp_dir().join("lean_ctx_test_config_legacy");
     let _ = std::fs::create_dir_all(&tmp);
     let _ = std::fs::write(tmp.join("config.toml"), "compression_level = \"off\"\n");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", &tmp) };
 }
 
 fn cleanup_env() {
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_COMPRESSION") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_TERSE_AGENT") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_OUTPUT_DENSITY") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -60,19 +60,19 @@ fn terse_agent_default_is_off() {
 #[test]
 fn terse_agent_from_env() {
     let _g = lock();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", "full") };
     assert!(matches!(TerseAgent::from_env(), TerseAgent::Full));
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", "lite") };
     assert!(matches!(TerseAgent::from_env(), TerseAgent::Lite));
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", "ultra") };
     assert!(matches!(TerseAgent::from_env(), TerseAgent::Ultra));
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", "off") };
     assert!(matches!(TerseAgent::from_env(), TerseAgent::Off));
 
@@ -134,9 +134,9 @@ fn legacy_terse_off_no_output_style() {
 #[test]
 fn compression_env_overrides_legacy_terse_agent() {
     let _g = lock();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_COMPRESSION", "max") };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
     unsafe { std::env::set_var("LEAN_CTX_TERSE_AGENT", "lite") };
     let text = instructions::build_instructions_for_test(CrpMode::Off);
     assert!(

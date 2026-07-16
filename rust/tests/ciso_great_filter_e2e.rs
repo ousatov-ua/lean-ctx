@@ -200,6 +200,8 @@ fn great_filter_golden_path_enforces_and_attests() {
 
     // ── teardown ──────────────────────────────────────────────────────────────
     std::env::set_current_dir(&original_cwd).expect("restore cwd");
+    // SAFETY: single-threaded integration-test binary; restores the env set in
+    // the setup block above, at the end of this file's only test.
     unsafe {
         for var in ENV_VARS {
             std::env::remove_var(var);

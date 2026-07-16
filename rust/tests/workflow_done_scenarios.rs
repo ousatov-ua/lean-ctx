@@ -54,12 +54,14 @@ fn setup_test_data_dir() {
     let dir = std::env::temp_dir().join("lean_ctx_workflow_test");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::create_dir_all(&dir);
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", dir.to_str().unwrap()) };
 }
 
 fn cleanup_test_data_dir() {
     let dir = std::env::temp_dir().join("lean_ctx_workflow_test");
     let _ = std::fs::remove_dir_all(&dir);
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 

@@ -44,13 +44,13 @@ fn claude_mcp_add_json_used_when_available() {
     }
 
     let old_home = std::env::var("HOME").ok();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("HOME", &home) };
     let old_path = std::env::var("PATH").unwrap_or_default();
     let new_path = format!("{}:{}", bin_dir.to_string_lossy(), old_path);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("PATH", new_path) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_TRUST_CLAUDE_PATH", "1") };
 
     let targets = lean_ctx::core::editor_registry::detect::build_targets(&home);
@@ -76,12 +76,12 @@ fn claude_mcp_add_json_used_when_available() {
     assert!(v.get("command").is_some(), "must be server entry json");
 
     // Restore env
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_TRUST_CLAUDE_PATH") };
     if let Some(h) = old_home {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         unsafe { std::env::set_var("HOME", h) };
     }
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("PATH", old_path) };
 }

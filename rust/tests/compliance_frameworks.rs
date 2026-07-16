@@ -84,7 +84,9 @@ fn eu_ai_act_reference_report_has_ten_plus_enforced_full_controls() {
 #[test]
 fn audit_chain_proofs_run_sequentially() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path()) };
 
     aia_12_1_logging_is_automatic_and_chained();
@@ -92,7 +94,9 @@ fn audit_chain_proofs_run_sequentially() {
     // Destroys the chain — must run last.
     aia_12_1_tampered_log_fails_verification(tmp.path());
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 

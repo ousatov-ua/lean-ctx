@@ -9,6 +9,7 @@ use serial_test::serial;
 fn claude_code_instructions_default_path() {
     // Ensure CLAUDE_CONFIG_DIR is unset so we get the default.
     let prev = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     let instr = lean_ctx::instructions::claude_code_instructions();
@@ -19,6 +20,7 @@ fn claude_code_instructions_default_path() {
 
     // Restore.
     if let Some(v) = prev {
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) };
     }
 }
@@ -27,6 +29,7 @@ fn claude_code_instructions_default_path() {
 #[serial]
 fn claude_code_instructions_custom_config_dir() {
     let prev = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", "~/.arc/claude") };
 
     let instr = lean_ctx::instructions::claude_code_instructions();
@@ -41,7 +44,9 @@ fn claude_code_instructions_custom_config_dir() {
 
     // Restore.
     match prev {
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
     }
 }
@@ -53,6 +58,7 @@ fn claude_config_dir_display_resolves_home() {
 
     let home = dirs::home_dir().expect("need home dir for test");
     let custom = format!("{}/.arc/claude", home.display());
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", &custom) };
 
     let display = lean_ctx::instructions::claude_config_dir_display();
@@ -63,7 +69,9 @@ fn claude_config_dir_display_resolves_home() {
 
     // Restore.
     match prev {
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
     }
 }
@@ -72,6 +80,7 @@ fn claude_config_dir_display_resolves_home() {
 #[serial]
 fn claude_config_dir_display_tilde_passthrough() {
     let prev = std::env::var("CLAUDE_CONFIG_DIR").ok();
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", "~/.custom/claude") };
 
     let display = lean_ctx::instructions::claude_config_dir_display();
@@ -79,7 +88,9 @@ fn claude_config_dir_display_tilde_passthrough() {
 
     // Restore.
     match prev {
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
     }
 }

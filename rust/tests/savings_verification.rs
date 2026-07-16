@@ -201,7 +201,9 @@ fn verify_cep_delta_tracking_prevents_overcounting() {
     let stats_path = lean_ctx_dir.join("stats.json");
     let _ = std::fs::remove_file(&stats_path);
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe {
         std::env::set_var(
             "LEAN_CTX_DATA_DIR",
@@ -252,7 +254,9 @@ fn verify_cep_delta_tracking_prevents_overcounting() {
     eprintln!("  Without fix: totals would be 3000/1800 (1000+2000 / 600+1200)");
 
     let _ = std::fs::remove_dir_all(&test_dir);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 

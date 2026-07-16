@@ -10,7 +10,7 @@ fn graph_context_must_include_direct_and_transitive_deps() {
 
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("mkdir data");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -58,7 +58,7 @@ export const b = c + 1;
         "expected transitive dependency src/c.ts, got {paths:?}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 

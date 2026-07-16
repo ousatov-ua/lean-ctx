@@ -10,7 +10,7 @@ fn ctx_knowledge_recall_is_budgeted_and_deterministic() {
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -72,7 +72,7 @@ fn ctx_knowledge_recall_is_budgeted_and_deterministic() {
         .count();
     assert!(fact_lines <= 10, "must not exceed recall budget");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -83,7 +83,7 @@ fn ctx_knowledge_export_is_file_backed_not_json_stdout() {
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -125,7 +125,7 @@ fn ctx_knowledge_export_is_file_backed_not_json_stdout() {
         .expect("extract export path");
     assert!(Path::new(path_str).exists(), "export file must exist");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -136,7 +136,7 @@ fn ctx_knowledge_feedback_persists_and_affects_quality_score() {
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -190,7 +190,7 @@ fn ctx_knowledge_feedback_persists_and_affects_quality_score() {
         "quality score should increase after positive feedback"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -201,7 +201,7 @@ fn ctx_knowledge_relations_persist_and_render() {
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -302,7 +302,7 @@ fn ctx_knowledge_relations_persist_and_render() {
         "unrelate must confirm removal: {out2}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -312,7 +312,7 @@ fn ctx_knowledge_lifecycle_report_covers_all_layers() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -360,7 +360,7 @@ fn ctx_knowledge_lifecycle_report_covers_all_layers() {
         "report must document layer boundaries: {out}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -370,7 +370,7 @@ fn ctx_knowledge_recall_as_of_time_travels() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -424,6 +424,6 @@ fn ctx_knowledge_recall_as_of_time_travels() {
         "invalid as_of must produce a clear error: {invalid}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

@@ -36,7 +36,9 @@ fn compose_returns_all_sections_with_symbol_body() {
     let _guard = ENV_GUARD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_COMPOSE_BUDGET_MS") };
     let dir = write_corpus();
 
@@ -69,7 +71,9 @@ fn compose_degrades_under_tight_budget_without_stalling() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     // A 1 ms budget guarantees the semantic worker cannot finish in time, so the
     // call must degrade gracefully instead of blocking on the (cold) build.
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LEAN_CTX_COMPOSE_BUDGET_MS", "1") };
     let dir = write_corpus();
 
@@ -80,7 +84,9 @@ fn compose_degrades_under_tight_budget_without_stalling() {
         CrpMode::Off,
     );
     let elapsed = start.elapsed();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_COMPOSE_BUDGET_MS") };
 
     // The exact-match + symbol stages are synchronous and index-backed, so the
@@ -114,10 +120,14 @@ fn compose_surfaces_associative_neighbours() {
     let _guard = ENV_GUARD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_COMPOSE_BUDGET_MS") };
     // Generous graph budget so the (tiny) index build never times out here.
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LEAN_CTX_COMPOSE_GRAPH_BUDGET_MS", "8000") };
     let dir = write_corpus();
 
@@ -129,7 +139,9 @@ fn compose_surfaces_associative_neighbours() {
         &dir.path().to_string_lossy(),
         CrpMode::Off,
     );
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_COMPOSE_GRAPH_BUDGET_MS") };
 
     assert!(

@@ -13,7 +13,7 @@ use std::io::Read;
 #[serial]
 fn bundle_is_deterministic_and_complete() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path()) };
 
     for (i, tool) in ["ctx_read", "ctx_search", "ctx_shell"].iter().enumerate() {
@@ -92,7 +92,7 @@ fn bundle_is_deterministic_and_complete() {
     // No wall-clock fields: the manifest must not contain a created_at.
     assert!(manifest.get("created_at").is_none());
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -104,7 +104,7 @@ fn bundle_is_deterministic_and_complete() {
 #[serial]
 fn concurrent_appends_do_not_fork_the_chain() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path()) };
 
     let threads: Vec<_> = (0..4)
@@ -136,7 +136,7 @@ fn concurrent_appends_do_not_fork_the_chain() {
         chain.first_invalid_at
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -144,7 +144,7 @@ fn concurrent_appends_do_not_fork_the_chain() {
 #[serial]
 fn empty_period_is_an_error_not_an_empty_attestation() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path()) };
 
     audit_trail::record(AuditEntryData {
@@ -167,6 +167,6 @@ fn empty_period_is_an_error_not_an_empty_attestation() {
     let err = generate(&spec).expect_err("empty period must fail");
     assert!(err.contains("no audit entries"), "{err}");
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

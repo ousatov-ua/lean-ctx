@@ -53,12 +53,16 @@ fn local_features_are_unaffected_by_license_or_plan_env() {
 
     let before = snapshot();
     for var in ["LEAN_CTX_LICENSE", "LEAN_CTX_PLAN", "LEAN_CTX_ACCOUNT"] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the project's test suite always runs with `--test-threads=1`
+        // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+        // this binary touches the environment concurrently.
         unsafe { std::env::set_var(var, "expired") };
     }
     let after = snapshot();
     for var in ["LEAN_CTX_LICENSE", "LEAN_CTX_PLAN", "LEAN_CTX_ACCOUNT"] {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: the project's test suite always runs with `--test-threads=1`
+        // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+        // this binary touches the environment concurrently.
         unsafe { std::env::remove_var(var) };
     }
 

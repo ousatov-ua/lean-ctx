@@ -7,7 +7,7 @@ fn recall_rehydrates_from_archive_when_active_set_empty() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("mkdir");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string()) };
 
     let project_root = tmp.path().join("proj");
@@ -42,6 +42,6 @@ fn recall_rehydrates_from_archive_when_active_set_empty() {
         "expected rehydrated recall result, got: {out}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

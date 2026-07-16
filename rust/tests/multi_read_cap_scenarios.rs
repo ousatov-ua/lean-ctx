@@ -25,7 +25,9 @@ fn multi_read_respects_output_cap() {
     let _guard = ENV_GUARD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LCTX_MAX_MULTI_READ_BYTES", "10000") };
     let (_dir, paths) = setup_test_files(20, 5000);
 
@@ -41,7 +43,9 @@ fn multi_read_respects_output_cap() {
         output.contains("file(s) skipped"),
         "must report skipped files"
     );
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LCTX_MAX_MULTI_READ_BYTES") };
 }
 
@@ -50,7 +54,9 @@ fn multi_read_no_cap_when_under_limit() {
     let _guard = ENV_GUARD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LCTX_MAX_MULTI_READ_BYTES", "1000000") };
     let (_dir, paths) = setup_test_files(3, 100);
 
@@ -62,7 +68,9 @@ fn multi_read_no_cap_when_under_limit() {
         "should not cap when under limit"
     );
     assert!(output.contains("Read 3 files"), "should read all files");
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LCTX_MAX_MULTI_READ_BYTES") };
 }
 
@@ -81,7 +89,9 @@ fn multi_read_single_large_file_passes() {
     let _guard = ENV_GUARD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::set_var("LCTX_MAX_MULTI_READ_BYTES", "100000") };
     let (_dir, paths) = setup_test_files(1, 50000);
 
@@ -96,6 +106,8 @@ fn multi_read_single_large_file_passes() {
         !output.contains("Output capped"),
         "single file should not trigger cap"
     );
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: the project's test suite always runs with `--test-threads=1`
+    // (env-race legacy — see .github/workflows/ci.yml), so no other test in
+    // this binary touches the environment concurrently.
     unsafe { std::env::remove_var("LCTX_MAX_MULTI_READ_BYTES") };
 }

@@ -242,9 +242,9 @@ fn bench_lazy_default_vs_full_overhead() {
     let prev_data_dir = std::env::var("LEAN_CTX_DATA_DIR").ok();
     let prev_minimal = std::env::var("LEAN_CTX_MINIMAL").ok();
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", tmp.path()) };
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_MINIMAL", "1") };
 
     let lazy_tools = lean_ctx::tool_defs::lazy_tool_defs();
@@ -323,15 +323,15 @@ fn bench_lazy_default_vs_full_overhead() {
     );
 
     match prev_data_dir {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         Some(v) => unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", v) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         None => unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") },
     }
     match prev_minimal {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         Some(v) => unsafe { std::env::set_var("LEAN_CTX_MINIMAL", v) },
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         None => unsafe { std::env::remove_var("LEAN_CTX_MINIMAL") },
     }
 }
@@ -1585,7 +1585,7 @@ fn bench_minimal_overhead_suppresses_all_meta_strings() {
     // benchmarks (cf. bench_lazy_default_vs_full_overhead) so a parallel test can't
     // clear it between set_var and build_instructions_for_test.
     let _lock = lean_ctx::core::data_dir::test_env_lock();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_MINIMAL", "1") };
 
     let instructions = lean_ctx::server::build_instructions_for_test(CrpMode::Tdd);
@@ -1601,7 +1601,7 @@ fn bench_minimal_overhead_suppresses_all_meta_strings() {
         "minimal_overhead should suppress session block"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_MINIMAL") };
 
     let full_instructions = lean_ctx::server::build_instructions_for_test(CrpMode::Tdd);
@@ -1836,10 +1836,10 @@ fn bench_full_per_call_overhead_budget() {
     let full_tools = lean_ctx::tool_defs::granular_tool_defs();
 
     let instructions_minimal = {
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         unsafe { std::env::set_var("LEAN_CTX_MINIMAL", "1") };
         let i = lean_ctx::server::build_instructions_for_test(CrpMode::Tdd);
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         unsafe { std::env::remove_var("LEAN_CTX_MINIMAL") };
         i
     };

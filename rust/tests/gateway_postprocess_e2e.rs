@@ -56,9 +56,11 @@ fn node_available() -> bool {
 // Edition-2024 makes `env::set_var` unsafe; the one-time setup runs under a
 // `Once` and tests are serialized, so the mutation is race-free in this binary.
 fn set_env(key: &str, value: &str) {
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::set_var(key, value) };
 }
 fn unset_env(key: &str) {
+    // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
     unsafe { std::env::remove_var(key) };
 }
 

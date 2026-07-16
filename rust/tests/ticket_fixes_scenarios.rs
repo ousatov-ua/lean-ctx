@@ -176,7 +176,7 @@ fn crash_loop_constants_are_resilient_for_slow_ides() {
 fn crash_loop_scenario_normal_ide_startup() {
     let _env = lean_ctx::core::data_dir::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", dir.path()) };
 
     let start = std::time::Instant::now();
@@ -189,7 +189,7 @@ fn crash_loop_scenario_normal_ide_startup() {
         "7 starts within window should NOT trigger backoff, took {elapsed:?}"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -197,7 +197,7 @@ fn crash_loop_scenario_normal_ide_startup() {
 fn crash_loop_reset_allows_fresh_start() {
     let _env = lean_ctx::core::data_dir::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", dir.path()) };
 
     for _ in 0..7 {
@@ -216,7 +216,7 @@ fn crash_loop_reset_allows_fresh_start() {
         "after reset, first call should be instant"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 
@@ -601,7 +601,7 @@ fn crash_loop_process_name_constant_matches_usage() {
 fn crash_loop_reset_uses_same_name_as_backoff() {
     let _env = lean_ctx::core::data_dir::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::set_var("LEAN_CTX_DATA_DIR", dir.path()) };
 
     let name = lean_ctx::core::startup_guard::MCP_PROCESS_NAME;
@@ -622,7 +622,7 @@ fn crash_loop_reset_uses_same_name_as_backoff() {
         "reset_crash_loop with same name must delete the log"
     );
 
-    // TODO: Audit that the environment access only happens in single-threaded code.
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }
 

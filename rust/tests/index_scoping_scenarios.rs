@@ -211,6 +211,7 @@ impl EnvGuard {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let prev = std::env::var(key).ok();
+        // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
         unsafe { std::env::set_var(key, val) };
         Self {
             key,
@@ -223,8 +224,10 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         if let Some(ref v) = self.prev {
+            // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
             unsafe { std::env::set_var(self.key, v) };
         } else {
+            // SAFETY: serialized by this file's local `ENV_LOCK` mutex.
             unsafe { std::env::remove_var(self.key) };
         }
     }

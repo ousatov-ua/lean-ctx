@@ -48,7 +48,7 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let previous = std::env::var(key).ok();
-        // TODO: Audit that the environment access only happens in single-threaded code.
+        // SAFETY: serialized by `test_env_lock()`.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
@@ -57,10 +57,10 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(ref previous) = self.previous {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: serialized by `test_env_lock()`.
             unsafe { std::env::set_var(self.key, previous) };
         } else {
-            // TODO: Audit that the environment access only happens in single-threaded code.
+            // SAFETY: serialized by `test_env_lock()`.
             unsafe { std::env::remove_var(self.key) };
         }
     }

@@ -85,6 +85,7 @@ edition = "2021"
 
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("create data dir");
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::set_var("LEAN_CTX_DATA_DIR", data_dir.to_string_lossy().to_string());
     }
@@ -121,6 +122,7 @@ async fn phase1_session_task_and_overview() {
         "overview should contain project structure: {overview}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -141,6 +143,7 @@ async fn phase1_tree_depth() {
         "tree should show files: {tree}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -176,6 +179,7 @@ async fn phase2_read_full_and_cache_stub() {
         full2.len()
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -201,6 +205,7 @@ async fn phase2_read_signatures() {
         "signatures should contain fn names: {sigs}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -220,6 +225,7 @@ async fn phase2_read_map() {
         .expect("map read");
     assert!(!map.is_empty(), "map should not be empty");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -245,6 +251,7 @@ async fn phase2_read_lines_range() {
         "lines 1-5 should contain fn main: {lines}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -264,6 +271,7 @@ async fn phase2_read_auto() {
         .expect("auto read");
     assert!(!auto.is_empty(), "auto mode should return content");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -289,6 +297,7 @@ async fn phase2_read_aggressive() {
         "aggressive mode should return content"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -323,6 +332,7 @@ async fn phase2_read_diff_after_edit() {
         "diff should show changes: {diff}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -344,6 +354,7 @@ async fn phase3_search_regex() {
         "search should find fn main: {out}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -366,6 +377,7 @@ async fn phase3_search_with_path_filter() {
         "filtered search should find format_bytes: {out}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -390,6 +402,7 @@ async fn phase4_shell_echo() {
         "shell should contain echo output: {out}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -412,6 +425,7 @@ async fn phase4_shell_raw_mode() {
         "raw shell should contain output: {out}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -453,6 +467,7 @@ async fn phase5_edit_and_verify() {
         "file should contain edited text"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -496,6 +511,7 @@ async fn phase6_compress_and_cache_status() {
         "cache status should show info: {cache}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -512,6 +528,7 @@ async fn phase6_ledger_status() {
         .expect("ledger status");
     assert!(!ledger.is_empty(), "ledger status should return output");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -540,6 +557,7 @@ async fn phase6_dedup() {
         .expect("dedup");
     assert!(!dedup.is_empty(), "dedup should return output");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -559,6 +577,7 @@ async fn phase6_plan() {
         .expect("plan");
     assert!(!plan.is_empty(), "plan should return output");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -597,6 +616,7 @@ async fn phase7_knowledge_remember_and_recall() {
         "recall should contain remembered fact: {recall}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -638,6 +658,7 @@ async fn phase7_knowledge_timeline_and_rooms() {
         "rooms should list the decisions category: {rooms}"
     );
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -672,6 +693,7 @@ async fn phase7_session_finding_and_decision() {
         .expect("session decision");
     assert!(!decision.is_empty(), "decision should return confirmation");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -710,6 +732,7 @@ async fn phase8_agent_register_and_diary() {
         .expect("agent diary");
     assert!(!diary.is_empty(), "diary should return confirmation");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -735,6 +758,7 @@ async fn phase9_metrics() {
         .expect("metrics");
     assert!(!metrics.is_empty(), "metrics should return data");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
@@ -759,6 +783,7 @@ async fn phase9_session_save() {
         .expect("session save");
     assert!(!save.is_empty(), "save should return confirmation");
 
+    // SAFETY: serialized by `test_env_lock()`.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }

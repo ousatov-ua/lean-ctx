@@ -161,6 +161,8 @@ fn outcome_pricing_golden_path_is_real_and_billable() {
     );
 
     // ── teardown ──────────────────────────────────────────────────────────────
+    // SAFETY: single-threaded integration-test binary; restores the env set in
+    // the setup block above, at the end of this file's only test.
     unsafe {
         std::env::remove_var("LEAN_CTX_DATA_DIR");
         std::env::remove_var("LEAN_CTX_AGENT_ID");

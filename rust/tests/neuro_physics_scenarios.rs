@@ -21,8 +21,10 @@ mod shell_security {
     /// Override the allowlist completely (bypasses config defaults) for deterministic tests.
     fn check(command: &str, allowlist: &[&str]) -> Result<(), String> {
         let val = allowlist.join(",");
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         unsafe { std::env::set_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE", &val) };
         let result = check_shell_allowlist(command).map_err(|err| err.to_string());
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         unsafe { std::env::remove_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE") };
         result
     }
@@ -115,12 +117,14 @@ mod shell_security {
     #[test]
     #[serial_test::serial]
     fn scenario_empty_allowlist_passes_safe_commands() {
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         unsafe { std::env::set_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE", "") };
         assert!(check_shell_allowlist("anything goes here").is_ok());
         assert!(check_shell_allowlist("ls -la").is_ok());
         // Unconditionally blocked commands (eval, exec, source) are still rejected
         assert!(check_shell_allowlist("eval 'rm -rf /'").is_err());
         assert!(check_shell_allowlist("exec /bin/bash").is_err());
+        // SAFETY: `#[serial]` (serial_test) ensures no other test in this binary runs concurrently.
         unsafe { std::env::remove_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE") };
     }
 }
