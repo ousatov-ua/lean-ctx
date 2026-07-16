@@ -197,333 +197,440 @@ fn shorter_only(compressed: String, original: &str) -> Option<String> {
     }
 }
 
+type PatternMatcher = fn(&str) -> bool;
+type PatternHandler = fn(&str, &str) -> Option<String>;
+
+/// Ordered prefix → compressor dispatch table (#660 CC reduction): first
+/// matching entry wins, mirroring the previous `if c.starts_with(..) { return
+/// ...; }` cascade exactly — including that a matched entry's `None` is
+/// final, never falls through to a later entry. Registering a new CLI tool
+/// is now a one-line addition here instead of a new branch in
+/// `try_specific_pattern`.
+const PATTERNS: &[(PatternMatcher, PatternHandler)] = &[
+    (
+        |c| c.starts_with("git "),
+        |c, output| git::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("gh "),
+        |c, output| gh::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("glab "),
+        |c, output| glab::try_glab_pattern(c, output),
+    ),
+    (
+        |c| c == "terraform" || c.starts_with("terraform "),
+        |c, output| terraform::compress(c, output),
+    ),
+    (
+        |c| c == "make" || c.starts_with("make "),
+        |c, output| make::compress(c, output),
+    ),
+    (
+        |c| c == "just" || c.starts_with("just "),
+        |c, output| just::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("mvn ")
+                || c.starts_with("./mvnw ")
+                || c.starts_with("mvnw ")
+                || c.starts_with("gradle ")
+                || c.starts_with("./gradlew ")
+                || c.starts_with("gradlew ")
+        },
+        |c, output| maven::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("kubectl ") || c.starts_with("k "),
+        |c, output| kubectl::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("helm "),
+        |c, output| helm::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("pnpm "),
+        |c, output| pnpm::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("bun ") || c.starts_with("bunx "),
+        |c, output| bun::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("deno "),
+        |c, output| deno::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("npm ") || c.starts_with("yarn "),
+        |c, output| npm::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("cargo "),
+        |c, output| cargo::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("docker ") || c.starts_with("docker-compose "),
+        |c, output| docker::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("pip ") || c.starts_with("pip3 ") || c.starts_with("python -m pip"),
+        |c, output| pip::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("mypy") || c.starts_with("python -m mypy") || c.starts_with("dmypy "),
+        |c, output| mypy::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("pytest") || c.starts_with("python -m pytest"),
+        |c, output| pytest::compress(c, output).or_else(|| test::compress(output)),
+    ),
+    (
+        |c| c.starts_with("ruff "),
+        |c, output| ruff::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("eslint")
+                || c.starts_with("npx eslint")
+                || c.starts_with("biome ")
+                || c.starts_with("stylelint")
+        },
+        |c, output| eslint::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("prettier") || c.starts_with("npx prettier"),
+        |_c, output| prettier::compress(output),
+    ),
+    (
+        |c| c.starts_with("go ") || c.starts_with("golangci-lint") || c.starts_with("golint"),
+        |c, output| golang::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("playwright")
+                || c.starts_with("npx playwright")
+                || c.starts_with("cypress")
+                || c.starts_with("npx cypress")
+        },
+        |c, output| playwright::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("vitest") || c.starts_with("npx vitest") || c.starts_with("pnpm vitest"),
+        |_c, output| test::compress(output),
+    ),
+    (
+        |c| {
+            c.starts_with("next ")
+                || c.starts_with("npx next")
+                || c.starts_with("vite ")
+                || c.starts_with("npx vite")
+                || c.starts_with("vp ")
+                || c.starts_with("vite-plus ")
+        },
+        |c, output| next_build::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("tsc") || c.contains("typescript"),
+        |_c, output| typescript::compress(output),
+    ),
+    (
+        |c| {
+            c.starts_with("rubocop")
+                || c.starts_with("bundle ")
+                || c.starts_with("rake ")
+                || c.starts_with("rails test")
+                || c.starts_with("rspec")
+        },
+        |c, output| ruby::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("grep ") || c.starts_with("rg "),
+        |_c, output| grep::compress(output),
+    ),
+    (
+        |c| c.starts_with("find "),
+        |_c, output| find::compress(output),
+    ),
+    (
+        |c| c.starts_with("fd ") || c.starts_with("fdfind "),
+        |_c, output| fd::compress(output),
+    ),
+    (
+        |c| c.starts_with("ls ") || c == "ls",
+        |_c, output| ls::compress(output),
+    ),
+    (
+        |c| c.starts_with("curl "),
+        |c, output| curl::compress_with_cmd(c, output),
+    ),
+    (
+        |c| c.starts_with("wget "),
+        |_c, output| wget::compress(output),
+    ),
+    (
+        |c| c == "env" || c.starts_with("env ") || c.starts_with("printenv"),
+        |_c, output| env_filter::compress(output),
+    ),
+    (
+        |c| c.starts_with("dotnet "),
+        |c, output| dotnet::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("flutter ")
+                || (c.starts_with("dart ") && (c.contains(" analyze") || c.ends_with(" analyze")))
+        },
+        |c, output| flutter::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("poetry ")
+                || c.starts_with("uv ")
+                || c.starts_with("conda ")
+                || c.starts_with("mamba ")
+                || c.starts_with("pipx ")
+        },
+        |c, output| poetry::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("aws "),
+        |c, output| aws::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("psql ") || c.starts_with("pg_"),
+        |c, output| psql::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("mysql ") || c.starts_with("mariadb "),
+        |c, output| mysql::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("prisma ") || c.starts_with("npx prisma"),
+        |c, output| prisma::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("swift "),
+        |c, output| swift::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("zig "),
+        |c, output| zig::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("cmake ") || c.starts_with("ctest"),
+        |c, output| cmake::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("ninja"),
+        |c, output| ninja::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("ansible") || c.starts_with("ansible-playbook"),
+        |c, output| ansible::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("composer "),
+        |c, output| composer::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("php artisan") || c.starts_with("artisan "),
+        |c, output| artisan::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("./vendor/bin/pest") || c.starts_with("pest "),
+        |_c, output| artisan::compress("php artisan test", output),
+    ),
+    (
+        |c| c.starts_with("mix ") || c.starts_with("iex "),
+        |c, output| mix::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("bazel ") || c.starts_with("blaze "),
+        |c, output| bazel::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("systemctl ") || c.starts_with("journalctl"),
+        |c, output| systemd::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("jest") || c.starts_with("npx jest") || c.starts_with("pnpm jest"),
+        |_c, output| test::compress(output),
+    ),
+    (
+        |c| c.starts_with("mocha") || c.starts_with("npx mocha"),
+        |_c, output| test::compress(output),
+    ),
+    (
+        |c| c.starts_with("tofu "),
+        |c, output| terraform::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("ps ") || c == "ps",
+        |_c, output| sysinfo::compress_ps(output),
+    ),
+    (
+        |c| c.starts_with("df ") || c == "df",
+        |_c, output| sysinfo::compress_df(output),
+    ),
+    (
+        |c| c.starts_with("du ") || c == "du",
+        |_c, output| sysinfo::compress_du(output),
+    ),
+    (
+        |c| c.starts_with("ping "),
+        |_c, output| sysinfo::compress_ping(output),
+    ),
+    (
+        |c| c.starts_with("jq ") || c == "jq",
+        |_c, output| json_schema::compress(output),
+    ),
+    (
+        |c| c.starts_with("hadolint"),
+        |c, output| eslint::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("yamllint") || c.starts_with("npx yamllint"),
+        |c, output| eslint::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("markdownlint") || c.starts_with("npx markdownlint"),
+        |c, output| eslint::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("oxlint") || c.starts_with("npx oxlint"),
+        |c, output| eslint::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("pyright") || c.starts_with("basedpyright"),
+        |c, output| mypy::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("turbo ") || c.starts_with("npx turbo"),
+        |c, output| npm::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("nx ") || c.starts_with("npx nx"),
+        |c, output| npm::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("clang++ ") || c.starts_with("clang "),
+        |c, output| clang::compress(c, output),
+    ),
+    (
+        |c| {
+            c.starts_with("gcc ")
+                || c.starts_with("g++ ")
+                || c.starts_with("cc ")
+                || c.starts_with("c++ ")
+        },
+        |c, output| cmake::compress(c, output),
+    ),
+    // --- data domain (#657) ---
+    (
+        |c| c == "dbt" || c.starts_with("dbt "),
+        |c, output| dbt::compress(c, output),
+    ),
+    (
+        |c| c == "alembic" || c.starts_with("alembic "),
+        |c, output| alembic::compress(c, output),
+    ),
+    (
+        |c| c == "flyway" || c.starts_with("flyway "),
+        |c, output| flyway::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("spark-submit") || c.starts_with("spark-sql") || c.starts_with("pyspark"),
+        |c, output| spark::compress(c, output),
+    ),
+    // --- ai domain (#658) ---
+    (
+        |c| c == "ollama" || c.starts_with("ollama "),
+        |c, output| ollama::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("mlflow "),
+        |c, output| mlflow::compress(c, output),
+    ),
+    // --- security / supply-chain (#659) ---
+    (
+        |c| c.starts_with("semgrep "),
+        |c, output| semgrep::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("trivy "),
+        |c, output| trivy::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("grype "),
+        |c, output| grype::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("syft "),
+        |c, output| syft::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("cosign "),
+        |c, output| cosign::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("swiftlint"),
+        |c, output| swiftlint::compress(c, output),
+    ),
+    // --- vcs / toolchain (#660) ---
+    (
+        |c| c == "jj" || c.starts_with("jj "),
+        |c, output| jj::compress(c, output),
+    ),
+    (
+        |c| c == "mise" || c.starts_with("mise "),
+        |c, output| mise::compress(c, output),
+    ),
+    (
+        |c| c == "buf" || c.starts_with("buf "),
+        |c, output| buf::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("gem "),
+        |c, output| gem::compress(c, output),
+    ),
+    // --- edge / infra (#661) ---
+    (
+        |c| c == "pulumi" || c.starts_with("pulumi "),
+        |c, output| pulumi::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("linkerd "),
+        |c, output| linkerd::compress(c, output),
+    ),
+    (
+        |c| c.starts_with("argocd "),
+        |c, output| argocd::compress(c, output),
+    ),
+    (
+        |c| {
+            c == "vercel"
+                || c.starts_with("vercel ")
+                || c == "fly"
+                || c.starts_with("fly ")
+                || c.starts_with("flyctl ")
+                || c.starts_with("wrangler ")
+                || c.starts_with("skaffold ")
+                || c.starts_with("supabase ")
+        },
+        |c, output| deploy::compress(c, output),
+    ),
+];
+
 pub fn try_specific_pattern(cmd: &str, output: &str) -> Option<String> {
     let cl = cmd.to_ascii_lowercase();
     let c = cl.as_str();
 
-    if c.starts_with("git ") {
-        return git::compress(c, output);
-    }
-    if c.starts_with("gh ") {
-        return gh::compress(c, output);
-    }
-    if c.starts_with("glab ") {
-        return glab::try_glab_pattern(c, output);
-    }
-    if c == "terraform" || c.starts_with("terraform ") {
-        return terraform::compress(c, output);
-    }
-    if c == "make" || c.starts_with("make ") {
-        return make::compress(c, output);
-    }
-    if c == "just" || c.starts_with("just ") {
-        return just::compress(c, output);
-    }
-    if c.starts_with("mvn ")
-        || c.starts_with("./mvnw ")
-        || c.starts_with("mvnw ")
-        || c.starts_with("gradle ")
-        || c.starts_with("./gradlew ")
-        || c.starts_with("gradlew ")
-    {
-        return maven::compress(c, output);
-    }
-    if c.starts_with("kubectl ") || c.starts_with("k ") {
-        return kubectl::compress(c, output);
-    }
-    if c.starts_with("helm ") {
-        return helm::compress(c, output);
-    }
-    if c.starts_with("pnpm ") {
-        return pnpm::compress(c, output);
-    }
-    if c.starts_with("bun ") || c.starts_with("bunx ") {
-        return bun::compress(c, output);
-    }
-    if c.starts_with("deno ") {
-        return deno::compress(c, output);
-    }
-    if c.starts_with("npm ") || c.starts_with("yarn ") {
-        return npm::compress(c, output);
-    }
-    if c.starts_with("cargo ") {
-        return cargo::compress(c, output);
-    }
-    if c.starts_with("docker ") || c.starts_with("docker-compose ") {
-        return docker::compress(c, output);
-    }
-    if c.starts_with("pip ") || c.starts_with("pip3 ") || c.starts_with("python -m pip") {
-        return pip::compress(c, output);
-    }
-    if c.starts_with("mypy") || c.starts_with("python -m mypy") || c.starts_with("dmypy ") {
-        return mypy::compress(c, output);
-    }
-    if c.starts_with("pytest") || c.starts_with("python -m pytest") {
-        return pytest::compress(c, output).or_else(|| test::compress(output));
-    }
-    if c.starts_with("ruff ") {
-        return ruff::compress(c, output);
-    }
-    if c.starts_with("eslint")
-        || c.starts_with("npx eslint")
-        || c.starts_with("biome ")
-        || c.starts_with("stylelint")
-    {
-        return eslint::compress(c, output);
-    }
-    if c.starts_with("prettier") || c.starts_with("npx prettier") {
-        return prettier::compress(output);
-    }
-    if c.starts_with("go ") || c.starts_with("golangci-lint") || c.starts_with("golint") {
-        return golang::compress(c, output);
-    }
-    if c.starts_with("playwright")
-        || c.starts_with("npx playwright")
-        || c.starts_with("cypress")
-        || c.starts_with("npx cypress")
-    {
-        return playwright::compress(c, output);
-    }
-    if c.starts_with("vitest") || c.starts_with("npx vitest") || c.starts_with("pnpm vitest") {
-        return test::compress(output);
-    }
-    if c.starts_with("next ")
-        || c.starts_with("npx next")
-        || c.starts_with("vite ")
-        || c.starts_with("npx vite")
-        || c.starts_with("vp ")
-        || c.starts_with("vite-plus ")
-    {
-        return next_build::compress(c, output);
-    }
-    if c.starts_with("tsc") || c.contains("typescript") {
-        return typescript::compress(output);
-    }
-    if c.starts_with("rubocop")
-        || c.starts_with("bundle ")
-        || c.starts_with("rake ")
-        || c.starts_with("rails test")
-        || c.starts_with("rspec")
-    {
-        return ruby::compress(c, output);
-    }
-    if c.starts_with("grep ") || c.starts_with("rg ") {
-        return grep::compress(output);
-    }
-    if c.starts_with("find ") {
-        return find::compress(output);
-    }
-    if c.starts_with("fd ") || c.starts_with("fdfind ") {
-        return fd::compress(output);
-    }
-    if c.starts_with("ls ") || c == "ls" {
-        return ls::compress(output);
-    }
-    if c.starts_with("curl ") {
-        return curl::compress_with_cmd(c, output);
-    }
-    if c.starts_with("wget ") {
-        return wget::compress(output);
-    }
-    if c == "env" || c.starts_with("env ") || c.starts_with("printenv") {
-        return env_filter::compress(output);
-    }
-    if c.starts_with("dotnet ") {
-        return dotnet::compress(c, output);
-    }
-    if c.starts_with("flutter ")
-        || (c.starts_with("dart ") && (c.contains(" analyze") || c.ends_with(" analyze")))
-    {
-        return flutter::compress(c, output);
-    }
-    if c.starts_with("poetry ")
-        || c.starts_with("uv ")
-        || c.starts_with("conda ")
-        || c.starts_with("mamba ")
-        || c.starts_with("pipx ")
-    {
-        return poetry::compress(c, output);
-    }
-    if c.starts_with("aws ") {
-        return aws::compress(c, output);
-    }
-    if c.starts_with("psql ") || c.starts_with("pg_") {
-        return psql::compress(c, output);
-    }
-    if c.starts_with("mysql ") || c.starts_with("mariadb ") {
-        return mysql::compress(c, output);
-    }
-    if c.starts_with("prisma ") || c.starts_with("npx prisma") {
-        return prisma::compress(c, output);
-    }
-    if c.starts_with("swift ") {
-        return swift::compress(c, output);
-    }
-    if c.starts_with("zig ") {
-        return zig::compress(c, output);
-    }
-    if c.starts_with("cmake ") || c.starts_with("ctest") {
-        return cmake::compress(c, output);
-    }
-    if c.starts_with("ninja") {
-        return ninja::compress(c, output);
-    }
-    if c.starts_with("ansible") || c.starts_with("ansible-playbook") {
-        return ansible::compress(c, output);
-    }
-    if c.starts_with("composer ") {
-        return composer::compress(c, output);
-    }
-    if c.starts_with("php artisan") || c.starts_with("artisan ") {
-        return artisan::compress(c, output);
-    }
-    if c.starts_with("./vendor/bin/pest") || c.starts_with("pest ") {
-        return artisan::compress("php artisan test", output);
-    }
-    if c.starts_with("mix ") || c.starts_with("iex ") {
-        return mix::compress(c, output);
-    }
-    if c.starts_with("bazel ") || c.starts_with("blaze ") {
-        return bazel::compress(c, output);
-    }
-    if c.starts_with("systemctl ") || c.starts_with("journalctl") {
-        return systemd::compress(c, output);
-    }
-    if c.starts_with("jest") || c.starts_with("npx jest") || c.starts_with("pnpm jest") {
-        return test::compress(output);
-    }
-    if c.starts_with("mocha") || c.starts_with("npx mocha") {
-        return test::compress(output);
-    }
-    if c.starts_with("tofu ") {
-        return terraform::compress(c, output);
-    }
-    if c.starts_with("ps ") || c == "ps" {
-        return sysinfo::compress_ps(output);
-    }
-    if c.starts_with("df ") || c == "df" {
-        return sysinfo::compress_df(output);
-    }
-    if c.starts_with("du ") || c == "du" {
-        return sysinfo::compress_du(output);
-    }
-    if c.starts_with("ping ") {
-        return sysinfo::compress_ping(output);
-    }
-    if c.starts_with("jq ") || c == "jq" {
-        return json_schema::compress(output);
-    }
-    if c.starts_with("hadolint") {
-        return eslint::compress(c, output);
-    }
-    if c.starts_with("yamllint") || c.starts_with("npx yamllint") {
-        return eslint::compress(c, output);
-    }
-    if c.starts_with("markdownlint") || c.starts_with("npx markdownlint") {
-        return eslint::compress(c, output);
-    }
-    if c.starts_with("oxlint") || c.starts_with("npx oxlint") {
-        return eslint::compress(c, output);
-    }
-    if c.starts_with("pyright") || c.starts_with("basedpyright") {
-        return mypy::compress(c, output);
-    }
-    if c.starts_with("turbo ") || c.starts_with("npx turbo") {
-        return npm::compress(c, output);
-    }
-    if c.starts_with("nx ") || c.starts_with("npx nx") {
-        return npm::compress(c, output);
-    }
-    if c.starts_with("clang++ ") || c.starts_with("clang ") {
-        return clang::compress(c, output);
-    }
-    if c.starts_with("gcc ")
-        || c.starts_with("g++ ")
-        || c.starts_with("cc ")
-        || c.starts_with("c++ ")
-    {
-        return cmake::compress(c, output);
-    }
-
-    // --- data domain (#657) ---
-    if c == "dbt" || c.starts_with("dbt ") {
-        return dbt::compress(c, output);
-    }
-    if c == "alembic" || c.starts_with("alembic ") {
-        return alembic::compress(c, output);
-    }
-    if c == "flyway" || c.starts_with("flyway ") {
-        return flyway::compress(c, output);
-    }
-    if c.starts_with("spark-submit") || c.starts_with("spark-sql") || c.starts_with("pyspark") {
-        return spark::compress(c, output);
-    }
-
-    // --- ai domain (#658) ---
-    if c == "ollama" || c.starts_with("ollama ") {
-        return ollama::compress(c, output);
-    }
-    if c.starts_with("mlflow ") {
-        return mlflow::compress(c, output);
-    }
-
-    // --- security / supply-chain (#659) ---
-    if c.starts_with("semgrep ") {
-        return semgrep::compress(c, output);
-    }
-    if c.starts_with("trivy ") {
-        return trivy::compress(c, output);
-    }
-    if c.starts_with("grype ") {
-        return grype::compress(c, output);
-    }
-    if c.starts_with("syft ") {
-        return syft::compress(c, output);
-    }
-    if c.starts_with("cosign ") {
-        return cosign::compress(c, output);
-    }
-    if c.starts_with("swiftlint") {
-        return swiftlint::compress(c, output);
-    }
-
-    // --- vcs / toolchain (#660) ---
-    if c == "jj" || c.starts_with("jj ") {
-        return jj::compress(c, output);
-    }
-    if c == "mise" || c.starts_with("mise ") {
-        return mise::compress(c, output);
-    }
-    if c == "buf" || c.starts_with("buf ") {
-        return buf::compress(c, output);
-    }
-    if c.starts_with("gem ") {
-        return gem::compress(c, output);
-    }
-
-    // --- edge / infra (#661) ---
-    if c == "pulumi" || c.starts_with("pulumi ") {
-        return pulumi::compress(c, output);
-    }
-    if c.starts_with("linkerd ") {
-        return linkerd::compress(c, output);
-    }
-    if c.starts_with("argocd ") {
-        return argocd::compress(c, output);
-    }
-    if c == "vercel"
-        || c.starts_with("vercel ")
-        || c == "fly"
-        || c.starts_with("fly ")
-        || c.starts_with("flyctl ")
-        || c.starts_with("wrangler ")
-        || c.starts_with("skaffold ")
-        || c.starts_with("supabase ")
-    {
-        return deploy::compress(c, output);
-    }
-
-    None
+    PATTERNS
+        .iter()
+        .find(|(matches, _)| matches(c))
+        .and_then(|(_, handle)| handle(c, output))
 }
 
 #[cfg(test)]
