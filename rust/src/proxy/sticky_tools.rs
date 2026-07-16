@@ -88,51 +88,51 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn clear() {
-        if let Ok(mut guard) = active_sessions().lock() {
-            guard.clear();
-        }
-    }
+    // High conv IDs reserved for these unit tests. Parallel tests in compress.rs
+    // and history_prune.rs call mark_ccr_active(0); clearing the global set
+    // races with them, so each test marks its own ID instead.
+    const NO_CCR: u64 = 0xAA01;
+    const INJECT: u64 = 0xAA02;
+    const DEDUP: u64 = 0xAA03;
+    const STABLE: u64 = 0xAA04;
+    const STICKY: u64 = 0xAA05;
 
     #[test]
     fn tool_not_injected_without_ccr() {
-        clear();
         let mut doc = json!({"tools": [], "messages": []});
-        assert!(!ensure_tool_present(999, &mut doc));
+        assert!(!ensure_tool_present(NO_CCR, &mut doc));
         assert!(doc["tools"].as_array().unwrap().is_empty());
     }
 
     #[test]
     fn tool_injected_after_ccr_activation() {
-        clear();
-        mark_ccr_active(42);
+        mark_ccr_active(INJECT);
+        assert!(is_ccr_active(INJECT));
         let mut doc = json!({"tools": [], "messages": []});
-        assert!(ensure_tool_present(42, &mut doc));
+        assert!(ensure_tool_present(INJECT, &mut doc));
         assert_eq!(doc["tools"].as_array().unwrap().len(), 1);
         assert_eq!(doc["tools"][0]["name"], "ctx_expand");
     }
 
     #[test]
     fn tool_not_duplicated() {
-        clear();
-        mark_ccr_active(42);
+        mark_ccr_active(DEDUP);
         let mut doc = json!({"tools": [expand_tool_definition()], "messages": []});
-        assert!(!ensure_tool_present(42, &mut doc));
+        assert!(!ensure_tool_present(DEDUP, &mut doc));
         assert_eq!(doc["tools"].as_array().unwrap().len(), 1);
     }
 
     #[test]
     fn tools_array_stays_stable_after_ccr_activation() {
-        clear();
-        mark_ccr_active(100);
+        mark_ccr_active(STABLE);
         let existing = json!({"name": "other_tool", "description": "test"});
 
         let mut doc1 = json!({"tools": [existing.clone()], "messages": []});
-        ensure_tool_present(100, &mut doc1);
+        ensure_tool_present(STABLE, &mut doc1);
         let snap1 = serde_json::to_string(&doc1["tools"]).unwrap();
 
         let mut doc2 = json!({"tools": [existing], "messages": []});
-        ensure_tool_present(100, &mut doc2);
+        ensure_tool_present(STABLE, &mut doc2);
         let snap2 = serde_json::to_string(&doc2["tools"]).unwrap();
 
         assert_eq!(
@@ -143,16 +143,14 @@ mod tests {
 
     #[test]
     fn sticky_survives_turn_without_markers() {
-        clear();
-        mark_ccr_active(77);
-        assert!(is_ccr_active(77));
+        mark_ccr_active(STICKY);
+        assert!(is_ccr_active(STICKY));
         let mut doc = json!({"tools": [], "messages": []});
-        assert!(ensure_tool_present(77, &mut doc));
+        assert!(ensure_tool_present(STICKY, &mut doc));
     }
 
     #[test]
     fn max_tracked_does_not_panic() {
-        clear();
         for i in 0..(MAX_TRACKED + 100) {
             mark_ccr_active(i as u64);
         }
