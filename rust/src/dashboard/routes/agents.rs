@@ -47,9 +47,11 @@ pub(super) fn handle(
 }
 
 fn build_agents_json() -> String {
-    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-    registry.cleanup_stale(24);
-    let _ = registry.save();
+    let registry = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.cleanup_stale(24);
+    })
+    .map(|(registry, ())| registry)
+    .unwrap_or_default();
 
     let mut agents: Vec<serde_json::Value> = registry
         .agents

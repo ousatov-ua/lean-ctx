@@ -393,9 +393,11 @@ pub fn build_wakeup_briefing(project_root: &str, task: Option<&str>) -> String {
     // from crashed or exited MCP processes (#419). `ctx_agent list` and the
     // dashboard already do this; the wake-up briefing must too. Scope to the
     // current project root — the briefing is about peers on *this* project.
-    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-    registry.cleanup_stale(24);
-    let _ = registry.save();
+    let registry = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.cleanup_stale(24);
+    })
+    .map(|(registry, ())| registry)
+    .unwrap_or_default();
     let active_agents = registry.list_active(Some(project_root));
     if !active_agents.is_empty() {
         let agents: Vec<String> = active_agents

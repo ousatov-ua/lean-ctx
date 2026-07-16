@@ -304,12 +304,15 @@ impl AgentRegistry {
         let dir = agents_dir()?;
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-        let path = dir.join("registry.json");
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-
         let lock_path = dir.join("registry.lock");
         let _lock = FileLock::acquire(&lock_path)?;
 
+        self.save_locked(&dir)
+    }
+
+    fn save_locked(&self, dir: &std::path::Path) -> Result<(), String> {
+        let path = dir.join("registry.json");
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(&path, json).map_err(|e| e.to_string())
     }
 
@@ -322,6 +325,28 @@ impl AgentRegistry {
 
     pub fn load_or_create() -> Self {
         Self::load().unwrap_or_default()
+    }
+
+    /// Atomically load, mutate, and persist the registry under a single file
+    /// lock. `load_or_create()` + mutate + `save()` is a read-modify-write
+    /// race: `save()` only locks the final write, so two concurrent callers
+    /// (two MCP sessions registering, or the dashboard's own poll-triggered
+    /// `cleanup_stale` + save) can each load a stale snapshot and the last
+    /// writer silently drops the other's changes — e.g. a second session's
+    /// registration vanishing from the dashboard. Holding the lock across
+    /// the re-read closes that window: the read inside always sees the
+    /// latest on-disk state.
+    pub fn mutate_locked<T>(f: impl FnOnce(&mut Self) -> T) -> Result<(Self, T), String> {
+        let dir = agents_dir()?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        let lock_path = dir.join("registry.lock");
+        let _lock = FileLock::acquire(&lock_path)?;
+
+        let mut registry = Self::load().unwrap_or_default();
+        let out = f(&mut registry);
+        registry.save_locked(&dir)?;
+        Ok((registry, out))
     }
 }
 
@@ -1041,6 +1066,51 @@ mod tests {
         assert!(
             !ids.contains(&"ghost"),
             "dead-pid agent must be pruned from the active list (#419)"
+        );
+    }
+
+    /// Regression: concurrent load-mutate-save cycles must not silently drop
+    /// each other's changes. Before `mutate_locked`, `save()` only locked the
+    /// final write — the preceding `load()` was unlocked, so a second writer
+    /// could load a stale snapshot and overwrite the first writer's addition
+    /// (e.g. a second Claude Code session's agent registration vanishing
+    /// from the dashboard).
+    #[test]
+    fn mutate_locked_survives_concurrent_writers() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    AgentRegistry::mutate_locked(|registry| {
+                        registry.agents.push(AgentEntry {
+                            agent_id: format!("agent-{i}"),
+                            agent_type: "test".to_string(),
+                            role: None,
+                            project_root: "/tmp/project".to_string(),
+                            started_at: Utc::now(),
+                            last_active: Utc::now(),
+                            pid: 10_000 + i,
+                            status: AgentStatus::Active,
+                            status_message: None,
+                        });
+                    })
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join()
+                .expect("writer thread must not panic")
+                .expect("mutate_locked must succeed");
+        }
+
+        let registry = AgentRegistry::load_or_create();
+        assert_eq!(
+            registry.agents.len(),
+            8,
+            "all 8 concurrent registrations must survive, got {}",
+            registry.agents.len()
         );
     }
 }

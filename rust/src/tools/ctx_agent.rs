@@ -24,24 +24,28 @@ pub fn handle(
     match action {
         "register" => {
             let atype = agent_type.unwrap_or("unknown");
-            let mut registry = AgentRegistry::load_or_create();
-            registry.cleanup_stale(24);
-            let agent_id = registry.register(atype, role, project_root);
-            match registry.save() {
-                Ok(()) => format!(
+            match AgentRegistry::mutate_locked(|registry| {
+                registry.cleanup_stale(24);
+                registry.register(atype, role, project_root)
+            }) {
+                Ok((_, agent_id)) => format!(
                     "Agent registered: {agent_id} (type: {atype}, role: {})",
                     role.unwrap_or("none")
                 ),
-                Err(e) => format!("Registered as {agent_id} but save failed: {e}"),
+                Err(e) => format!("Registration failed: {e}"),
             }
         }
 
         "list" => {
-            let mut registry = AgentRegistry::load_or_create();
-            registry.cleanup_stale(24);
-            if let Err(e) = registry.save() {
-                tracing::warn!("lean-ctx: failed to persist agent registry: {e}");
-            }
+            let registry = match AgentRegistry::mutate_locked(|registry| {
+                registry.cleanup_stale(24);
+            }) {
+                Ok((registry, ())) => registry,
+                Err(e) => {
+                    tracing::warn!("lean-ctx: failed to persist agent registry: {e}");
+                    AgentRegistry::load_or_create()
+                }
+            };
 
             let agents = registry.list_active(Some(project_root));
             if agents.is_empty() {
@@ -76,22 +80,22 @@ pub fn handle(
             if msg_privacy == PrivacyLevel::Private && to_agent.is_none() {
                 return "Error: private messages require to_agent".to_string();
             }
-            let mut registry = AgentRegistry::load_or_create();
-            let msg_id = registry.post_message_full(
-                from,
-                to_agent,
-                cat,
-                msg,
-                msg_privacy,
-                msg_priority,
-                _ttl_hours,
-            );
-            match registry.save() {
-                Ok(()) => {
+            match AgentRegistry::mutate_locked(|registry| {
+                registry.post_message_full(
+                    from,
+                    to_agent,
+                    cat,
+                    msg,
+                    msg_privacy,
+                    msg_priority,
+                    _ttl_hours,
+                )
+            }) {
+                Ok((_, msg_id)) => {
                     let target = to_agent.unwrap_or("all agents (broadcast)");
                     format!("Posted [{cat}] to {target}: {msg} (id: {msg_id})")
                 }
-                Err(e) => format!("Posted but save failed: {e}"),
+                Err(e) => format!("Post failed: {e}"),
             }
         }
 
@@ -99,13 +103,23 @@ pub fn handle(
             let Some(agent_id) = current_agent_id else {
                 return "Error: agent must be registered first (use action=register)".to_string();
             };
-            let mut registry = AgentRegistry::load_or_create();
-            let messages = registry.read_unread(agent_id);
+            let messages = match AgentRegistry::mutate_locked(|registry| {
+                registry
+                    .read_unread(agent_id)
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }) {
+                Ok((_, messages)) => messages,
+                Err(e) => {
+                    tracing::warn!(
+                        "lean-ctx: failed to persist agent registry (messages may reappear): {e}"
+                    );
+                    return "Error: failed to read messages".to_string();
+                }
+            };
 
             if messages.is_empty() {
-                if let Err(e) = registry.save() {
-                    tracing::warn!("lean-ctx: failed to persist agent registry: {e}");
-                }
                 return "No new messages.".to_string();
             }
 
@@ -116,11 +130,6 @@ pub fn handle(
                     "  [{}] from {} ({}m ago): {}\n",
                     m.category, m.from_agent, age, m.message
                 ));
-            }
-            if let Err(e) = registry.save() {
-                tracing::warn!(
-                    "lean-ctx: failed to persist agent registry (messages may reappear): {e}"
-                );
             }
             out
         }
@@ -140,10 +149,10 @@ pub fn handle(
             };
             let status_msg = message;
 
-            let mut registry = AgentRegistry::load_or_create();
-            registry.set_status(agent_id, new_status.clone(), status_msg);
-            match registry.save() {
-                Ok(()) => format!(
+            match AgentRegistry::mutate_locked(|registry| {
+                registry.set_status(agent_id, new_status.clone(), status_msg);
+            }) {
+                Ok(_) => format!(
                     "Status updated: {} → {}{}",
                     agent_id,
                     new_status,
@@ -177,17 +186,15 @@ pub fn handle(
             };
             let summary = message.unwrap_or("(no summary provided)");
 
-            let mut registry = AgentRegistry::load_or_create();
-
-            registry.post_message(
-                from,
-                Some(target),
-                "handoff",
-                &format!("HANDOFF from {from}: {summary}"),
-            );
-
-            registry.set_status(from, AgentStatus::Finished, Some("handed off"));
-            let _ = registry.save();
+            let _ = AgentRegistry::mutate_locked(|registry| {
+                registry.post_message(
+                    from,
+                    Some(target),
+                    "handoff",
+                    &format!("HANDOFF from {from}: {summary}"),
+                );
+                registry.set_status(from, AgentStatus::Finished, Some("handed off"));
+            });
 
             // Stigmergy (#540): mark the handed-off work as Done in the field
             // so other agents see it arithmetically, without reading messages.
@@ -710,10 +717,10 @@ pub fn handle(
                 return "Error: no valid key=value pairs found".to_string();
             }
             let from = current_agent_id.unwrap_or("anonymous");
-            let mut registry = AgentRegistry::load_or_create();
-            registry.share_knowledge(from, cat, &facts);
-            match registry.save() {
-                Ok(()) => format!("Shared {} facts in category '{}'", facts.len(), cat),
+            match AgentRegistry::mutate_locked(|registry| {
+                registry.share_knowledge(from, cat, &facts);
+            }) {
+                Ok(_) => format!("Shared {} facts in category '{}'", facts.len(), cat),
                 Err(e) => format!("Share failed: {e}"),
             }
         }
@@ -722,9 +729,11 @@ pub fn handle(
             let Some(agent_id) = current_agent_id else {
                 return "Error: agent must be registered first".to_string();
             };
-            let mut registry = AgentRegistry::load_or_create();
-            let facts = registry.receive_shared_knowledge(agent_id);
-            let _ = registry.save();
+            let facts = AgentRegistry::mutate_locked(|registry| {
+                registry.receive_shared_knowledge(agent_id)
+            })
+            .map(|(_, facts)| facts)
+            .unwrap_or_default();
             if facts.is_empty() {
                 return "No new shared knowledge.".to_string();
             }

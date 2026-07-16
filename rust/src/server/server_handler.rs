@@ -219,11 +219,13 @@ impl ServerHandler for LeanCtxServer {
 
                 let _ = crate::core::roles::set_active_role_with_source(effective_role, true);
 
-                let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-                registry.cleanup_stale(24);
-                let id = registry.register("mcp", Some(effective_role), &agent_root);
-                let _ = registry.save();
-                if let Ok(mut guard) = agent_id_handle.try_write() {
+                let id = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+                    registry.cleanup_stale(24);
+                    registry.register("mcp", Some(effective_role), &agent_root)
+                })
+                .map(|(_, id)| id)
+                .ok();
+                if let (Some(id), Ok(mut guard)) = (id, agent_id_handle.try_write()) {
                     *guard = Some(id);
                 }
             }

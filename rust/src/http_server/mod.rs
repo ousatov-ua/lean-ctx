@@ -906,9 +906,11 @@ async fn v1_agents_register(
         .and_then(|v| v.as_str())
         .unwrap_or(&state.project_root);
 
-    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-    let agent_id = registry.register(agent_type, role, project_root);
-    let _ = registry.save();
+    let agent_id = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.register(agent_type, role, project_root)
+    })
+    .map(|(_, id)| id)
+    .unwrap_or_default();
 
     Json(serde_json::json!({
         "agent_id": agent_id,
@@ -918,9 +920,9 @@ async fn v1_agents_register(
 
 async fn v1_agents_heartbeat(Json(body): Json<Value>) -> impl IntoResponse {
     let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-    registry.update_heartbeat(agent_id);
-    let _ = registry.save();
+    let _ = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.update_heartbeat(agent_id);
+    });
     Json(serde_json::json!({"status": "ok"}))
 }
 
@@ -940,13 +942,13 @@ async fn v1_agents_list() -> impl IntoResponse {
 
 async fn v1_agents_deregister(Json(body): Json<Value>) -> impl IntoResponse {
     let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
-    registry.set_status(
-        agent_id,
-        crate::core::agents::AgentStatus::Finished,
-        Some("deregistered via API"),
-    );
-    let _ = registry.save();
+    let _ = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.set_status(
+            agent_id,
+            crate::core::agents::AgentStatus::Finished,
+            Some("deregistered via API"),
+        );
+    });
     Json(serde_json::json!({"status": "deregistered"}))
 }
 
