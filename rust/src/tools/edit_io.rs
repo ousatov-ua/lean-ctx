@@ -15,6 +15,10 @@
 //! One implementation = one audited boundary. `ctx_edit` (`str_replace`) and
 //! `ctx_patch` (anchored) both apply through these functions, so a fix here
 //! protects both tools at once.
+//!
+//! **Known limitation (#960):** the TOCTOU guard is a point-in-time check,
+//! not a held lock — see [`ensure_preimage_still_matches`] for the residual
+//! window between that check and the atomic write it gates.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -158,6 +162,19 @@ pub(crate) fn read_preimage(
 /// Re-reads the file and confirms its fingerprint still equals `expected`
 /// (TOCTOU guard): a concurrent writer between the preimage read and the write
 /// is detected here so the edit aborts instead of clobbering newer bytes.
+///
+/// **Residual window (#960, accepted limitation):** this is a point-in-time
+/// check, not a held lock — it only detects a write that already happened
+/// *before* this call returns. Callers still compute `new_content` and hand
+/// it to [`write_atomic_bytes_with_permissions`] afterward; nothing guards
+/// that gap. An external editor writing to `path` between this check
+/// succeeding and the temp+rename completing is not detected, and its write
+/// is silently overwritten. Acceptable for lean-ctx's single-writer-daemon
+/// model — the MCP server is the only intended writer of files it edits — but
+/// a real gap if an external editor (or a second lean-ctx instance) writes to
+/// the same file concurrently. Closing it fully would need a held file lock
+/// (e.g. `flock`) spanning check-through-rename, more machinery than the
+/// mono-writer case warrants today.
 pub(crate) fn ensure_preimage_still_matches(
     path: &Path,
     expected: &FileFingerprint,

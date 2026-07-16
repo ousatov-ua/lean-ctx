@@ -453,6 +453,9 @@ fn do_replace(
             crate::core::code_health::gate::GateOutcome::Allow(notice) => notice,
         };
 
+    // #960: a point-in-time check, not a held lock — see
+    // ensure_preimage_still_matches' doc for the residual window between
+    // this check and the write below.
     if let Err(e) = ensure_preimage_still_matches(path, &pre.fp, cap) {
         return (e, CacheEffect::None);
     }
@@ -566,6 +569,9 @@ fn handle_create(file_path: &str, content: &str, params: &EditParams) -> (String
         if let Err(e) = verify_expected_preimage(&pre, params) {
             return (e, CacheEffect::None);
         }
+        // #960: a point-in-time check, not a held lock — see
+        // ensure_preimage_still_matches' doc for the residual window between
+        // this check and the write below.
         if let Err(e) = ensure_preimage_still_matches(path, &pre.fp, cap) {
             return (e, CacheEffect::None);
         }

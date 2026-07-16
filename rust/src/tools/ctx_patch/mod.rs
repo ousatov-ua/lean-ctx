@@ -205,6 +205,9 @@ pub fn run_io(params: &PatchParams, _last_mode: &str) -> (String, CacheEffect) {
     };
 
     // TOCTOU guard: confirm the file did not change between read and write.
+    // #960: a point-in-time check, not a held lock — see
+    // ensure_preimage_still_matches' doc for the residual window between
+    // this check and the write below.
     if let Err(e) = ensure_preimage_still_matches(path, &pre.fp, cap) {
         return (e, CacheEffect::None);
     }
