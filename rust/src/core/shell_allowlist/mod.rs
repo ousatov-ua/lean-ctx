@@ -1474,7 +1474,7 @@ fn allowlist_block_message(base: &str) -> String {
          Or disable the allowlist entirely: set  shell_allowlist = []\n\
          Or turn off all shell gating (you own the risk): set  shell_security = \"off\"  \
          (or env LEAN_CTX_SHELL_SECURITY=off) — compression still applies.\n\
-         Do NOT retry this command — it will fail again with the same error."
+         Do NOT retry this command — it will fail again with the same error.\n         For multi-line scripts or complex pipelines: use ctx_execute(language=\"shell\") instead — \n         it is the sanctioned path for script execution without allowlist restrictions."
     );
 
     if crate::core::config::cloud_infra_commands().contains(&base) {

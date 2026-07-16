@@ -1615,3 +1615,16 @@ fn gh_run_after_var_assignment_substitution() {
         check_all_segments(cmd, &list).unwrap_err()
     );
 }
+
+// --- GH #888: block message mentions ctx_execute as sanctioned alternative ---
+
+#[test]
+fn block_message_mentions_ctx_execute() {
+    let list = allow(&["git"]);
+    let err = check_all_segments("terraform plan", &list).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ctx_execute"),
+        "block message must mention ctx_execute as the script execution path: {msg}"
+    );
+}
