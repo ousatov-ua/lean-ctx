@@ -540,12 +540,15 @@ mod tests {
     /// at the previous ~1685-tok surface.
     ///
     /// Bumped to 2060 for #870: `ctx_search` gained `exclude`/`exclude_pattern`
-    /// negative filters (+~7 tok on its schema). The per-tool 300 gate is
-    /// unchanged — ctx_search stays well under it (~292 tok).
+    /// negative filters (+~7 tok on its schema).
+    ///
+    /// Bumped to 370/2500 for #871: `ctx_search` gained `queries` batch mode
+    /// and restored full action descriptions. Tool correctness > token savings —
+    /// incomplete descriptions cause agents to misuse parameters.
     #[test]
     fn core_tool_surface_stays_within_budget() {
-        const PER_TOOL_BUDGET: usize = 300;
-        const TOTAL_BUDGET: usize = 2060;
+        const PER_TOOL_BUDGET: usize = 370;
+        const TOTAL_BUDGET: usize = 2500;
 
         let _guard = crate::core::data_dir::isolated_data_dir();
         let core = crate::tool_defs::core_tool_names();

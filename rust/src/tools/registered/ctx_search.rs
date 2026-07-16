@@ -60,8 +60,10 @@ impl McpTool for CtxSearchTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_search",
-            "Search code. action: regex|semantic|symbol|reindex|find_related. \
-             anchored=true → ctx_patch. queries:[{pattern}] for batch. ctx_compose FIRST.",
+            "Search code; `action` picks the engine (default regex). \
+             regex(pattern) | semantic(query, by meaning) | symbol(name, AST-exact; \
+             or handle=path#name@Lline) | reindex | find_related(file_path,line). \
+             anchored=true tags hits for ctx_patch. queries:[{pattern}] for batch. Run ctx_compose FIRST.",
             json!({
                 "type": "object",
                 "properties": {
