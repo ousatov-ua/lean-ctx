@@ -525,11 +525,13 @@ jobs:
       # itself injects (advertised tool schemas + MCP instructions + wakeup)
       # must stay under budget. Runs in a scratch HOME + empty cwd so only OUR
       # footprint is measured — no repo rules files, no developer state.
-      # Baseline after the diet: ~2147 tok (schemas 1685, instructions 462).
+      # Baseline: ~2660 tok (schemas ~2190, instructions ~470).
+      # Raised 2600→2700 after #989/#986/#987/#940/#942 added hash allowlist
+      # entries and improved ctx_patch description.
       - name: Self-footprint gate (doctor overhead)
         shell: bash
         env:
-          LEAN_CTX_CONTEXT_BUDGET_TOKENS: "2600"
+          LEAN_CTX_CONTEXT_BUDGET_TOKENS: "2700"
         run: |
           set -euo pipefail
           BIN="$GITHUB_WORKSPACE/rust/target/debug/lean-ctx"
@@ -678,3 +680,4 @@ jobs:
           PY
 
   # Security audit runs in security-check.yml workflow
+

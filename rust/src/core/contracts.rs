@@ -248,6 +248,14 @@ pub fn contract_docs() -> Vec<ContractDoc> {
             Experimental,
         ),
         doc("pillar-boundaries", "pillar-boundaries-v1.md", 1, Stable),
+        // Logical editor-session telemetry is an additive local-dashboard surface;
+        // keep it experimental until multiple integrations implement the lifecycle.
+        doc(
+            "logical-session-presence",
+            "logical-session-presence-v1.md",
+            1,
+            Experimental,
+        ),
     ]
 }
 

@@ -131,7 +131,15 @@ pub(crate) fn default_shell_allowlist() -> Vec<String> {
         "tree",
         "du",
         "df",
+        // Read-only process and host inspection. Process control stays opt-in:
+        // `kill`, `pkill`, and `killall` can disrupt user services (#996).
         "ps",
+        "pgrep",
+        "pidof",
+        "pstree",
+        "nproc",
+        "uptime",
+        "free",
         "lsof",
         "watch",
         "tee",
@@ -307,6 +315,23 @@ mod tests {
             assert!(
                 defaults.contains(&tool.to_string()),
                 "{tool} must stay in the default allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_process_inspection_is_default_allowed() {
+        let defaults = default_shell_allowlist();
+        for tool in ["ps", "pgrep", "pidof", "pstree", "nproc", "uptime", "free"] {
+            assert!(
+                defaults.contains(&tool.to_string()),
+                "{tool} must be in the default allowlist"
+            );
+        }
+        for tool in ["kill", "pkill", "killall"] {
+            assert!(
+                !defaults.contains(&tool.to_string()),
+                "{tool} must remain an explicit opt-in"
             );
         }
     }

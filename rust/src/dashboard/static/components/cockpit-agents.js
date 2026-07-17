@@ -128,6 +128,7 @@ class CockpitAgents extends HTMLElement {
 
     var body = '';
     body += this._renderMetrics(esc, ff, fmt);
+    body += this._renderLogicalSessions(esc);
     body += this._renderSwimlanes(esc, ff, fmt);
     body += this._renderMcpTools(esc, ff);
     body += this._renderEventsFeed(esc);
@@ -137,7 +138,13 @@ class CockpitAgents extends HTMLElement {
   _renderMetrics(esc, ff, fmt) {
     var ag = this._data.agents;
     var mcp = this._data.mcp;
-    var activeCount = ag && ag.total_active != null ? ag.total_active : 0;
+    var presenceAvailable = !!(ag && ag.logical_session_presence_available);
+    var logicalCount = presenceAvailable && ag.logical_session_count != null
+      ? String(ag.logical_session_count)
+      : '\u2014';
+    var transportCount = ag && ag.transport_count != null
+      ? ag.transport_count
+      : (ag && ag.total_active != null ? ag.total_active : 0);
     var sharedCtx = ag && ag.shared_contexts != null ? ag.shared_contexts : 0;
 
     var toolCalls = 0;
@@ -151,8 +158,12 @@ class CockpitAgents extends HTMLElement {
     return (
       '<div class="hero r4 stagger">' +
       '<div class="hc">' +
-      '<span class="hl">Active Agents' + tip('active_agents') + '</span>' +
-      '<div class="hv">' + esc(String(activeCount)) + '</div>' +
+      '<span class="hl">Logical Sessions' + tip('logical_sessions') + '</span>' +
+      '<div class="hv">' + esc(logicalCount) + '</div>' +
+      '</div>' +
+      '<div class="hc">' +
+      '<span class="hl">MCP Transports' + tip('mcp_transports') + '</span>' +
+      '<div class="hv">' + esc(String(transportCount)) + '</div>' +
       '</div>' +
       '<div class="hc">' +
       '<span class="hl">Total Tool Calls' + tip('agent_tool_calls') + '</span>' +
@@ -170,15 +181,66 @@ class CockpitAgents extends HTMLElement {
     );
   }
 
-  _renderSwimlanes(esc, ff, fmt) {
+  _renderLogicalSessions(esc) {
     var ag = this._data.agents;
-    var list = ag && Array.isArray(ag.agents) ? ag.agents : [];
+    var available = !!(ag && ag.logical_session_presence_available);
+    var list = ag && Array.isArray(ag.logical_sessions) ? ag.logical_sessions : [];
+
+    if (!available) {
+      return (
+        '<div class="card" style="margin-bottom:16px">' +
+        '<h3>Logical sessions</h3>' +
+        '<p class="hs">Unavailable: the connected editor has not supplied explicit session-presence telemetry. Tool activity is never used as a proxy.</p>' +
+        '</div>'
+      );
+    }
 
     if (list.length === 0) {
       return (
         '<div class="card" style="margin-bottom:16px">' +
-        '<h3>Agent timeline' + tip('agent_swimlanes') + '</h3>' +
-        '<p class="hs">No agents registered yet. Agents appear here once they connect.</p>' +
+        '<h3>Logical sessions</h3>' +
+        '<p class="hs">No live logical sessions. Sessions expire when heartbeats stop.</p>' +
+        '</div>'
+      );
+    }
+
+    var cards = list.map(function (session) {
+      var heartbeat = session.heartbeat_age_seconds != null
+        ? (session.heartbeat_age_seconds < 2 ? 'just now' : session.heartbeat_age_seconds + 's ago')
+        : relativeTime(session.last_heartbeat);
+      return (
+        '<div class="swimlane">' +
+        '<div class="swimlane-header">' +
+        statusDotHtml('active') +
+        '<strong>' + esc(session.session_id || 'Unknown session') + '</strong>' +
+        '<span class="tag tg" style="margin-left:auto">' + esc(session.source || '\u2014') + '</span>' +
+        '</div>' +
+        '<div class="swimlane-body">' +
+        '<div class="sr"><span class="sl">Workspace</span><span class="sv">' + esc(session.workspace || '\u2014') + '</span></div>' +
+        '<div class="sr"><span class="sl">Opened</span><span class="sv">' + esc(relativeTime(session.opened_at)) + '</span></div>' +
+        '<div class="sr"><span class="sl">Heartbeat</span><span class="sv">' + esc(heartbeat) + '</span></div>' +
+        '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    return (
+      '<div class="card" style="margin-bottom:16px">' +
+      '<div class="card-header"><h3>Logical sessions</h3></div>' +
+      '<div class="cka-swimlane-grid">' + cards + '</div>' +
+      '</div>'
+    );
+  }
+
+  _renderSwimlanes(esc, ff, fmt) {
+    var ag = this._data.agents;
+    var list = ag && Array.isArray(ag.transports) ? ag.transports : (ag && Array.isArray(ag.agents) ? ag.agents : []);
+
+    if (list.length === 0) {
+      return (
+        '<div class="card" style="margin-bottom:16px">' +
+        '<h3>MCP transport processes' + tip('agent_swimlanes') + '</h3>' +
+        '<p class="hs">No MCP transport processes are currently connected.</p>' +
         '</div>'
       );
     }
@@ -211,7 +273,7 @@ class CockpitAgents extends HTMLElement {
 
     return (
       '<div class="card" style="margin-bottom:16px">' +
-      '<div class="card-header"><h3>Agent timeline' + tip('agent_swimlanes') + '</h3></div>' +
+      '<div class="card-header"><h3>MCP transport processes' + tip('agent_swimlanes') + '</h3></div>' +
       '<div class="cka-swimlane-grid">' + cards + '</div>' +
       '</div>'
     );

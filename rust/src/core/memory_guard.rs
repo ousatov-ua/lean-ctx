@@ -260,6 +260,17 @@ pub fn current_pressure() -> PressureLevel {
     PressureLevel::from_u8(CURRENT_PRESSURE.load(Ordering::Relaxed))
 }
 
+#[inline]
+const fn pressure_requests_abort(level: PressureLevel) -> bool {
+    level as u8 >= PressureLevel::Hard as u8
+}
+
+#[inline]
+fn publish_pressure(level: PressureLevel) {
+    CURRENT_PRESSURE.store(level as u8, Ordering::Relaxed);
+    ABORT_REQUESTED.store(pressure_requests_abort(level), Ordering::SeqCst);
+}
+
 /// Start the background memory guardian task (idempotent).
 /// Polls every 3s (normal), 1s (under pressure), or up to 15s once RSS has been
 /// stably calm (idle backoff). At Critical level, performs aggressive eviction
@@ -300,7 +311,7 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
             // #790: immediate first sample — close the 3s blind window so
             // builders that start right after start_guard() see real pressure.
             if let Some(snap) = MemorySnapshot::capture() {
-                CURRENT_PRESSURE.store(snap.pressure_level as u8, Ordering::Relaxed);
+                publish_pressure(snap.pressure_level);
                 if snap.pressure_level >= PressureLevel::Soft {
                     eviction_callback(snap.pressure_level);
                 }
@@ -312,7 +323,7 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
                     continue;
                 };
 
-                CURRENT_PRESSURE.store(snap.pressure_level as u8, Ordering::Relaxed);
+                publish_pressure(snap.pressure_level);
 
                 if snap.pressure_level == PressureLevel::Critical {
                     tracing::error!(
@@ -322,7 +333,6 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
                         snap.rss_percent,
                         snap.system_ram_bytes as f64 / 1_073_741_824.0,
                     );
-                    ABORT_REQUESTED.store(true, Ordering::SeqCst);
                     (eviction_callback)(PressureLevel::Critical);
                     jemalloc_purge();
 
@@ -353,8 +363,6 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
                 if snap.pressure_level >= PressureLevel::Soft {
                     poll_secs = 1;
                     calm_ticks = 0;
-                    ABORT_REQUESTED
-                        .store(snap.pressure_level >= PressureLevel::Hard, Ordering::SeqCst);
                     tracing::warn!(
                         "[memory_guard] pressure={:?} RSS={:.0}MB limit={:.0}MB ({:.1}% of {:.0}GB)",
                         snap.pressure_level,
@@ -375,10 +383,6 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
                     } else {
                         3
                     };
-                    if ABORT_REQUESTED.load(Ordering::Relaxed) {
-                        ABORT_REQUESTED.store(false, Ordering::SeqCst);
-                        tracing::info!("[memory_guard] pressure normalized, clearing abort flag");
-                    }
                 }
             }
         })
@@ -540,6 +544,15 @@ mod tests {
         ] {
             assert_eq!(PressureLevel::from_u8(level as u8), level);
         }
+    }
+
+    #[test]
+    fn hard_pressure_requests_abort_immediately() {
+        assert!(!pressure_requests_abort(PressureLevel::Normal));
+        assert!(!pressure_requests_abort(PressureLevel::Soft));
+        assert!(!pressure_requests_abort(PressureLevel::Medium));
+        assert!(pressure_requests_abort(PressureLevel::Hard));
+        assert!(pressure_requests_abort(PressureLevel::Critical));
     }
 
     #[test]

@@ -86,6 +86,16 @@ pub fn managed_bin_dir(name: &str, version: &str) -> Result<PathBuf, String> {
         }))
 }
 
+/// Reject an artifact missing its mandatory SHA-256 pin before any policy or network work.
+pub(crate) fn require_sha256_pin(context: &str, expected_sha256: &str) -> Result<(), String> {
+    if expected_sha256.trim().is_empty() {
+        return Err(format!(
+            "{context} asset has no sha256 pin — refusing to fetch"
+        ));
+    }
+    Ok(())
+}
+
 /// Download `url`, verify its SHA-256, harden permissions and atomically
 /// move it to `dest`. `context` prefixes every error/log line (e.g.
 /// ``grammar `lua` `` or ``addon `lean-md` ``) so callers keep their
@@ -97,11 +107,7 @@ pub(crate) fn fetch_verified(
     dest: &Path,
     usage: ArtifactUse,
 ) -> Result<(), String> {
-    if expected_sha256.trim().is_empty() {
-        return Err(format!(
-            "{context} asset has no sha256 pin — refusing to fetch"
-        ));
-    }
+    require_sha256_pin(context, expected_sha256)?;
 
     let agent = crate::core::http_client::ureq_agent_with_timeouts(
         Some(std::time::Duration::from_secs(10)),

@@ -228,6 +228,32 @@ fn signed_envelope_roundtrips_and_rejects_tampering() {
 }
 
 #[test]
+fn edit_token_recovery_requires_fresh_card_bound_signature() {
+    use crate::core::agent_identity::hex_encode;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let key = SigningKey::from_bytes(&[11u8; 32]);
+    let card_id = "card-1";
+    let nonce = "fresh-nonce";
+    let proof = crate::core::wrapped::edit_token_recovery_message(card_id, nonce);
+    let body = RecoverEditTokenBody {
+        nonce: nonce.to_string(),
+        public_key: hex_encode(&key.verifying_key().to_bytes()),
+        signature: hex_encode(&key.sign(proof.as_bytes()).to_bytes()),
+    };
+
+    let publisher_id = verify_edit_token_recovery_proof(card_id, &body).unwrap();
+    assert_eq!(publisher_id.len(), PUBLISHER_ID_HEX_LEN);
+    assert!(verify_edit_token_recovery_proof("different-card", &body).is_err());
+
+    let replayed = RecoverEditTokenBody {
+        nonce: "different-nonce".to_string(),
+        ..body
+    };
+    assert!(verify_edit_token_recovery_proof(card_id, &replayed).is_err());
+}
+
+#[test]
 fn rejects_unknown_fields() {
     let json = r#"{"period":"week","tokens_saved":1,"cost_avoided_usd":0.1,
         "pricing_estimated":false,"compression_rate_pct":50,"total_commands":1,

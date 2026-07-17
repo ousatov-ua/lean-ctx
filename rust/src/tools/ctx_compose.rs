@@ -418,14 +418,14 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     out.push_str(&ranked_files_budgeted(task, project_root, crp_mode));
     out.push('\n');
 
-    // 2. Exact match locations for the *most specific* keyword (index-backed
-    //    search). Picking the first keyword greps the commonest token — for an
-    //    "OCPP …" task that surfaces README/Dockerfile/style-guide hits and
-    //    stops on the budget before reaching code (#993). Ordering by corpus
-    //    document frequency puts a rare identifier (GetMaxCurrent) first, whose
-    //    matches are almost always the code the task is about.
+    // 2. Exact match locations for the most specific identifier-shaped keyword.
+    // Broad prose words and acronyms create repository-wide README/Dockerfile
+    // noise. Within identifiers, the resident index ranks the rarest one first.
     let ranked_keywords = order_by_specificity(&keywords, project_root);
-    if let Some(primary) = ranked_keywords.first() {
+    if let Some(primary) = ranked_keywords
+        .iter()
+        .find(|keyword| is_code_identifier(keyword))
+    {
         let grep = crate::tools::ctx_search::handle(
             primary,
             project_root,
@@ -452,7 +452,7 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     let mut items: Vec<CoverageItem> = Vec::new();
     for kw in &keywords {
         if let Some((rendered, toks)) =
-            crate::tools::ctx_symbol::best_symbol_snippet(kw, &keywords, project_root)
+            crate::tools::ctx_symbol::best_symbol_snippet_for_task(kw, task, project_root)
         {
             // The snippet always covers its triggering keyword, plus any other
             // task keyword its body textually surfaces (a more central symbol).
@@ -576,6 +576,20 @@ mod tests {
         let kw = extract_keywords("alpha alpha beta gamma delta epsilon zeta eta", 3);
         assert_eq!(kw.len(), 3);
         assert_eq!(kw[0], "alpha");
+    }
+
+    #[test]
+    fn exact_matches_choose_specific_identifier_not_first_broad_keyword() {
+        let keywords = extract_keywords(
+            "OCPP charger GetMaxCurrent Current.Offered measurand CurrentGetter",
+            6,
+        );
+        assert!(keywords.iter().any(|keyword| keyword == "GetMaxCurrent"));
+        assert!(keywords.iter().any(|keyword| is_code_identifier(keyword)));
+        assert!(!is_code_identifier("OCPP"));
+
+        let prose = extract_keywords("Fix semantic ranking exact matches", 6);
+        assert!(prose.iter().all(|keyword| !is_code_identifier(keyword)));
     }
 
     #[test]

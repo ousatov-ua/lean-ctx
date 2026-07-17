@@ -74,6 +74,15 @@ pub(crate) fn execute_command_with_env(
     }
     let cap = crate::core::limits::max_shell_bytes();
 
+    // Isolate the shell in its own process group on Unix. A timeout must kill
+    // descendants too; otherwise a child can retain a pipe write-end and make
+    // the caller report an empty result despite bytes already captured (#995).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return (format!("ERROR: {e}"), 1),
@@ -91,7 +100,7 @@ pub(crate) fn execute_command_with_env(
             Ok(Some(status)) => break (status.code().unwrap_or(1), false),
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
+                    kill_timed_out_child(&mut child);
                     let _ = child.wait();
                     break (124, true);
                 }
@@ -151,6 +160,21 @@ pub(crate) fn execute_command_with_env(
     }
 
     (text, code)
+}
+
+/// Kill a timed-out command and every descendant that inherited its pipes.
+/// The child is a process-group leader on Unix, so killing only the shell would
+/// otherwise leave grandchildren alive and readers unable to reach EOF (#995).
+fn kill_timed_out_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as libc::pid_t;
+        if pgid > 0 {
+            // SAFETY: killpg is a plain syscall; a stale group simply yields ESRCH.
+            unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        }
+    }
+    let _ = child.kill();
 }
 
 /// Shared, cap-bounded capture buffer for one child pipe. The reader thread
@@ -399,6 +423,28 @@ mod tests {
         assert!(
             output.contains("timed out after 200ms"),
             "timeout message must carry the per-call budget, got: {output}"
+        );
+    }
+
+    /// #995: bytes emitted before a timeout remain visible; a timeout notice is
+    /// additive rather than a replacement for useful subprocess output.
+    #[test]
+    #[cfg_attr(windows, ignore)] // POSIX sleep
+    fn per_call_timeout_preserves_partial_output() {
+        let (output, code) = super::execute_command_with_env(
+            "printf TIMEOUT_PARTIAL_995; sleep 3",
+            ".",
+            &std::collections::HashMap::new(),
+            Some(200),
+        );
+        assert_eq!(code, 124, "timed-out command must exit 124: {output}");
+        assert!(
+            output.contains("TIMEOUT_PARTIAL_995"),
+            "stdout emitted before timeout must be preserved: {output:?}"
+        );
+        assert!(
+            output.contains("timed out after 200ms"),
+            "timeout notice must remain explicit: {output:?}"
         );
     }
 

@@ -68,12 +68,16 @@ impl std::fmt::Display for CognitionLoopReport {
 pub fn run_cognition_loop(project_root: &str, max_steps: u8) -> CognitionLoopReport {
     let start = std::time::Instant::now();
     let mut report = CognitionLoopReport::default();
+    if crate::core::memory_guard::is_under_pressure() {
+        return report;
+    }
 
     let config = crate::core::config::Config::load();
     let Ok(policy) = config.memory_policy_effective() else {
         return report;
     };
     let synth_min_cluster = config.autonomy.cognition_synthesis_min_cluster.max(1);
+    let can_run = |step| max_steps >= step && !crate::core::memory_guard::abort_requested();
 
     // Knowledge read-modify-write under the shared in-process + cross-process
     // lock so this loop (also driven by the background cognition scheduler)
@@ -84,42 +88,42 @@ pub fn run_cognition_loop(project_root: &str, max_steps: u8) -> CognitionLoopRep
         let project_hash = knowledge.project_hash.clone();
         let mut graph = KnowledgeRelationGraph::load_or_create(&project_hash);
 
-        if max_steps >= 1 {
+        if can_run(1) {
             report.facts_promoted = step_seed_promote(project_root, knowledge, &policy);
             report.steps_run = 1;
         }
 
-        if max_steps >= 2 {
+        if can_run(2) {
             report.edges_repaired = step_structural_repair(&mut graph, knowledge);
             report.steps_run = 2;
         }
 
         // Step 3: Fidelity Check (structural only, no LLM)
-        if max_steps >= 3 {
+        if can_run(3) {
             report.steps_run = 3;
         }
 
-        if max_steps >= 4 {
+        if can_run(4) {
             report.lateral_connections = step_lateral_synthesis(knowledge, &mut graph);
             report.steps_run = 4;
         }
 
-        if max_steps >= 5 {
+        if can_run(5) {
             report.contradictions_resolved = step_contradiction_resolution(knowledge);
             report.steps_run = 5;
         }
 
-        if max_steps >= 6 {
+        if can_run(6) {
             report.edges_strengthened = step_hebbian_strengthen(knowledge, &mut graph);
             report.steps_run = 6;
         }
 
-        if max_steps >= 7 {
+        if can_run(7) {
             report.facts_decayed = step_decay(knowledge, &mut graph, &policy);
             report.steps_run = 7;
         }
 
-        if max_steps >= 8 {
+        if can_run(8) {
             if let Ok(lifecycle) = knowledge.run_memory_lifecycle(&policy) {
                 report.facts_archived = lifecycle.archived_count as u32;
             }
@@ -141,7 +145,7 @@ pub fn run_cognition_loop(project_root: &str, max_steps: u8) -> CognitionLoopRep
 
         // Step 9 (#802): synthesize per-entity observation summaries from the now
         // settled store (after lifecycle), so summaries reflect surviving facts.
-        if max_steps >= 9 {
+        if can_run(9) {
             report.observations_synthesized =
                 step_synthesize_observations(knowledge, &policy, synth_min_cluster);
             report.steps_run = 9;

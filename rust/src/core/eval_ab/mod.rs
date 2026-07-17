@@ -135,16 +135,16 @@ mod tests {
     use model::{ModelFingerprint, ModelParams, ModelResponse, RecordedRunner, Recording};
     use std::path::PathBuf;
 
-    /// Builds a workspace where one file holds the answer and another is noise.
+    /// Builds a corpus where naive path order exhausts the budget on irrelevant text.
     fn workspace(dir: &std::path::Path) {
         std::fs::write(
-            dir.join("answer.md"),
-            "Consolidation persists artifacts to bm25, graph, knowledge and session stores.",
+            dir.join("a-noise.md"),
+            "Completely unrelated notes about weather, cats, and lunch plans.\n".repeat(1_000),
         )
         .unwrap();
         std::fs::write(
-            dir.join("noise.md"),
-            "Completely unrelated notes about weather, cats, and lunch plans for the week.",
+            dir.join("z-answer.md"),
+            "Consolidation persists artifacts to bm25, graph, knowledge and session stores.",
         )
         .unwrap();
     }
@@ -166,6 +166,11 @@ mod tests {
         let lean_ctx = assemble(Condition::LeanCtx, &ws, task.query(), cfg.budget_tokens).unwrap();
         let base_req = build_request(&base_ctx.text, &task.prompt);
         let lean_req = build_request(&lean_ctx.text, &task.prompt);
+        assert_ne!(
+            base_req.key(),
+            lean_req.key(),
+            "fixture must keep baseline and lean-ctx requests distinct",
+        );
 
         let fp = ModelFingerprint {
             provider: model::PROVIDER_RECORDED.into(),

@@ -58,60 +58,64 @@ pub fn handle(
     (out, 0)
 }
 
-/// Render the body of the single most relevant symbol named `name`, using the
-/// surrounding task `keywords` to disambiguate same-named symbols across the
-/// repo. Used by `ctx_compose` to inline the top symbol's definition. Returns
-/// `(rendered_with_body, emitted_snippet_tokens)` or `None` when no graph/symbol.
-/// The token count is the size of what is actually emitted (the snippet), not
-/// the whole source file — `ctx_compose` charges it against a coverage budget,
-/// and billing a 13-line method the tokens of its 440-line file would drop the
-/// symbol from the budget entirely (why the "Top symbols" section vanished once
-/// disambiguation started picking methods in large files).
-///
-/// Without task context a bare `find_symbols(name).next()` returns an arbitrary
-/// match — e.g. a trivial `GetMaxCurrent` config accessor over the OCPP charger
-/// method the task is actually about (issue #993). We rank candidates by how
-/// well their file path reflects the *other* task keywords, preferring exported
-/// symbols, and fall back to first-match only when nothing distinguishes them.
-pub fn best_symbol_snippet(
+/// Render the body of the symbol named `name` that best matches the full task.
+pub fn best_symbol_snippet_for_task(
     name: &str,
-    keywords: &[String],
+    task: &str,
     project_root: &str,
 ) -> Option<(String, usize)> {
     let open = graph_provider::open_or_build(project_root)?;
     let gp = &open.provider;
     let candidates = gp.find_symbols(name, None, None);
-
-    // Other task keywords (everything except the one that resolved this symbol),
-    // lowercased once for case-insensitive path matching.
-    let others: Vec<String> = keywords
+    let scores: Vec<usize> = candidates
         .iter()
-        .filter(|k| !k.eq_ignore_ascii_case(name))
-        .map(|k| k.to_ascii_lowercase())
+        .map(|candidate| symbol_task_score(candidate, task))
         .collect();
-
-    let sym = candidates
-        .into_iter()
-        .max_by_key(|s| symbol_task_score(s, &others))?;
-    // Charge the coverage budget for the emitted snippet, not the whole file
-    // (render_single's second value is full-file tokens, meant for ctx_symbol's
-    // savings metric — the wrong unit for a per-snippet budget).
-    let (rendered, _full_file_tokens) = render_single(&sym, gp, project_root);
+    let index = first_highest_score(&scores)?;
+    let (rendered, _full_file_tokens) = render_single(&candidates[index], gp, project_root);
     let emitted_tokens = count_tokens(&rendered);
     Some((rendered, emitted_tokens))
 }
 
-/// Relevance of a same-named symbol to the task, from its path and visibility.
-/// Higher is better; ties keep `max_by_key`'s last-seen (i.e. `find_symbols`
-/// order), so a zero-signal task degrades to the previous first-match behaviour.
-fn symbol_task_score(sym: &SymbolInfo, other_keywords_lower: &[String]) -> i64 {
-    let path_lower = sym.file.to_ascii_lowercase();
-    let path_hits = other_keywords_lower
-        .iter()
-        .filter(|k| path_lower.contains(k.as_str()))
-        .count() as i64;
-    // Path relevance dominates; exported is a weak tiebreak below it.
-    path_hits * 10 + i64::from(sym.is_exported)
+pub fn best_symbol_snippet(name: &str, project_root: &str) -> Option<(String, usize)> {
+    best_symbol_snippet_for_task(name, name, project_root)
+}
+
+/// Return the first index with the highest score so an uninformative task
+/// preserves `find_symbols(...).next()` behaviour instead of selecting the
+/// last equal candidate.
+fn first_highest_score(scores: &[usize]) -> Option<usize> {
+    let (mut best_index, mut best_score) = (0, *scores.first()?);
+    for (index, &score) in scores.iter().enumerate().skip(1) {
+        if score > best_score {
+            best_index = index;
+            best_score = score;
+        }
+    }
+    Some(best_index)
+}
+
+fn symbol_task_score(symbol: &SymbolInfo, task: &str) -> usize {
+    let task_terms: std::collections::HashSet<String> = task
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let path_terms: std::collections::HashSet<String> = symbol
+        .file
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 2)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let path_matches = task_terms.intersection(&path_terms).count();
+    let exact_name = usize::from(task_terms.contains(&symbol.name.to_ascii_lowercase()));
+    let source_bonus = usize::from(
+        Path::new(&symbol.file)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|ext| !matches!(ext, "md" | "mdx" | "rst" | "txt")),
+    );
+    path_matches * 100 + exact_name * 25 + source_bonus * 5 + usize::from(symbol.is_exported)
 }
 
 /// Render one symbol resolved from a stable handle (`path#name@Lline`),
@@ -378,5 +382,35 @@ mod tests {
         let (out, tok) = render_by_handle("not-a-handle", "/tmp/does-not-exist");
         assert!(out.contains("Invalid handle"), "got: {out}");
         assert_eq!(tok, 0);
+    }
+
+    #[test]
+    fn full_task_path_terms_disambiguate_same_named_symbols() {
+        let api = SymbolInfo {
+            name: "GetMaxCurrent".into(),
+            file: "api/actionconfig.go".into(),
+            kind: "method".into(),
+            start_line: 38,
+            end_line: 40,
+            is_exported: true,
+        };
+        let ocpp = SymbolInfo {
+            name: "GetMaxCurrent".into(),
+            file: "charger/ocpp.go".into(),
+            kind: "method".into(),
+            start_line: 357,
+            end_line: 369,
+            is_exported: true,
+        };
+        let task = "OCPP charger GetMaxCurrent Current.Offered measurand";
+
+        assert!(symbol_task_score(&ocpp, task) > symbol_task_score(&api, task));
+    }
+
+    #[test]
+    fn equal_scores_preserve_first_symbol_match() {
+        assert_eq!(first_highest_score(&[0, 0, 0]), Some(0));
+        assert_eq!(first_highest_score(&[2, 7, 7]), Some(1));
+        assert_eq!(first_highest_score(&[]), None);
     }
 }

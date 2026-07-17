@@ -554,10 +554,14 @@ impl SessionCache {
             .total_original_tokens
             .fetch_add(entry.original_tokens as u64, Ordering::Relaxed);
         let hit_msg = format!("{ref_label} cached {new_count}t {}L", entry.line_count);
+        let sent_tokens = count_tokens(&hit_msg) as u64;
         self.stats
             .total_sent_tokens
-            .fetch_add(count_tokens(&hit_msg) as u64, Ordering::Relaxed);
-        crate::core::events::emit_cache_hit(path, entry.original_tokens as u64);
+            .fetch_add(sent_tokens, Ordering::Relaxed);
+        crate::core::events::emit_cache_hit(
+            path,
+            (entry.original_tokens as u64).saturating_sub(sent_tokens),
+        );
         Some(entry)
     }
 
@@ -592,9 +596,10 @@ impl SessionCache {
                     self.file_refs.get(&key).unwrap_or(&"F?".to_string()),
                     existing.line_count,
                 );
+                let sent_tokens = count_tokens(&hit_msg) as u64;
                 self.stats
                     .total_sent_tokens
-                    .fetch_add(count_tokens(&hit_msg) as u64, Ordering::Relaxed);
+                    .fetch_add(sent_tokens, Ordering::Relaxed);
                 return StoreResult {
                     line_count: existing.line_count,
                     original_tokens: existing.original_tokens,
@@ -766,7 +771,10 @@ impl SessionCache {
         self.stats
             .total_sent_tokens
             .fetch_add(sent, Ordering::Relaxed);
-        crate::core::events::emit_cache_hit(path, entry.original_tokens as u64);
+        crate::core::events::emit_cache_hit(
+            path,
+            (entry.original_tokens as u64).saturating_sub(sent),
+        );
         Some(result)
     }
 

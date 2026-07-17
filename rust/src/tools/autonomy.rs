@@ -163,6 +163,12 @@ pub fn session_lifecycle_pre_hook(
         _ => return None,
     };
 
+    // Keep the session eligible for a later retry: do not claim initialization
+    // while the guardian is asking opportunistic work to back off.
+    if crate::core::memory_guard::is_under_pressure() {
+        return None;
+    }
+
     if state
         .session_initialized
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)

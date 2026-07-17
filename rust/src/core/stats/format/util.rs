@@ -87,6 +87,12 @@ pub(super) fn day_total_saved(d: &DayStats, _cm: &CostModel) -> u64 {
     d.input_tokens.saturating_sub(d.output_tokens)
 }
 
+/// Compression rate only exists when lean-ctx observed a non-zero baseline.
+/// Returning `None` prevents an unmetered/write-only day from masquerading as 0%.
+pub(super) fn measured_compression_rate(input: u64, output: u64) -> Option<f64> {
+    (input > 0).then(|| input.saturating_sub(output) as f64 / input as f64 * 100.0)
+}
+
 pub(crate) fn normalize_command(command: &str) -> String {
     let parts: Vec<&str> = command.split_whitespace().collect();
     if parts.is_empty() {
@@ -133,7 +139,7 @@ pub(crate) fn normalize_command(command: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_big, format_num, format_pct_1dp};
+    use super::{format_big, format_num, format_pct_1dp, measured_compression_rate};
 
     #[test]
     fn format_big_scales_through_billions() {
@@ -168,5 +174,12 @@ mod tests {
         assert_eq!(format_pct_1dp(0.09), "<0.1%");
         assert_eq!(format_pct_1dp(0.1), "0.1%");
         assert_eq!(format_pct_1dp(0.5), "0.5%");
+    }
+
+    #[test]
+    fn compression_rate_distinguishes_unmetered_from_zero_savings() {
+        assert_eq!(measured_compression_rate(0, 0), None);
+        assert_eq!(measured_compression_rate(100, 100), Some(0.0));
+        assert_eq!(measured_compression_rate(100, 25), Some(75.0));
     }
 }

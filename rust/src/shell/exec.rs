@@ -961,6 +961,7 @@ fn exec_buffered(command: &str, shell: &str, shell_flag: &str, cfg: &config::Con
         &cfg.tee_mode,
         exit_code,
         full_output.trim().is_empty(),
+        super::tee_policy::output_was_elided(&full_output, &compressed),
         input_tokens,
         output_tokens,
     );

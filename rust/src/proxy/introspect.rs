@@ -672,6 +672,8 @@ fn has_tool_results(content: Option<&Value>) -> bool {
 pub struct IntrospectState {
     pub last_breakdown: Mutex<Option<RequestBreakdown>>,
     pub total_system_prompt_tokens: AtomicU64,
+    pub total_input_tokens: AtomicU64,
+    pub total_bulk_candidate_tokens: AtomicU64,
     pub total_requests: AtomicU64,
     last_persist_epoch: AtomicU64,
 }
@@ -681,6 +683,8 @@ impl Default for IntrospectState {
         Self {
             last_breakdown: Mutex::new(None),
             total_system_prompt_tokens: AtomicU64::new(0),
+            total_input_tokens: AtomicU64::new(0),
+            total_bulk_candidate_tokens: AtomicU64::new(0),
             total_requests: AtomicU64::new(0),
             last_persist_epoch: AtomicU64::new(0),
         }
@@ -689,13 +693,18 @@ impl Default for IntrospectState {
 
 impl IntrospectState {
     pub fn record(&self, breakdown: RequestBreakdown) {
-        self.total_system_prompt_tokens.fetch_add(
-            (breakdown.system_prompt_tokens
-                + breakdown.rules_tokens
-                + breakdown.skills_tokens
-                + breakdown.mcp_config_tokens) as u64,
-            Ordering::Relaxed,
-        );
+        let system_slab_tokens = breakdown.system_prompt_tokens
+            + breakdown.rules_tokens
+            + breakdown.skills_tokens
+            + breakdown.mcp_config_tokens;
+        let bulk_candidate_tokens =
+            system_slab_tokens + breakdown.assistant_message_tokens + breakdown.tool_result_tokens;
+        self.total_system_prompt_tokens
+            .fetch_add(system_slab_tokens as u64, Ordering::Relaxed);
+        self.total_input_tokens
+            .fetch_add(breakdown.total_input_tokens as u64, Ordering::Relaxed);
+        self.total_bulk_candidate_tokens
+            .fetch_add(bulk_candidate_tokens as u64, Ordering::Relaxed);
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut last) = self.last_breakdown.lock() {
             *last = Some(breakdown);
@@ -732,13 +741,21 @@ impl IntrospectState {
             .ok()
             .and_then(|guard| guard.as_ref().map(|b| serde_json::to_value(b).ok()))
             .flatten();
+        let total_input_tokens = self.total_input_tokens.load(Ordering::Relaxed);
+        let total_bulk_candidate_tokens = self.total_bulk_candidate_tokens.load(Ordering::Relaxed);
+        let bulk_share_bps =
+            token_share_basis_points(total_bulk_candidate_tokens, total_input_tokens);
         let payload = serde_json::json!({
             "ts": ts,
             "proxy_active": true,
             "last_breakdown": breakdown_val,
             "cumulative": {
                 "total_requests": self.total_requests.load(Ordering::Relaxed),
+                "total_input_tokens": total_input_tokens,
                 "total_system_prompt_tokens": self.total_system_prompt_tokens.load(Ordering::Relaxed),
+                "total_bulk_candidate_tokens": total_bulk_candidate_tokens,
+                "bulk_candidate_share_basis_points": bulk_share_bps,
+                "vision_encoding_decision_gate_met": bulk_share_bps.is_some_and(|share| share >= 2_000),
             }
         });
 
@@ -750,6 +767,13 @@ impl IntrospectState {
             let _ = std::fs::rename(&tmp, &target);
         }
     }
+}
+
+pub(crate) fn token_share_basis_points(part: u64, total: u64) -> Option<u64> {
+    (total > 0).then(|| {
+        let basis_points = u128::from(part) * 10_000 / u128::from(total);
+        u64::try_from(basis_points).unwrap_or(u64::MAX)
+    })
 }
 
 /// Load persisted proxy introspection data from disk.
@@ -777,6 +801,14 @@ pub fn load_persisted(max_age_secs: u64) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vision_experiment_gate_uses_post_funnel_bulk_share() {
+        assert_eq!(token_share_basis_points(19, 100), Some(1_900));
+        assert_eq!(token_share_basis_points(20, 100), Some(2_000));
+        assert_eq!(token_share_basis_points(1, 0), None);
+        assert_eq!(token_share_basis_points(u64::MAX, u64::MAX), Some(10_000));
+    }
 
     #[test]
     fn anthropic_basic() {

@@ -1804,3 +1804,16 @@ fn heredoc_delims_mixed_quoted_unquoted() {
     let delims_q = heredoc_delims("cmd <<'A' <<B", true);
     assert_eq!(delims_q, vec!["A"]);
 }
+
+/// #997: common read-only diagnostics must not be rejected because one useful
+/// process-inspection segment is absent from the defaults. Compound commands
+/// remain fail-closed when a genuinely unlisted segment is present.
+#[test]
+fn read_only_process_inspection_pipeline_is_default_allowed() {
+    let defaults = crate::core::config::default_shell_allowlist();
+    let result = check_all_segments("pgrep -af lean-ctx | head -n 5", &defaults);
+    assert!(
+        result.is_ok(),
+        "read-only diagnostic pipeline must pass: {result:?}"
+    );
+}

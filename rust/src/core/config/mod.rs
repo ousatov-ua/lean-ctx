@@ -510,7 +510,9 @@ pub struct Config {
     /// Override via LEAN_CTX_MEMORY_CLEANUP env var.
     #[serde(default)]
     pub memory_cleanup: MemoryCleanup,
-    /// Maximum percentage of system RAM that lean-ctx may use (default: 5).
+    /// Soft process-RSS target as a percentage of system RAM (default: 5).
+    /// The guardian throttles and evicts above it, but this is not an OS hard cap.
+    /// Use a cgroup/container MemoryMax when strict isolation is required.
     /// Override via LEAN_CTX_MAX_RAM_PERCENT env var.
     #[serde(default = "serde_defaults::default_max_ram_percent")]
     pub max_ram_percent: u8,

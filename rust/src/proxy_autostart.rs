@@ -94,6 +94,27 @@ pub fn is_installed() -> bool {
     }
 }
 
+/// Returns true when the installed manager is actively responsible for the proxy.
+/// Callers must not spawn a second foreground proxy while this is true.
+pub fn is_loaded() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        is_installed() && crate::core::launchd::is_loaded(PLIST_LABEL)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        is_installed()
+            && std::process::Command::new("systemctl")
+                .args(["--user", "is-active", "--quiet", SYSTEMD_SERVICE])
+                .status()
+                .is_ok_and(|status| status.success())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}
+
 pub fn status() {
     #[cfg(target_os = "macos")]
     {

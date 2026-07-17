@@ -536,7 +536,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key_with_env(
             "u8",
             serde_json::json!(cfg.max_ram_percent),
-            "Maximum percentage of system RAM that lean-ctx may use (1-50, default 5)",
+            "Soft process-RSS target as % of system RAM (1-50, default 5); eviction/throttling policy, not an OS hard cap",
             "LEAN_CTX_MAX_RAM_PERCENT",
         ),
     );

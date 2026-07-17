@@ -158,6 +158,7 @@ fn has_markup(s: &str) -> bool {
 /// Length (hex chars) of the publisher id derived from the public key. 16 bytes of SHA-256 is
 /// collision-safe yet compact, and reveals nothing about the key beyond a stable pseudonym.
 const PUBLISHER_ID_HEX_LEN: usize = 32;
+const EDIT_TOKEN_CHALLENGE_TTL_MINUTES: i32 = 5;
 
 /// Wraps the whitelisted payload with the publisher's Ed25519 public key and a signature over
 /// the exact `payload_json` bytes. The server derives a stable `publisher_id` from the key — no
@@ -171,6 +172,13 @@ struct SignedEnvelope {
     public_key: Option<String>,
     /// Hex-encoded Ed25519 signature over `payload_json.as_bytes()` (64 bytes → 128 hex chars).
     signature: Option<String>,
+}
+
+fn publisher_id_from_public_key_hex(public_key: &str) -> ApiResult<String> {
+    sha256_hex(public_key)
+        .get(..PUBLISHER_ID_HEX_LEN)
+        .ok_or_else(internal_error_str)
+        .map(str::to_string)
 }
 
 /// Verifies the envelope signature against its public key and returns the parsed payload plus
@@ -190,15 +198,36 @@ fn verify_signed_envelope(env: &SignedEnvelope) -> ApiResult<(PublishPayload, St
         serde_json::from_str(&env.payload_json).map_err(|_| bad_payload())?;
     // Stable, non-reversible pseudonym derived from the public key (its hex form). The same key
     // always maps to the same publisher_id, which is the upsert key — no account, no login.
-    let publisher_id = sha256_hex(pk_hex)
-        .get(..PUBLISHER_ID_HEX_LEN)
-        .ok_or_else(internal_error_str)?
-        .to_string();
+    let publisher_id = publisher_id_from_public_key_hex(pk_hex)?;
     Ok((payload, publisher_id))
 }
 
 fn internal_error_str() -> (StatusCode, String) {
     err(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+}
+
+async fn mint_edit_token_challenge(
+    client: &tokio_postgres::Client,
+    card_id: &str,
+) -> ApiResult<String> {
+    let nonce = generate_token();
+    client
+        .execute(
+            "INSERT INTO wrapped_edit_token_challenges (nonce_hash, card_id, expires_at) \
+             VALUES ($1, $2, now() + make_interval(mins => $3)) \
+             ON CONFLICT (card_id) DO UPDATE \
+             SET nonce_hash = EXCLUDED.nonce_hash, \
+                 created_at = now(), \
+                 expires_at = EXCLUDED.expires_at",
+            &[
+                &sha256_hex(&nonce),
+                &card_id,
+                &EDIT_TOKEN_CHALLENGE_TTL_MINUTES,
+            ],
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(nonce)
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
@@ -284,13 +313,20 @@ pub(super) async fn publish(
         let final_id: String = row.get(0);
         let inserted: bool = row.get(1);
         let url = format!("{base}/w/{final_id}");
+        let recovery_nonce = if inserted {
+            None
+        } else {
+            Some(mint_edit_token_challenge(&client, &final_id).await?)
+        };
         let mut out = serde_json::json!({ "id": final_id, "url": url });
-        // The one-time edit_token exists only for a freshly inserted card; on an update the
-        // client keeps the token it stored on first publish.
         if inserted {
             out["edit_token"] = serde_json::Value::String(edit_token);
             Ok((StatusCode::CREATED, Json(out)))
         } else {
+            out["edit_token_challenge"] =
+                serde_json::Value::String(recovery_nonce.expect("update challenge exists"));
+            out["challenge_expires_in_secs"] =
+                serde_json::Value::from(i64::from(EDIT_TOKEN_CHALLENGE_TTL_MINUTES) * 60);
             Ok((StatusCode::OK, Json(out)))
         }
     } else {
@@ -1149,6 +1185,87 @@ pub(super) async fn claim_card(
         .await
         .map_err(internal_error)?;
     Ok(Json(serde_json::json!({ "claimed": true })))
+}
+
+#[derive(Deserialize)]
+pub(super) struct RecoverEditTokenBody {
+    nonce: String,
+    public_key: String,
+    signature: String,
+}
+
+fn verify_edit_token_recovery_proof(
+    card_id: &str,
+    body: &RecoverEditTokenBody,
+) -> ApiResult<String> {
+    use crate::core::agent_identity::{hex_decode, verify_signature};
+
+    if body.nonce.is_empty()
+        || body.nonce.len() > 256
+        || body.public_key.len() != 64
+        || body.signature.len() != 128
+    {
+        return Err(bad_payload());
+    }
+    let public_key = hex_decode(&body.public_key).map_err(|_| bad_payload())?;
+    let signature = hex_decode(&body.signature).map_err(|_| bad_payload())?;
+    let proof = crate::core::wrapped::edit_token_recovery_message(card_id, &body.nonce);
+    if !verify_signature(&public_key, proof.as_bytes(), &signature) {
+        return Err(err(StatusCode::UNAUTHORIZED, "invalid_signature"));
+    }
+    publisher_id_from_public_key_hex(&body.public_key)
+}
+
+/// `POST /api/wrapped/:id/edit-token/recover` — rotate a lost local edit
+/// token after proving possession of the card's persistent publisher key.
+pub(super) async fn recover_edit_token(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RecoverEditTokenBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let publisher_id = verify_edit_token_recovery_proof(&id, &body)?;
+
+    let mut client = state.pool.get().await.map_err(internal_error)?;
+    let row = client
+        .query_opt(
+            "SELECT publisher_id FROM wrapped_cards WHERE id = $1",
+            &[&id],
+        )
+        .await
+        .map_err(internal_error)?;
+    let Some(stored_publisher_id) = row.map(|row| row.get::<_, Option<String>>(0)) else {
+        return Err(err(StatusCode::NOT_FOUND, "not_found"));
+    };
+    if stored_publisher_id.as_deref() != Some(publisher_id.as_str()) {
+        return Err(err(StatusCode::FORBIDDEN, "forbidden"));
+    }
+
+    let edit_token = generate_token();
+    let edit_token_hash = sha256_hex(&edit_token);
+    let transaction = client.transaction().await.map_err(internal_error)?;
+    let consumed = transaction
+        .execute(
+            "DELETE FROM wrapped_edit_token_challenges              WHERE nonce_hash = $1 AND card_id = $2 AND expires_at >= now()",
+            &[&sha256_hex(&body.nonce), &id],
+        )
+        .await
+        .map_err(internal_error)?;
+    if consumed != 1 {
+        return Err(err(StatusCode::NOT_FOUND, "challenge_invalid_or_expired"));
+    }
+    let updated = transaction
+        .execute(
+            "UPDATE wrapped_cards SET edit_token_hash = $1              WHERE id = $2 AND publisher_id = $3",
+            &[&edit_token_hash, &id, &publisher_id],
+        )
+        .await
+        .map_err(internal_error)?;
+    if updated != 1 {
+        return Err(internal_error_str());
+    }
+    transaction.commit().await.map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!({ "edit_token": edit_token })))
 }
 
 // ─── Login-less machine linking (GH #736) ─────────────────────────────────────

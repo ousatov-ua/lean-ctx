@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use super::artifact_install::{ArtifactUse, fetch_verified};
+use super::artifact_install::{ArtifactUse, fetch_verified, require_sha256_pin};
 use super::binhash::sha256_file;
 use super::grammar_manifest::{GrammarAsset, GrammarManifest};
 use super::policy::AddonPolicy;
@@ -37,6 +37,9 @@ pub(crate) fn ensure_installed(
         return Ok(());
     }
 
+    let context = format!("grammar `{}`", manifest.name);
+    require_sha256_pin(&context, &asset.sha256)?;
+
     let addons = crate::core::config::Config::load().addons;
     if addons.policy() == AddonPolicy::Locked {
         return Err("addons.policy = locked: grammar-addon fetch disabled".into());
@@ -45,7 +48,6 @@ pub(crate) fn ensure_installed(
         return Err("addons.grammar_auto_fetch = false: fetch disabled".into());
     }
 
-    let context = format!("grammar `{}`", manifest.name);
     fetch_verified(
         &context,
         &asset.url,
