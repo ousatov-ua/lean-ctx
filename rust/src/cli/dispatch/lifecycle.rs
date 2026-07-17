@@ -530,6 +530,15 @@ fn reconcile_binary_drift(install_path: &std::path::Path) {
     }
 }
 
+/// Whether this process, rather than a managed LaunchAgent/systemd unit, owns startup.
+fn should_spawn_proxy_locally(
+    proxy_enabled: bool,
+    managed_service_loaded: bool,
+    already_running: bool,
+) -> bool {
+    proxy_enabled && !managed_service_loaded && !already_running
+}
+
 pub(super) fn spawn_proxy_if_needed() {
     use std::net::TcpStream;
 
@@ -538,6 +547,7 @@ pub(super) fn spawn_proxy_if_needed() {
         return;
     }
 
+    let managed_service_loaded = crate::proxy_autostart::is_loaded();
     let port = crate::proxy_setup::default_port();
     let already_running = {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -545,8 +555,16 @@ pub(super) fn spawn_proxy_if_needed() {
         TcpStream::connect_timeout(&addr, crate::proxy_setup::proxy_timeout()).is_ok()
     };
 
-    if already_running {
-        tracing::debug!("proxy already running on port {port}");
+    if !should_spawn_proxy_locally(
+        cfg.proxy_enabled == Some(true),
+        managed_service_loaded,
+        already_running,
+    ) {
+        if managed_service_loaded {
+            tracing::debug!("managed proxy service owns startup on port {port}");
+        } else if already_running {
+            tracing::debug!("proxy already running on port {port}");
+        }
         return;
     }
 
@@ -567,9 +585,16 @@ pub(super) fn spawn_proxy_if_needed() {
 
 #[cfg(test)]
 mod target_dir_tests {
-    use super::{resolve_cargo_target_dir, target_dir_from_metadata};
+    use super::{resolve_cargo_target_dir, should_spawn_proxy_locally, target_dir_from_metadata};
     use std::path::{Path, PathBuf};
 
+    #[test]
+    fn managed_proxy_service_prevents_a_duplicate_local_spawn() {
+        assert!(should_spawn_proxy_locally(true, false, false));
+        assert!(!should_spawn_proxy_locally(false, false, false));
+        assert!(!should_spawn_proxy_locally(true, true, false));
+        assert!(!should_spawn_proxy_locally(true, false, true));
+    }
     #[test]
     fn extracts_target_directory_from_metadata_json() {
         let json = r#"{"packages":[],"target_directory":"/shared/build/target","version":1}"#;

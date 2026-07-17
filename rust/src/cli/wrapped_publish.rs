@@ -306,15 +306,13 @@ impl PublishedStore {
             .unwrap_or_default()
     }
 
-    fn save(&self) -> std::io::Result<()> {
+    fn save(&self) -> Result<(), String> {
         let Some(path) = store_path() else {
             return Ok(());
         };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("could not serialize published-card store: {e}"))?;
+        crate::config_io::write_atomic(&path, &json)
     }
 }
 
@@ -345,23 +343,51 @@ fn publish_report(
         serde_json::to_string(&payload).map_err(|e| format!("could not build payload: {e}"))?;
 
     let agent = publisher_agent_id();
-    let (signature, public_key) =
-        agent_identity::sign_with_public_key(&agent, payload_json.as_bytes())
-            .map(|(sig, key)| {
-                (
-                    agent_identity::hex_encode(&sig),
-                    agent_identity::hex_encode(&key.to_bytes()),
-                )
-            })
-            .map_err(|e| format!("could not sign payload: {e}"))?;
+    let signing_key = agent_identity::get_or_create_keypair(&agent)
+        .map_err(|e| format!("could not load publisher key: {e}"))?;
+    let public_key = agent_identity::hex_encode(&signing_key.verifying_key().to_bytes());
+    let signature = agent_identity::hex_encode(&agent_identity::sign_bytes_with(
+        &signing_key,
+        payload_json.as_bytes(),
+    ));
 
     let envelope = serde_json::json!({
         "payload_json": payload_json,
-        "public_key": public_key,
+        "public_key": &public_key,
         "signature": signature,
     });
-    let card = cloud_client::publish_wrapped(&envelope)?;
-    record_published(&card, period, auto, leaderboard);
+    let mut card = cloud_client::publish_wrapped(&envelope)?;
+
+    if card.edit_token.is_none() {
+        let stored = PublishedStore::load()
+            .cards
+            .into_iter()
+            .find(|entry| entry.id == card.id && !entry.edit_token.is_empty())
+            .map(|entry| entry.edit_token);
+        card.edit_token = if let Some(token) = stored {
+            Some(token)
+        } else {
+            let nonce = card.edit_token_challenge.as_deref().ok_or_else(|| {
+                format!(
+                    "card {} refreshed, but the server did not provide an ownership-recovery challenge",
+                    card.id
+                )
+            })?;
+            let proof = crate::core::wrapped::edit_token_recovery_message(&card.id, nonce);
+            let recovery_signature = agent_identity::hex_encode(&agent_identity::sign_bytes_with(
+                &signing_key,
+                proof.as_bytes(),
+            ));
+            Some(cloud_client::recover_wrapped_edit_token(
+                &card.id,
+                nonce,
+                &public_key,
+                &recovery_signature,
+            )?)
+        };
+    }
+
+    record_published(&mut card, period, auto, leaderboard);
     Ok(card)
 }
 
@@ -369,7 +395,7 @@ fn publish_report(
 /// with a different id are retired server-side (cleaning up any pre-upsert duplicates), and the
 /// edit_token is preserved across signed re-publishes (the server returns it only on insert).
 fn record_published(
-    card: &cloud_client::PublishedCard,
+    card: &mut cloud_client::PublishedCard,
     period: &str,
     auto: bool,
     leaderboard: bool,
@@ -405,18 +431,26 @@ fn record_published(
     });
     if let Err(e) = store.save() {
         tracing::warn!("Published, but could not save local record: {e}");
+        return;
+    }
+    let persisted = PublishedStore::load()
+        .cards
+        .iter()
+        .any(|entry| entry.id == card.id && entry.edit_token == edit_token);
+    if !persisted {
+        tracing::warn!("Published, but local ownership record verification failed");
+        return;
     }
 
-    // Stack this machine under the user's account on the leaderboard (#488): the board
-    // aggregates cards that share a `user_id`, so claiming binds each machine's card to the
-    // logged-in account. Best-effort and idempotent (re-publishes preserve `user_id`
-    // server-side), and only meaningful for opted-in leaderboard cards.
-    if leaderboard
-        && !edit_token.is_empty()
-        && cloud_client::is_logged_in()
-        && let Err(e) = cloud_client::claim_wrapped(&card.id, &edit_token)
-    {
-        tracing::warn!("Published, but could not link this card to your account: {e}");
+    // Stack this machine under the user's account on the leaderboard (#488).
+    // The CLI reports success only after the claim endpoint confirms it.
+    if leaderboard && !edit_token.is_empty() && cloud_client::is_logged_in() {
+        match cloud_client::claim_wrapped(&card.id, &edit_token) {
+            Ok(()) => card.account_claimed = true,
+            Err(e) => {
+                tracing::warn!("Published, but could not link this card to your account: {e}");
+            }
+        }
     }
 }
 
@@ -460,13 +494,16 @@ pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
                 if let Some(base) = card.url.split("/w/").next() {
                     println!("Listed on the community leaderboard: {base}/metrics#leaderboard");
                 }
-                // Machine stacking: logged-in machines stack automatically (#488); everyone
-                // else links machines login-lessly via a pairing code (#736).
-                if cloud_client::is_logged_in() {
+                if card.account_claimed {
                     println!(
                         "Linked to your account — all your machines now stack under one leaderboard entry."
                     );
                 } else {
+                    if cloud_client::is_logged_in() {
+                        println!(
+                            "Account link was not confirmed; the card is published and remains under your control."
+                        );
+                    }
                     println!();
                     println!("  ┌─ Multiple machines? ─────────────────────────────────┐");
                     println!("  │  Combine them into one leaderboard entry:            │");
@@ -780,5 +817,25 @@ mod tests {
         r.compression_rate_pct = 250.0;
         let p = build_payload(&r, None, false);
         assert!((0.0..=100.0).contains(&p.compression_rate_pct));
+    }
+
+    #[test]
+    fn published_token_store_roundtrips_atomically() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+        let store = PublishedStore {
+            cards: vec![PublishedEntry {
+                id: "card-1".into(),
+                edit_token: "secret-token".into(),
+                url: "https://leanctx.com/w/card-1".into(),
+                period: "all".into(),
+                published_at: "2026-01-01T00:00:00Z".into(),
+                auto: false,
+                leaderboard: true,
+            }],
+        };
+        store.save().unwrap();
+        let loaded = PublishedStore::load();
+        assert_eq!(loaded.cards.len(), 1);
+        assert_eq!(loaded.cards[0].edit_token, "secret-token");
     }
 }

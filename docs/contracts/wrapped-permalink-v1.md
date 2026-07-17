@@ -38,10 +38,11 @@ shareable URL (`https://leanctx.com/w/<id>`). No login is required to publish; a
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/wrapped` | none (rate-limited per `ip_hash`) | Publish/refresh a card. Bare payload → anonymous insert (`201`); signed envelope → upsert by `(publisher_id, period)` (`201` insert / `200` update) → `{ id, url, edit_token? }` |
+| POST | `/api/wrapped` | none (rate-limited per `ip_hash`) | Publish/refresh a card. Bare payload → anonymous insert (`201`); signed envelope → upsert by `(publisher_id, period)` (`201` insert / `200` update) → `{ id, url, edit_token?, edit_token_challenge? }` |
 | GET | `/api/wrapped/:id` | none | Fetch the public card; increments `view_count` |
 | DELETE | `/api/wrapped/:id` | `X-Edit-Token` | Delete the card (wrong/absent token → 403) |
 | POST | `/api/wrapped/:id/claim` | account bearer + `X-Edit-Token` | Bind the anonymous card to the account |
+| POST | `/api/wrapped/:id/edit-token/recover` | fresh Ed25519 challenge proof | Rotate a lost local edit token for the matching signed publisher identity |
 | POST | `/api/wrapped/:id/link/start` | `X-Edit-Token` | Mint a short-lived pairing code for login-less machine linking → `{ code, expires_in_secs }` |
 | POST | `/api/wrapped/:id/link/complete` | `X-Edit-Token` | Join this card into the code's `link_group` (body: `{ "code": "XXXX-XXXX" }`) |
 | GET | `/api/wrapped/:id/card.svg` | none | Server-rendered share card (SVG) |
@@ -72,6 +73,11 @@ directly, so no asset route needs proxying on the canonical host.
   transitive across `link_group` and `user_id`. Codes: 8 chars from an unambiguous alphabet
   (`XXXX-XXXX`), single-use, 10-minute TTL, at most 3 outstanding per card, stored hashed
   (`sha256`). A leaked expired code is useless; no PII is involved at any point.
+- **Lost-token recovery (v1.3, GH #736)** — a signed refresh of an existing card returns a fresh,
+  five-minute `edit_token_challenge`. The client signs a domain-separated message containing the card id
+  and nonce with the same persistent publisher key, then calls `/edit-token/recover`. The server
+  atomically consumes the hashed nonce and rotates `edit_token_hash`; replaying the signed publish
+  envelope cannot recover control because every recovery requires a fresh nonce signature.
 
 ---
 
@@ -97,8 +103,9 @@ envelope. The envelope is the body of `POST /api/wrapped`:
   parsing/validating it, then stores `payload_json` verbatim (so a stored card stays re-verifiable). A
   missing/invalid signature → `401 invalid_signature`.
 - **Upsert.** Insert with `ON CONFLICT (publisher_id, period) DO UPDATE` — a re-publish from the same
-  machine refreshes its existing card **in place** (same `id`/URL). `201` (with `edit_token`) on the
-  first publish, `200` (no token; the client keeps the one it stored) on every refresh.
+  machine refreshes its existing card **in place** (same `id`/URL). `201` includes `edit_token`; `200`
+  includes a short-lived recovery challenge so a client that still has its publisher key can safely
+  restore a missing local token. Clients with a stored token need not rotate it.
 - **Backward compatible.** A bare payload object (old clients) still takes the legacy anonymous-insert
   path (`publisher_id` NULL), which may create duplicates — those are de-duplicated on the leaderboard.
 
@@ -140,9 +147,9 @@ Request body is capped at **8 KB**; larger bodies → `413 payload_too_large`.
 { "id": "9f86d081884c7d65...", "edit_token": "<256-bit hex, shown once>", "url": "https://leanctx.com/w/9f86d081884c7d65..." }
 ```
 
-**`POST /api/wrapped` → `200`** (signed re-publish — existing card updated in place; no new `edit_token`)
+**`POST /api/wrapped` → `200`** (signed re-publish — existing card updated in place)
 ```json
-{ "id": "9f86d081884c7d65...", "url": "https://leanctx.com/w/9f86d081884c7d65..." }
+{ "id": "9f86d081884c7d65...", "url": "https://leanctx.com/w/9f86d081884c7d65...", "edit_token_challenge": "<fresh nonce>", "challenge_expires_in_secs": 300 }
 ```
 
 **`GET /api/wrapped/:id` → `200`**
@@ -157,6 +164,7 @@ Request body is capped at **8 KB**; larger bodies → `413 payload_too_large`.
 
 **`DELETE /api/wrapped/:id` → `200`** `{ "deleted": true }`
 **`POST /api/wrapped/:id/claim` → `200`** `{ "claimed": true }`
+**`POST /api/wrapped/:id/edit-token/recover` → `200`** `{ "edit_token": "<rotated 256-bit secret>" }`
 
 ---
 

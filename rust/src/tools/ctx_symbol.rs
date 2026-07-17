@@ -58,14 +58,51 @@ pub fn handle(
     (out, 0)
 }
 
-/// Render the body of the single most relevant symbol named `name`.
-/// Used by `ctx_compose` to inline the top symbol's definition. Returns
-/// `(rendered_with_body, full_file_tokens)` or `None` when no graph/symbol.
-pub fn best_symbol_snippet(name: &str, project_root: &str) -> Option<(String, usize)> {
+/// Render the body of the symbol named `name` that best matches the full task.
+pub fn best_symbol_snippet_for_task(
+    name: &str,
+    task: &str,
+    project_root: &str,
+) -> Option<(String, usize)> {
     let open = graph_provider::open_or_build(project_root)?;
     let gp = &open.provider;
-    let sym = gp.find_symbols(name, None, None).into_iter().next()?;
+    let sym = gp
+        .find_symbols(name, None, None)
+        .into_iter()
+        .max_by(|left, right| {
+            symbol_task_score(left, task)
+                .cmp(&symbol_task_score(right, task))
+                .then_with(|| right.file.cmp(&left.file))
+                .then_with(|| right.start_line.cmp(&left.start_line))
+        })?;
     Some(render_single(&sym, gp, project_root))
+}
+
+pub fn best_symbol_snippet(name: &str, project_root: &str) -> Option<(String, usize)> {
+    best_symbol_snippet_for_task(name, name, project_root)
+}
+
+fn symbol_task_score(symbol: &SymbolInfo, task: &str) -> usize {
+    let task_terms: std::collections::HashSet<String> = task
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let path_terms: std::collections::HashSet<String> = symbol
+        .file
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| term.len() >= 2)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let path_matches = task_terms.intersection(&path_terms).count();
+    let exact_name = usize::from(task_terms.contains(&symbol.name.to_ascii_lowercase()));
+    let source_bonus = usize::from(
+        Path::new(&symbol.file)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|ext| !matches!(ext, "md" | "mdx" | "rst" | "txt")),
+    );
+    path_matches * 100 + exact_name * 25 + source_bonus * 5 + usize::from(symbol.is_exported)
 }
 
 /// Render one symbol resolved from a stable handle (`path#name@Lline`),
@@ -332,5 +369,28 @@ mod tests {
         let (out, tok) = render_by_handle("not-a-handle", "/tmp/does-not-exist");
         assert!(out.contains("Invalid handle"), "got: {out}");
         assert_eq!(tok, 0);
+    }
+
+    #[test]
+    fn full_task_path_terms_disambiguate_same_named_symbols() {
+        let api = SymbolInfo {
+            name: "GetMaxCurrent".into(),
+            file: "api/actionconfig.go".into(),
+            kind: "method".into(),
+            start_line: 38,
+            end_line: 40,
+            is_exported: true,
+        };
+        let ocpp = SymbolInfo {
+            name: "GetMaxCurrent".into(),
+            file: "charger/ocpp.go".into(),
+            kind: "method".into(),
+            start_line: 357,
+            end_line: 369,
+            is_exported: true,
+        };
+        let task = "OCPP charger GetMaxCurrent Current.Offered measurand";
+
+        assert!(symbol_task_score(&ocpp, task) > symbol_task_score(&api, task));
     }
 }

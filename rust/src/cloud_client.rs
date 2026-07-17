@@ -411,7 +411,13 @@ pub struct PublishedCard {
     pub id: String,
     #[serde(default)]
     pub edit_token: Option<String>,
+    #[serde(default)]
+    pub edit_token_challenge: Option<String>,
+    #[serde(default)]
+    pub challenge_expires_in_secs: Option<i64>,
     pub url: String,
+    #[serde(skip)]
+    pub account_claimed: bool,
 }
 
 /// Publish a whitelisted Wrapped payload. Accepts either a bare payload (legacy anonymous) or a
@@ -431,6 +437,41 @@ pub fn publish_wrapped(payload: &serde_json::Value) -> Result<PublishedCard, Str
         .map_err(|e| format!("Failed to read response: {e}"))?;
 
     serde_json::from_str(&resp_body).map_err(|e| format!("Invalid response: {e}"))
+}
+
+#[derive(serde::Deserialize)]
+struct RecoveredEditToken {
+    edit_token: String,
+}
+
+/// Exchange a one-time server challenge for a rotated edit token after the
+/// caller proves possession of the card's persistent publisher key.
+pub fn recover_wrapped_edit_token(
+    id: &str,
+    nonce: &str,
+    public_key: &str,
+    signature: &str,
+) -> Result<String, String> {
+    let url = format!("{}/api/wrapped/{id}/edit-token/recover", api_url());
+    let body = serde_json::json!({
+        "nonce": nonce,
+        "public_key": public_key,
+        "signature": signature,
+    });
+    let resp = ureq::post(&url)
+        .header("Content-Type", "application/json")
+        .send(&serde_json::to_vec(&body).map_err(|e| format!("JSON error: {e}"))?)
+        .map_err(|e| format!("Edit-token recovery failed: {e}"))?;
+    let response = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    let recovered: RecoveredEditToken =
+        serde_json::from_str(&response).map_err(|e| format!("Invalid recovery response: {e}"))?;
+    if recovered.edit_token.is_empty() {
+        return Err("Invalid recovery response: empty edit token".to_string());
+    }
+    Ok(recovered.edit_token)
 }
 
 /// Delete a previously published card using its one-time `edit_token` (sent as `X-Edit-Token`).
@@ -1134,6 +1175,21 @@ mod tests {
     // internally). Gating the import keeps the Windows cross-compile warning-free.
     #[cfg(unix)]
     use crate::core::data_dir::test_env_lock;
+
+    #[test]
+    fn existing_card_publish_response_carries_recovery_challenge() {
+        let card: PublishedCard = serde_json::from_value(serde_json::json!({
+            "id": "card-1",
+            "url": "https://leanctx.com/w/card-1",
+            "edit_token_challenge": "nonce-1",
+            "challenge_expires_in_secs": 300
+        }))
+        .unwrap();
+        assert!(card.edit_token.is_none());
+        assert_eq!(card.edit_token_challenge.as_deref(), Some("nonce-1"));
+        assert_eq!(card.challenge_expires_in_secs, Some(300));
+        assert!(!card.account_claimed);
+    }
 
     #[test]
     fn grace_window_boundaries_are_inclusive_and_skew_safe() {

@@ -235,6 +235,7 @@ impl McpTool for CtxShellTool {
                     &cfg.tee_mode,
                     exit_code,
                     output.trim().is_empty(),
+                    crate::shell::tee_policy::output_was_elided(&output, &result),
                     original,
                     sent,
                 ) {
@@ -243,16 +244,11 @@ impl McpTool for CtxShellTool {
                             if matches!(cfg.tee_mode, crate::core::config::TeeMode::HighCompression)
                             {
                                 let pct = crate::shell::tee_policy::savings_pct(original, sent);
-                                // Recovery grammar (path-first, MCP-optional): the raw
-                                // bytes are a real file the agent can read with any tool
-                                // (no MCP needed) — for orgs that forbid it — and the same
-                                // path doubles as the ctx_expand id for surgical slices
-                                // (head/search/json_path) without re-reading it all (#936).
                                 format!(
-                                    "\n[compressed {pct:.0}%: full output at {p} — read it directly (no MCP), or ctx_expand(id=\"{p}\", search=\"…\"|head=N|json_path=\"…\") for a slice]"
+                                    "\n[compressed {pct:.0}%: full output archived — ctx_expand(id=\"{p}\", search=\"…\"|head=N|json_path=\"…\") for a slice]"
                                 )
                             } else {
-                                format!("\n[full output: {p} — read it directly (no MCP), or ctx_expand(id=\"{p}\")]")
+                                format!("\n[full output archived — ctx_expand(id=\"{p}\")]")
                             }
                         })
                         .unwrap_or_default()

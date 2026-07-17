@@ -440,7 +440,7 @@ mod tests {
         let rebuilt = u.rebuild();
         let last_line = rebuilt.lines().last().expect("rebuilt has a last line");
         assert!(
-            last_line.trim_start().starts_with("}")
+            last_line.trim_start().starts_with('}')
                 && last_line.contains("&& pwd -P >| /tmp/claude-cmt-cwd"),
             "cwd-tracking suffix must not be swallowed by the comment: {rebuilt:?}"
         );

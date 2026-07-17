@@ -2,7 +2,7 @@
 
 use super::util::{
     active_theme, cmd_total_saved, day_total_saved, format_big, format_num, format_usd,
-    truncate_cmd,
+    measured_compression_rate, truncate_cmd,
 };
 use crate::core::theme::{self, Theme};
 
@@ -537,7 +537,7 @@ fn gain_dashboard(t: &Theme, tick: Option<u64>, with_footer: bool) -> String {
         out.push(format!("  {}", t.box_top_labeled(w, "RECENT DAYS")));
         out.push(sec_line(&format!(
             "  {dim}{}{rst}",
-            "Date     Cmds  Volume      Saved     Rate    Trend     Version",
+            "Date     Cmds  Observed    Saved     Rate    Trend     Version",
             dim = t.muted.fg()
         )));
 
@@ -555,29 +555,22 @@ fn gain_dashboard(t: &Theme, tick: Option<u64>, with_footer: bool) -> String {
         for day in recent.iter().rev() {
             let day_saved = day_total_saved(day, &cost_model);
             let day_input_saved = day.input_tokens.saturating_sub(day.output_tokens);
-            let day_pct = if day.input_tokens > 0 {
-                day_input_saved as f64 / day.input_tokens as f64 * 100.0
-            } else {
-                0.0
-            };
-            let pc = t.pct_color(day_pct);
+            let day_pct = measured_compression_rate(day.input_tokens, day.output_tokens);
+            let pc = t.pct_color(day_pct.unwrap_or_default());
+            let rate_col = day_pct.map_or_else(
+                || format!("{dim}  n/a {rst}"),
+                |pct| format!("{pc}{pct:>5.1}%{rst}"),
+            );
             let ratio = day_input_saved as f64 / max_day_saved as f64;
             // Pad the bar to a fixed width so the trailing version column lines up
             // (matches the BY COMMAND bar above; gradient_bar can return < width).
             let day_bar = theme::pad_right(&t.gradient_bar(ratio, 8), 8);
             let date_short = day.date.get(5..).unwrap_or(&day.date);
             let date_col = theme::pad_right(&format!("{m}{date_short}{rst}", m = t.muted.fg()), 7);
-            // Per-day input volume (self-labeled "… in") makes the volume-weighted
-            // nature of the % explicit: a lower day-% usually reflects a smaller /
-            // less-compressible workload (e.g. fewer high-ratio grep/search calls),
-            // not worse compression. Without it the % drop reads as a regression
-            // when it is really composition (GL #622).
-            let in_col = theme::pad_right(
-                &format!(
-                    "{m}{} in{rst}",
-                    format_big(day.input_tokens),
-                    m = t.muted.fg()
-                ),
+            // Per-day observed baseline makes the volume-weighted percentage explicit:
+            // a low rate can reflect tiny or non-reducing calls rather than a regression.
+            let observed_col = theme::pad_right(
+                &format!("{m}{}{rst}", format_big(day.input_tokens), m = t.muted.fg()),
                 11,
             );
             let saved_col =
@@ -590,10 +583,16 @@ fn gain_dashboard(t: &Theme, tick: Option<u64>, with_footer: bool) -> String {
                 format!("v{}", day.version)
             };
             out.push(sec_line(&format!(
-                "  {date_col} {:>4} cmds  {in_col} {saved_col} {pc}{day_pct:>5.1}%{rst}  {day_bar}  {dim}{ver}{rst}",
+                "  {date_col} {:>4} cmds  {observed_col} {saved_col} {rate_col}  {day_bar}  {dim}{ver}{rst}",
                 day.commands,
             )));
         }
+        out.push(sec_line(&format!(
+            "  {dim}Rate = metered ctx_* baseline → returned tokens; commands include writes.{rst}"
+        )));
+        out.push(sec_line(&format!(
+            "  {dim}Native sed/cat/Bash bypasses are unseen; n/a = no measured baseline.{rst}"
+        )));
         out.push(format!("  {}", t.box_bottom_square(w)));
     }
 

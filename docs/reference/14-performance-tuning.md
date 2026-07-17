@@ -117,12 +117,18 @@ profile-derived default":
 | Knob | Env override | Meaning |
 |------|--------------|---------|
 | `max_disk_mb` | `LEAN_CTX_MAX_DISK_MB` | total on-disk budget across caches/indexes |
-| `max_ram_percent` | `LEAN_CTX_MAX_RAM_PERCENT` | RAM ceiling as % of system memory (default 5) |
+| `max_ram_percent` | `LEAN_CTX_MAX_RAM_PERCENT` | soft process-RSS target as % of system memory (default 5) |
 | `max_staleness_days` | `LEAN_CTX_MAX_STALENESS_DAYS` | auto-prune entries older than N days |
 
 `config show` warns if `max_disk_mb` is set lower than
 `archive.max_disk_mb + bm25_max_cache_mb`, so your sub-budgets can't quietly
 exceed the global cap.
+
+`max_ram_percent` drives userspace throttling and cache eviction; it is not a
+kernel-enforced ceiling and RSS can temporarily exceed it. For a strict
+per-process boundary, run lean-ctx in a cgroup/container with `MemoryMax` (or
+equivalent). At sustained pressure, reduce `memory_profile`, disable
+`auto_preload`/`cognition_loop_enabled`, or provision more RAM.
 
 ---
 

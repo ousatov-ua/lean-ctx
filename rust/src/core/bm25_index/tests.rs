@@ -103,6 +103,58 @@ fn bm25_search_finds_relevant() {
 }
 
 #[test]
+fn structural_signals_disambiguate_same_named_cross_subsystem_results() {
+    let mut index = BM25Index::new();
+    let mut add = |file: &str, symbol: &str, content: &str| {
+        let tokens = tokenize(content);
+        let token_count = tokens.len();
+        index.add_chunk(CodeChunk {
+            file_path: file.into(),
+            symbol_name: symbol.into(),
+            kind: ChunkKind::Function,
+            start_line: 1,
+            end_line: 5,
+            content: content.into(),
+            tokens,
+            token_count,
+        });
+    };
+    add(
+        "charger/easee/types.go",
+        "CircuitSettings",
+        "Current Current Current Current GetMaxCurrent circuit settings",
+    );
+    add(
+        "api/actionconfig.go",
+        "GetMaxCurrent",
+        "GetMaxCurrent returns configured Current",
+    );
+    add(
+        "charger/ocpp.go",
+        "GetMaxCurrent",
+        "GetMaxCurrent reads Current Offered measurand",
+    );
+    add(
+        "README.md",
+        "OCPP",
+        "OCPP charger GetMaxCurrent Current Offered",
+    );
+    index.finalize();
+
+    let results = index.search(
+        "OCPP charger GetMaxCurrent Current.Offered measurand CurrentGetter",
+        4,
+    );
+
+    assert_eq!(results[0].file_path, "charger/ocpp.go");
+    let docs = results
+        .iter()
+        .find(|result| result.file_path == "README.md")
+        .expect("documentation result remains available");
+    assert!(docs.score < results[0].score);
+}
+
+#[test]
 fn bm25_search_sorts_ties_deterministically() {
     let mut index = BM25Index::new();
 

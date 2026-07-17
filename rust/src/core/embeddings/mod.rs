@@ -266,31 +266,11 @@ impl EmbeddingEngine {
             return Ok(Vec::new());
         }
 
-        let prefixed: Vec<String> = texts
-            .iter()
-            .map(|t| {
-                if let Some(prefix) = &self.model_config.document_prefix {
-                    format!("{prefix}{t}")
-                } else {
-                    t.to_string()
-                }
-            })
-            .collect();
-        let prefixed_refs: Vec<&str> = prefixed.iter().map(std::string::String::as_str).collect();
-
-        // Tokenize all texts upfront (parallel — wordpiece tokenization is CPU-bound)
-        let tokenized: Vec<TokenizedInput> = prefixed_refs
-            .par_iter()
-            .map(|t| tokenize(&self.tokenizer, t, self.max_seq_len))
-            .collect();
-
-        // Process in mini-batches to cap peak memory.
-        // Override via LEAN_CTX_EMBEDDING_BATCH_SIZE env var (e.g. "128").
-        // Default is larger on GPU (256 vs. 64): each mini-batch is one
-        // sequential session.run() call (no fan-out across batches), so small
-        // batches under-utilize the GPU and pay kernel-launch / host↔device
-        // copy overhead per call that a bigger matmul would amortize better.
-        let batch_size: usize = std::env::var("LEAN_CTX_EMBEDDING_BATCH_SIZE")
+        // Process in mini-batches to cap peak memory. Prefixing and tokenization
+        // deliberately happen inside the loop: retaining those buffers for the
+        // entire corpus used to defeat the mini-batch cap under large indexes.
+        // Override the upper bound via LEAN_CTX_EMBEDDING_BATCH_SIZE.
+        let configured_batch_size: usize = std::env::var("LEAN_CTX_EMBEDDING_BATCH_SIZE")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&v| v >= 1)
@@ -301,17 +281,28 @@ impl EmbeddingEngine {
                 }
                 64
             });
+        // Approximate tokenizer tensors plus transformer activations per input.
+        // Saturating arithmetic keeps hostile custom-model dimensions harmless.
+        let estimated_bytes_per_text = self
+            .max_seq_len
+            .saturating_mul(self.dimensions.max(1))
+            .saturating_mul(std::mem::size_of::<f32>())
+            .saturating_mul(8) as u64;
+        let batch_size = crate::core::memory_guard::adaptive_batch_size(
+            1,
+            configured_batch_size,
+            estimated_bytes_per_text.max(1),
+        );
 
-        let total = tokenized.len();
+        let total = texts.len();
         let total_batches = total.div_ceil(batch_size);
         let mut results = Vec::with_capacity(total);
         let start = std::time::Instant::now();
-        for (batch_idx, chunk) in tokenized.chunks(batch_size).enumerate() {
-            // Cooperative cancellation checkpoint (between FFI calls, never
-            // inside `session.run()`): bail on user Ctrl-C or a memory-guard
-            // abort. Stopping here leaves the CUDA context intact so the driver
-            // can reclaim VRAM on the ensuing clean exit, instead of the process
-            // being killed mid-kernel and lingering as a zombie holding VRAM.
+
+        for (batch_idx, text_chunk) in texts.chunks(batch_size).enumerate() {
+            // Cooperative cancellation checkpoint before any per-batch allocation
+            // and between FFI calls. A hard pressure sample therefore prevents the
+            // next prefix/tokenizer spike and cleanly drops prior batch buffers.
             if crate::core::interrupt::is_cancelled()
                 || crate::core::memory_guard::abort_requested()
             {
@@ -321,8 +312,24 @@ impl EmbeddingEngine {
                     embedded = results.len(),
                 );
             }
+
+            let prefixed: Vec<String> = text_chunk
+                .iter()
+                .map(|text| {
+                    if let Some(prefix) = &self.model_config.document_prefix {
+                        format!("{prefix}{text}")
+                    } else {
+                        (*text).to_owned()
+                    }
+                })
+                .collect();
+            let tokenized: Vec<TokenizedInput> = prefixed
+                .par_iter()
+                .map(|text| tokenize(&self.tokenizer, text, self.max_seq_len))
+                .collect();
+
             let batch_start = std::time::Instant::now();
-            let batch_out = self.run_inference_batch(chunk)?;
+            let batch_out = self.run_inference_batch(&tokenized)?;
             results.extend(batch_out);
             tracing::info!(
                 batch = batch_idx + 1,

@@ -23,6 +23,9 @@ pub(super) fn handle(
                     crate::core::edit_metering::metrics_snapshot(),
                 );
                 obj.insert("channel_breakdown".to_string(), channel_breakdown(&store));
+                if let Some(cache_runtime) = load_cache_runtime() {
+                    obj.insert("cache_runtime".to_string(), cache_runtime);
+                }
             }
             let json = serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
             Some(("200 OK", "application/json", json))
@@ -87,6 +90,22 @@ pub(super) fn handle(
         }
         _ => None,
     }
+}
+
+/// Current MCP-process cache telemetry. Historical cache totals remain in
+/// `StatsStore::cep`; this snapshot makes the hot cache visible to the live
+/// cockpit without teaching the browser where runtime state files live.
+fn load_cache_runtime() -> Option<serde_json::Value> {
+    let path = crate::core::paths::state_dir().ok()?.join("mcp-live.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let live: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some(serde_json::json!({
+        "cache_hits": live.get("cache_hits").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        "total_reads": live.get("total_reads").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        "hit_rate_pct": live.get("cache_utilization").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        "tokens_saved": live.get("tokens_saved").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        "tokens_original": live.get("tokens_original").and_then(serde_json::Value::as_u64).unwrap_or(0),
+    }))
 }
 
 /// Classify every recorded command into its delivery channel:

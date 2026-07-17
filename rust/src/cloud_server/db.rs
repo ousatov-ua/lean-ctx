@@ -313,6 +313,16 @@ CREATE TABLE IF NOT EXISTS wrapped_link_codes (
   expires_at TIMESTAMPTZ NOT NULL
 );
 
+-- A signed re-publish may discover an existing card after the local edit token
+-- was lost. The server returns a fresh nonce; only the matching publisher key
+-- can sign it and rotate the token. One live nonce per card prevents buildup.
+CREATE TABLE IF NOT EXISTS wrapped_edit_token_challenges (
+  nonce_hash TEXT PRIMARY KEY,
+  card_id    TEXT NOT NULL UNIQUE REFERENCES wrapped_cards(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
 DROP TABLE IF EXISTS team_invites CASCADE;
 DROP TABLE IF EXISTS team_members CASCADE;
 DROP TABLE IF EXISTS teams CASCADE;

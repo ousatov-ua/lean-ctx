@@ -811,6 +811,11 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
     // and env overrides, matching the upstream snapshot above (#834).
     let active_effort = crate::core::config::Config::load().proxy.resolved_effort();
 
+    let introspect_total_input = i.total_input_tokens.load(Relaxed);
+    let introspect_bulk_candidates = i.total_bulk_candidate_tokens.load(Relaxed);
+    let introspect_bulk_share =
+        introspect::token_share_basis_points(introspect_bulk_candidates, introspect_total_input);
+
     let body = serde_json::json!({
         "status": "running",
         "proxy_mode": format!("{:?}", crate::core::config::Config::load().proxy.resolved_proxy_mode()),
@@ -855,7 +860,11 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
         "note": "Savings are request-side (tokens removed before forwarding); they do not subtract any re-reads the agent performs. Token figures are estimates; USD uses the shared model price table.",
         "introspect": {
             "total_requests_analyzed": i.total_requests.load(Relaxed),
+            "total_input_tokens": introspect_total_input,
             "total_system_prompt_tokens": i.total_system_prompt_tokens.load(Relaxed),
+            "total_bulk_candidate_tokens": introspect_bulk_candidates,
+            "bulk_candidate_share_basis_points": introspect_bulk_share,
+            "vision_encoding_decision_gate_met": introspect_bulk_share.is_some_and(|share| share >= 2_000),
             "last_breakdown": last_breakdown,
         }
     });

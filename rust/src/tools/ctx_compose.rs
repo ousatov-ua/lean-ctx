@@ -244,6 +244,14 @@ fn extract_keywords(task: &str, max: usize) -> Vec<String> {
     out
 }
 
+fn exact_match_keyword(keywords: &[String]) -> Option<&str> {
+    keywords
+        .iter()
+        .filter(|keyword| keyword.contains('_') || keyword.chars().skip(1).any(char::is_uppercase))
+        .max_by_key(|keyword| keyword.len())
+        .map(String::as_str)
+}
+
 /// Run the semantic ranking stage under a wall-time budget. Returns the ranked
 /// block on time, or a short "deferred" note if the (cold) build overruns —
 /// in which case the detached worker keeps running to warm the resident cache.
@@ -355,8 +363,10 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     out.push_str(&ranked_files_budgeted(task, project_root, crp_mode));
     out.push('\n');
 
-    // 2. Exact match locations for the primary keyword (index-backed search).
-    if let Some(primary) = keywords.first() {
+    // 2. Exact matches only for identifier-shaped terms. Broad prose words and
+    // acronyms create repository-wide README/Dockerfile noise and can exhaust
+    // the search budget before reaching source.
+    if let Some(primary) = exact_match_keyword(&keywords) {
         let grep = crate::tools::ctx_search::handle(
             primary,
             project_root,
@@ -383,7 +393,7 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     let mut items: Vec<CoverageItem> = Vec::new();
     for kw in &keywords {
         if let Some((rendered, toks)) =
-            crate::tools::ctx_symbol::best_symbol_snippet(kw, project_root)
+            crate::tools::ctx_symbol::best_symbol_snippet_for_task(kw, task, project_root)
         {
             // The snippet always covers its triggering keyword, plus any other
             // task keyword its body textually surfaces (a more central symbol).
@@ -446,6 +456,18 @@ mod tests {
         let kw = extract_keywords("alpha alpha beta gamma delta epsilon zeta eta", 3);
         assert_eq!(kw.len(), 3);
         assert_eq!(kw[0], "alpha");
+    }
+
+    #[test]
+    fn exact_matches_choose_specific_identifier_not_first_broad_keyword() {
+        let keywords = extract_keywords(
+            "OCPP charger GetMaxCurrent Current.Offered measurand CurrentGetter",
+            6,
+        );
+        assert_eq!(exact_match_keyword(&keywords), Some("GetMaxCurrent"));
+
+        let prose = extract_keywords("Fix semantic ranking exact matches", 6);
+        assert_eq!(exact_match_keyword(&prose), None);
     }
 
     #[test]

@@ -42,7 +42,7 @@ Top-level configuration keys
 - `journal_enabled` (bool, default `true`) — Write human-readable activity journal to ~/.lean-ctx/journal.md
 - `max_disk_mb` (u64, default `0` — env `LEAN_CTX_MAX_DISK_MB`) — Simplified disk budget in MB (0 = disabled). Distributes: archive ~25%, BM25 ~10%
 - `max_index_threads` (usize, default `0` — env `LEANCTX_INDEX_THREADS`) — Cap rayon threads for the CPU-heavy index build (0 = all cores). Bounds per-instance CPU so concurrent sessions don't saturate the host on startup
-- `max_ram_percent` (u8, default `5` — env `LEAN_CTX_MAX_RAM_PERCENT`) — Maximum percentage of system RAM that lean-ctx may use (1-50, default 5)
+- `max_ram_percent` (u8, default `5` — env `LEAN_CTX_MAX_RAM_PERCENT`) — Soft process-RSS target as % of system RAM (1-50, default 5); eviction/throttling policy, not an OS hard cap
 - `max_staleness_days` (u32, default `0` — env `LEAN_CTX_MAX_STALENESS_DAYS`) — Auto-purge data older than N days (0 = disabled). Flows into archive.max_age_hours
 - `memory_cleanup` (enum: aggressive | shared, default `aggressive` — env `LEAN_CTX_MEMORY_CLEANUP`) — Controls how aggressively memory is freed when idle
 - `memory_profile` (enum: low | balanced | performance, default `performance` — env `LEAN_CTX_MEMORY_PROFILE`) — Controls RAM vs feature trade-off (performance = max quality)

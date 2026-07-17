@@ -3,8 +3,8 @@ use std::collections::HashMap;
 pub(super) fn handle(
     path: &str,
     _query_str: &str,
-    _method: &str,
-    _body: &str,
+    method: &str,
+    body: &str,
 ) -> Option<(&'static str, &'static str, String)> {
     match path {
         "/api/mcp" => {
@@ -15,6 +15,14 @@ pub(super) fn handle(
             let json = build_agents_json();
             Some(("200 OK", "application/json", json))
         }
+        "/api/agents/sessions" if method.eq_ignore_ascii_case("POST") => {
+            Some(handle_logical_session_presence(body))
+        }
+        "/api/agents/sessions" => Some((
+            "405 Method Not Allowed",
+            "application/json",
+            r#"{"error":"method not allowed"}"#.to_string(),
+        )),
         "/api/events" => {
             let evs = crate::core::events::load_events_from_file(200);
             let json = serde_json::to_string(&evs).unwrap_or_else(|_| "[]".to_string());
@@ -31,14 +39,14 @@ pub(super) fn handle(
                     Some((
                         "404 Not Found",
                         "application/json",
-                        "{\"error\":\"event not found\"}".to_string(),
+                        r#"{"error":"event not found"}"#.to_string(),
                     ))
                 }
             } else {
                 Some((
                     "400 Bad Request",
                     "application/json",
-                    "{\"error\":\"invalid event id\"}".to_string(),
+                    r#"{"error":"invalid event id"}"#.to_string(),
                 ))
             }
         }
@@ -46,14 +54,17 @@ pub(super) fn handle(
     }
 }
 
+const LOGICAL_SESSION_TTL_SECONDS: u64 = 180;
+
 fn build_agents_json() -> String {
     let registry = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
         registry.cleanup_stale(24);
+        registry.cleanup_stale_logical_sessions(LOGICAL_SESSION_TTL_SECONDS);
     })
     .map(|(registry, ())| registry)
     .unwrap_or_default();
 
-    let mut agents: Vec<serde_json::Value> = registry
+    let transports: Vec<serde_json::Value> = registry
         .agents
         .iter()
         .filter(|a| {
@@ -61,7 +72,7 @@ fn build_agents_json() -> String {
                 && crate::core::agents::is_process_alive(a.pid)
         })
         .map(|a| {
-            let age_min = (chrono::Utc::now() - a.last_active).num_minutes();
+            let age_min = (chrono::Utc::now() - a.last_active).num_minutes().max(0);
             serde_json::json!({
                 "id": a.agent_id,
                 "type": a.agent_type,
@@ -74,12 +85,28 @@ fn build_agents_json() -> String {
         })
         .collect();
 
-    if agents.is_empty() {
-        agents = infer_agents_from_events();
-    }
+    let logical_sessions: Vec<serde_json::Value> = registry
+        .logical_sessions
+        .iter()
+        .map(|session| {
+            let heartbeat_age_seconds = (chrono::Utc::now() - session.last_heartbeat)
+                .num_seconds()
+                .max(0);
+            serde_json::json!({
+                "source": session.source,
+                "workspace": session.workspace,
+                "session_id": session.session_id,
+                "opened_at": session.opened_at,
+                "last_heartbeat": session.last_heartbeat,
+                "heartbeat_age_seconds": heartbeat_age_seconds
+            })
+        })
+        .collect();
+    let logical_session_count = registry
+        .logical_session_telemetry_seen
+        .then_some(logical_sessions.len());
 
     let pending_msgs = registry.scratchpad.len();
-
     let shared_dir = crate::core::data_dir::lean_ctx_data_dir()
         .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".lean-ctx"))
         .join("agents")
@@ -91,12 +118,97 @@ fn build_agents_json() -> String {
     };
 
     serde_json::json!({
-        "agents": agents,
-        "total_active": agents.len(),
+        "transports": transports,
+        "transport_count": transports.len(),
+        "logical_sessions": logical_sessions,
+        "logical_session_count": logical_session_count,
+        "logical_session_presence_available": registry.logical_session_telemetry_seen,
+        "recent_tool_activity": infer_agents_from_events(),
+        // Compatibility for older dashboard clients: agents always means transports.
+        "agents": transports,
+        "total_active": transports.len(),
         "pending_messages": pending_msgs,
         "shared_contexts": shared_count
     })
     .to_string()
+}
+
+#[derive(serde::Deserialize)]
+struct LogicalSessionPresenceRequest {
+    event: String,
+    source: String,
+    workspace: String,
+    session_id: String,
+}
+
+fn handle_logical_session_presence(body: &str) -> (&'static str, &'static str, String) {
+    let request: LogicalSessionPresenceRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => {
+            return (
+                "400 Bad Request",
+                "application/json",
+                r#"{"error":"invalid JSON body"}"#.to_string(),
+            );
+        }
+    };
+
+    if !valid_presence_field(&request.source, 64)
+        || !valid_presence_field(&request.workspace, 4096)
+        || !valid_presence_field(&request.session_id, 256)
+    {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"presence fields are empty, too long, or contain control characters"}"#
+                .to_string(),
+        );
+    }
+
+    let event = request.event.as_str();
+    if !matches!(event, "open" | "heartbeat" | "close") {
+        return (
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"event must be open, heartbeat, or close"}"#.to_string(),
+        );
+    }
+
+    let result = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.cleanup_stale_logical_sessions(LOGICAL_SESSION_TTL_SECONDS);
+        match event {
+            "open" | "heartbeat" => registry.open_or_heartbeat_logical_session(
+                &request.source,
+                &request.workspace,
+                &request.session_id,
+            ),
+            "close" => {
+                registry.close_logical_session(
+                    &request.source,
+                    &request.workspace,
+                    &request.session_id,
+                );
+            }
+            _ => unreachable!("event validated above"),
+        }
+    });
+
+    match result {
+        Ok(_) => (
+            "200 OK",
+            "application/json",
+            serde_json::json!({"ok": true, "event": event}).to_string(),
+        ),
+        Err(error) => (
+            "500 Internal Server Error",
+            "application/json",
+            serde_json::json!({"error": error}).to_string(),
+        ),
+    }
+}
+
+fn valid_presence_field(value: &str, max_len: usize) -> bool {
+    !value.is_empty() && value.len() <= max_len && !value.chars().any(char::is_control)
 }
 
 /// Event timestamps are written by `events.rs` with `chrono::Local::now()` and
@@ -228,7 +340,7 @@ struct ToolAgg {
 
 #[cfg(test)]
 mod tests {
-    use super::local_event_ts_to_utc;
+    use super::{handle, local_event_ts_to_utc};
 
     /// GL #479 D3: event timestamps are local wall-clock strings; interpreting
     /// "now" as local must yield an age of ~0 — not a negative UTC-offset age.
@@ -241,5 +353,69 @@ mod tests {
             (-1..=1).contains(&age_min),
             "a just-written event must be ~0 minutes old, got {age_min}"
         );
+    }
+
+    #[test]
+    fn explicit_session_presence_is_reported_separately_from_transports() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+        let body = serde_json::json!({
+            "event": "open",
+            "source": "vscode",
+            "workspace": "/repo",
+            "session_id": "chat-1"
+        })
+        .to_string();
+
+        let (status, _, _) =
+            handle("/api/agents/sessions", "", "POST", &body).expect("presence route");
+        assert_eq!(status, "200 OK");
+
+        let (_, _, json) = handle("/api/agents", "", "GET", "").expect("agents route");
+        let payload: serde_json::Value = serde_json::from_str(&json).expect("agents JSON");
+        assert_eq!(payload["transport_count"], 0);
+        assert_eq!(payload["logical_session_count"], 1);
+        assert_eq!(payload["logical_sessions"][0]["session_id"], "chat-1");
+        assert_eq!(payload["logical_session_presence_available"], true);
+    }
+
+    #[test]
+    fn session_presence_route_validates_method_event_and_fields() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+        let request = |event: &str, source: &str| {
+            serde_json::json!({
+                "event": event,
+                "source": source,
+                "workspace": "/repo",
+                "session_id": "chat-1"
+            })
+            .to_string()
+        };
+
+        let (status, _, _) = handle(
+            "/api/agents/sessions",
+            "",
+            "GET",
+            &request("open", "vscode"),
+        )
+        .expect("presence route");
+        assert_eq!(status, "405 Method Not Allowed");
+
+        let (status, _, _) = handle(
+            "/api/agents/sessions",
+            "",
+            "POST",
+            &request("activity", "vscode"),
+        )
+        .expect("presence route");
+        assert_eq!(status, "400 Bad Request");
+
+        let (status, _, _) = handle(
+            "/api/agents/sessions",
+            "",
+            "POST",
+            &request("open", "vs\ncode"),
+        )
+        .expect("presence route");
+        assert_eq!(status, "400 Bad Request");
     }
 }

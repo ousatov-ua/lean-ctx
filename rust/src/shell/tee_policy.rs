@@ -10,22 +10,12 @@
 
 use crate::core::config::TeeMode;
 
-/// Decide whether to tee the full output, given the configured [`TeeMode`], the
-/// command's `exit_code`, whether the (trimmed) output is blank, and the token
-/// counts before/after compression.
-///
-/// - `Never` never tees.
-/// - `Always` tees any non-blank output.
-/// - `Failures` tees exactly when the command failed (`exit_code != 0`).
-/// - `HighCompression` (the default) is a *superset* of `Failures`: it tees on
-///   failure **and** when compression removed >70% of a sizable output. As the
-///   default it guarantees the MCP-free recovery path — a real raw file — exists
-///   for both the cases an agent actually re-reads: failures and heavily-digested
-///   successful runs.
+/// Decide whether to persist a recovery copy of shell output.
 pub(crate) fn should_tee(
     mode: &TeeMode,
     exit_code: i32,
     blank_output: bool,
+    content_elided: bool,
     original_tokens: usize,
     compressed_tokens: usize,
 ) -> bool {
@@ -34,13 +24,24 @@ pub(crate) fn should_tee(
     }
     match mode {
         TeeMode::Never => false,
+        // Explicit retention mode remains independent of compression.
         TeeMode::Always => true,
-        TeeMode::Failures => exit_code != 0,
+        TeeMode::Failures => exit_code != 0 && content_elided,
         TeeMode::HighCompression => {
-            exit_code != 0
-                || (original_tokens > 100 && savings_pct(original_tokens, compressed_tokens) > 70.0)
+            content_elided
+                && (exit_code != 0
+                    || (original_tokens > 100
+                        && savings_pct(original_tokens, compressed_tokens) > 70.0))
         }
     }
+}
+
+/// True only when the inline representation does not contain the complete
+/// non-blank output. Wrappers such as `<error>…</error>` do not count as
+/// elision.
+pub(crate) fn output_was_elided(full_output: &str, inline_output: &str) -> bool {
+    let full_output = full_output.trim_end_matches(['\r', '\n']);
+    !full_output.is_empty() && !inline_output.contains(full_output)
 }
 
 /// Percentage of tokens removed by compression, clamped to `0.0` when the
@@ -58,47 +59,68 @@ mod tests {
 
     #[test]
     fn never_mode_never_tees() {
-        assert!(!should_tee(&TeeMode::Never, 1, false, 1000, 10));
-        assert!(!should_tee(&TeeMode::Never, 0, false, 1000, 10));
+        assert!(!should_tee(&TeeMode::Never, 1, false, true, 1000, 10));
+        assert!(!should_tee(&TeeMode::Never, 0, false, true, 1000, 10));
     }
 
     #[test]
     fn always_mode_tees_non_blank_only() {
-        assert!(should_tee(&TeeMode::Always, 0, false, 100, 50));
-        assert!(!should_tee(&TeeMode::Always, 0, true, 100, 50));
+        assert!(should_tee(&TeeMode::Always, 0, false, false, 100, 50));
+        assert!(!should_tee(&TeeMode::Always, 0, true, true, 100, 50));
     }
 
     #[test]
-    fn failures_mode_is_exit_code_based_not_substring() {
-        // A non-zero exit tees regardless of how terse / non-"error" the text is
-        // (the old substring gate missed `fatal:`, `permission denied`, …).
-        assert!(should_tee(&TeeMode::Failures, 1, false, 5, 5));
-        assert!(should_tee(&TeeMode::Failures, 127, false, 5, 5));
-        // Success never tees, even with large output.
-        assert!(!should_tee(&TeeMode::Failures, 0, false, 9999, 10));
-        // A blank failure has nothing worth saving.
-        assert!(!should_tee(&TeeMode::Failures, 1, true, 0, 0));
+    fn failures_tee_only_when_output_was_elided() {
+        assert!(should_tee(&TeeMode::Failures, 1, false, true, 5, 2));
+        assert!(!should_tee(&TeeMode::Failures, 1, false, false, 5, 5));
+        assert!(!should_tee(&TeeMode::Failures, 0, false, true, 9999, 10));
+        assert!(!should_tee(&TeeMode::Failures, 1, true, true, 0, 0));
     }
 
     #[test]
-    fn high_compression_mode_tees_heavily_digested_output() {
-        // >70% savings on sizable output → recoverable.
-        assert!(should_tee(&TeeMode::HighCompression, 0, false, 1000, 100));
-        // Not enough savings.
-        assert!(!should_tee(&TeeMode::HighCompression, 0, false, 1000, 900));
-        // Savings high but the output is too small to bother.
-        assert!(!should_tee(&TeeMode::HighCompression, 0, false, 80, 1));
+    fn high_compression_requires_actual_elision() {
+        assert!(should_tee(
+            &TeeMode::HighCompression,
+            0,
+            false,
+            true,
+            1000,
+            100
+        ));
+        assert!(!should_tee(
+            &TeeMode::HighCompression,
+            0,
+            false,
+            false,
+            1000,
+            100
+        ));
+        assert!(!should_tee(
+            &TeeMode::HighCompression,
+            0,
+            false,
+            true,
+            1000,
+            900
+        ));
+        assert!(!should_tee(
+            &TeeMode::HighCompression,
+            1,
+            false,
+            false,
+            5,
+            5
+        ));
     }
 
     #[test]
-    fn high_compression_is_a_superset_of_failures() {
-        // As the default tee mode, HighCompression must still tee failures (so the
-        // raw-file recovery path exists for them) even when output is tiny and
-        // barely compressed — exactly the case `Failures` covered before.
-        assert!(should_tee(&TeeMode::HighCompression, 1, false, 5, 5));
-        assert!(should_tee(&TeeMode::HighCompression, 127, false, 5, 5));
-        // A blank failure still has nothing worth saving.
-        assert!(!should_tee(&TeeMode::HighCompression, 1, true, 0, 0));
+    fn detects_full_output_inside_error_wrapper() {
+        assert!(!output_was_elided("hi\n", "<error>hi\n[exit:1]</error>"));
+        assert!(output_was_elided(
+            "first\nmissing\nlast\n",
+            "first\n…\nlast"
+        ));
+        assert!(!output_was_elided("", ""));
     }
 
     #[test]

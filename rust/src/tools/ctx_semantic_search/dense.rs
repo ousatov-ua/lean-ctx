@@ -285,9 +285,19 @@ pub(crate) fn dense_search_mode(
 }
 
 #[cfg(feature = "embeddings")]
+fn reject_under_hard_pressure(operation: &str) -> Result<(), String> {
+    if crate::core::memory_guard::abort_requested() {
+        Err(format!("{operation} cancelled during hard memory pressure"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "embeddings")]
 pub(crate) fn load_engine_and_index(
     root: &Path,
 ) -> Result<(&'static EmbeddingEngine, EmbeddingIndex), String> {
+    reject_under_hard_pressure("semantic embedding load")?;
     let cfg = crate::core::config::Config::load();
     let profile = crate::core::config::MemoryProfile::effective(&cfg);
     if !profile.embeddings_enabled() {
@@ -377,6 +387,7 @@ pub(crate) fn ensure_embeddings(
         let batch_embeddings = engine
             .embed_batch(&changed_texts)
             .map_err(|e| format!("batch embed failed: {e}"))?;
+        reject_under_hard_pressure("embedding update")?;
 
         let new_embeddings: Vec<(usize, Vec<f32>)> =
             changed_indices.into_iter().zip(batch_embeddings).collect();
@@ -401,6 +412,7 @@ pub(crate) fn ensure_embeddings(
     let batch_embeddings = engine
         .embed_batch(&all_texts)
         .map_err(|e| format!("batch embed failed: {e}"))?;
+    reject_under_hard_pressure("embedding rebuild")?;
 
     let new_embeddings: Vec<(usize, Vec<f32>)> = batch_embeddings.into_iter().enumerate().collect();
 

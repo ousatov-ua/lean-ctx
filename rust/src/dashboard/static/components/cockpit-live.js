@@ -58,16 +58,10 @@ var EVENT_ICONS = {
   budget_crit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>',
 };
 
-var FILTER_CATEGORIES = {
-  all: null,
-  reads: 'read',
-  shell: 'shell',
-  search: 'search',
-  cache: 'cache',
-};
-
 var FILTER_LABELS = {
   all: 'All',
+  token: 'Token Flow',
+  operations: 'Intelligence',
   reads: 'Reads',
   shell: 'Shell',
   search: 'Search',
@@ -275,11 +269,29 @@ function flattenEvent(ev) {
   }
 }
 
+function eventFlow(flat) {
+  if (flat.type === 'CacheHit') return 'cache';
+  if (flat.type !== 'ToolCall') return 'operations';
+  if (flat.original <= 0) return 'operations';
+  return flat.saved > 0 ? 'optimized' : 'passthrough';
+}
+
+function matchesEventFilter(flat, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'token') return flat.type === 'ToolCall' && flat.original > 0;
+  if (filter === 'operations') return eventFlow(flat) === 'operations';
+  if (filter === 'cache') return flat.type === 'CacheHit';
+  if (filter === 'reads') return flat.category === 'read';
+  if (filter === 'shell') return flat.category === 'shell';
+  if (filter === 'search') return flat.category === 'search';
+  return true;
+}
+
 /* ─── Event explanations — human-readable help for each event type ─── */
 
 var EVENT_EXPLANATIONS = {
-  ToolCall: 'A tool was called by the AI agent. lean-ctx compressed the response to save tokens. No action needed.',
-  CacheHit: 'This file was served from cache instead of re-reading from disk. This is normal and saves tokens.',
+  ToolCall: 'A tool was called by the AI agent. Payload-bearing calls are classified as optimized or passthrough; control calls have no compressible token payload.',
+  CacheHit: 'A previously computed context view was reused. The paired ToolCall owns the token savings, so the live total does not count this event twice.',
   Compression: 'lean-ctx applied a compression strategy to reduce token usage. The numbers show lines before → after compression. This is normal optimization — no action needed.',
   AgentAction: 'An AI agent performed an action tracked by the Context OS. Informational only.',
   KnowledgeUpdate: 'The persistent knowledge base was updated with new information. This improves future sessions.',
@@ -308,7 +320,7 @@ function buildToolDetail(kind) {
       var pct = Math.round((saved / orig) * 100);
       parts.push(fmtTokShort(orig) + ' \u2192 ' + fmtTokShort(sent) + ' tok (\u2212' + pct + '%)');
     } else {
-      parts.push(fmtTokShort(orig) + ' tok (not compressible)');
+      parts.push(fmtTokShort(orig) + ' tok (payload passthrough)');
     }
   } else if (saved != null && saved > 0) {
     parts.push('saved ' + fmtTokShort(saved) + ' tok');
@@ -395,13 +407,33 @@ function buildThresholdDetail(kind) {
   return parts.join(' · ');
 }
 
-function computeSessionFromEvents(events) {
-  var total = 0;
+function computeTokenWindow(events) {
+  var result = {
+    original: 0,
+    saved: 0,
+    calls: 0,
+    optimizedCalls: 0,
+    passthroughCalls: 0,
+    cacheHits: 0,
+    operations: 0,
+  };
   for (var i = 0; i < events.length; i++) {
     var flat = flattenEvent(events[i]);
-    total += flat.saved || 0;
+    if (flat.type === 'CacheHit') {
+      // A cache hit also produces a ToolCall event. Count it for diagnostics,
+      // never a second time in token savings.
+      result.cacheHits++;
+    } else if (flat.type === 'ToolCall' && flat.original > 0) {
+      result.original += flat.original;
+      result.saved += flat.saved || 0;
+      result.calls++;
+      if (flat.saved > 0) result.optimizedCalls++;
+      else result.passthroughCalls++;
+    } else {
+      result.operations++;
+    }
   }
-  return total;
+  return result;
 }
 
 function formatTimestamp(ts) {
@@ -419,7 +451,7 @@ function formatTimestamp(ts) {
 class CockpitLive extends HTMLElement {
   constructor() {
     super();
-    this._filter = 'all';
+    this._filter = 'token';
     this._sort = 'recent';
     this._onRefresh = this._onRefresh.bind(this);
     this._data = null;
@@ -593,9 +625,9 @@ class CockpitLive extends HTMLElement {
   _renderHeroCounters(F, esc, ff, fmt) {
     var events = this._data.events;
     var stats = this._data.stats;
-
-    var sessionSaved = computeSessionFromEvents(events);
-    var sessionOrig = 0;
+    var windowStats = computeTokenWindow(events);
+    var sessionSaved = windowStats.saved;
+    var sessionOrig = windowStats.original;
 
     var allTimeSaved = 0;
     if (stats) {
@@ -603,6 +635,20 @@ class CockpitLive extends HTMLElement {
       var out = Number(stats.total_output_tokens || 0);
       allTimeSaved = Math.max(0, inp - out);
     }
+
+    var runtimeCache = stats && stats.cache_runtime ? stats.cache_runtime : null;
+    var cep = stats && stats.cep ? stats.cep : {};
+    var cacheHits = runtimeCache
+      ? Number(runtimeCache.cache_hits || 0)
+      : Number(cep.total_cache_hits || 0);
+    var cacheReads = runtimeCache
+      ? Number(runtimeCache.total_reads || 0)
+      : Number(cep.total_cache_reads || 0);
+    var cacheRate = cacheReads > 0 ? Math.round((cacheHits / cacheReads) * 100) : 0;
+    var optimizedRate = windowStats.calls > 0
+      ? Math.round((windowStats.optimizedCalls / windowStats.calls) * 100)
+      : 0;
+    var savingsRate = sessionOrig > 0 ? Math.round((sessionSaved / sessionOrig) * 100) : 0;
 
     return (
       '<div class="hero" style="grid-template-columns:1fr 1fr;margin-bottom:14px">' +
@@ -621,6 +667,18 @@ class CockpitLive extends HTMLElement {
       esc(ff(allTimeSaved)) +
       '</div>' +
       '<p class="hs">across all sessions</p>' +
+      '</div>' +
+      '<div class="hc">' +
+      '<span class="hl">Context Cache Reuse</span>' +
+      '<div class="token-counter" data-live="1">' + esc(String(cacheRate)) + '%</div>' +
+      '<p class="hs">' + esc(ff(cacheHits)) + ' hits / ' + esc(ff(cacheReads)) +
+      ' reads · current MCP runtime</p>' +
+      '</div>' +
+      '<div class="hc">' +
+      '<span class="hl">Optimization Coverage</span>' +
+      '<div class="token-counter" data-live="1">' + esc(String(optimizedRate)) + '%</div>' +
+      '<p class="hs">' + esc(String(savingsRate)) + '% token reduction · ' +
+      esc(ff(windowStats.passthroughCalls)) + ' payload passthroughs</p>' +
       '</div>' +
       '</div>'
     );
@@ -717,7 +775,7 @@ class CockpitLive extends HTMLElement {
   }
 
   _renderFilterRow(esc) {
-    var cats = ['all', 'reads', 'shell', 'search', 'cache'];
+    var cats = ['token', 'operations', 'all', 'reads', 'shell', 'search', 'cache'];
 
     var btns = '';
     for (var i = 0; i < cats.length; i++) {
@@ -751,7 +809,6 @@ class CockpitLive extends HTMLElement {
   _renderEventFeed(F, esc, ff) {
     var events = this._data.events || [];
     var filter = this._filter;
-    var filterCat = FILTER_CATEGORIES[filter] || null;
 
     var errorBanner = '';
     if (this._feedError) {
@@ -782,7 +839,7 @@ class CockpitLive extends HTMLElement {
     var count = 0;
     for (var i = 0; i < sorted.length && count < 50; i++) {
       var flat = flattenEvent(sorted[i]);
-      if (filterCat && flat.category !== filterCat) continue;
+      if (!matchesEventFilter(flat, filter)) continue;
 
       rendered += this._renderEventCard(flat, esc, ff);
       count++;
@@ -792,7 +849,7 @@ class CockpitLive extends HTMLElement {
       var emptyMsg;
       if (this._feedError) {
         emptyMsg = 'Events unavailable — the feed endpoint could not be reached.';
-      } else if (filterCat && events.length > 0) {
+      } else if (filter !== 'all' && events.length > 0) {
         // Events exist, but the active filter matched none — say so instead of
         // implying nothing has happened (e.g. the "Cache" filter with no cache hits).
         emptyMsg =
@@ -817,7 +874,7 @@ class CockpitLive extends HTMLElement {
       '<h3 style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.18em;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
       'Event Feed <span class="badge">' + esc(String(count)) + '</span></h3>' +
       '<p class="hs" style="margin:-4px 0 10px;font-size:11px;opacity:.7">' +
-      'Per-call activity — sort by Top saved / Largest / Slowest to find the most expensive calls. For file-level compression analysis, use Compression Lab.</p>' +
+      'Token Flow contains payload-bearing calls only. Intelligence contains knowledge, policy, budget and agent-control events; those do not represent uncompressed payloads.</p>' +
       '<div id="ckl-event-list" style="display:flex;flex-direction:column;gap:6px">' +
       rendered +
       '</div></div>'
@@ -842,6 +899,12 @@ class CockpitLive extends HTMLElement {
         '<span class="tag tg" style="margin-left:8px">-' +
         esc(ff(flat.saved)) +
         ' tok</span>';
+    } else if (eventFlow(flat) === 'passthrough') {
+      savedBadge =
+        '<span class="tag" style="margin-left:8px;color:var(--yellow);border-color:var(--yellow)">payload passthrough</span>';
+    } else if (eventFlow(flat) === 'operations') {
+      savedBadge =
+        '<span class="tag" style="margin-left:8px;opacity:.55">control / no payload</span>';
     }
 
     var helpIcon = '';
@@ -951,8 +1014,10 @@ class CockpitLive extends HTMLElement {
       '<strong>Real-time event stream</strong> from the lean-ctx daemon. ' +
       'Every tool call, cache hit, compression run, policy check, and agent action is captured ' +
       'as a structured event and streamed here. Click the <strong>?</strong> icon on any event for a detailed explanation.<br><br>' +
-      '<strong>Session counters</strong> show tokens saved since the daemon started. ' +
+      '<strong>Session counters</strong> use payload-bearing ToolCall events only; cache diagnostics are not double-counted. ' +
       '<strong>All-time counters</strong> accumulate across all sessions from the persistent stats store.<br><br>' +
+      '<strong>Context Cache Reuse</strong> shows current MCP-runtime hits/reads. ' +
+      '<strong>Optimization Coverage</strong> separates optimized payload calls from passthroughs; knowledge, policy and agent events are control-plane activity, not failed compression.<br><br>' +
       'The <strong>MCP vs Hook split</strong> shows how savings distribute between MCP tool calls ' +
       '(prefixed <code>ctx_</code>) and shell hook interceptions. ' +
       'Filter the feed by event category to focus on reads, shell commands, searches, or cache hits.<br><br>' +

@@ -154,6 +154,43 @@ pub struct SearchResult {
 const BM25_K1: f64 = 1.2;
 const BM25_B: f64 = 0.75;
 
+fn structural_query_boost(query: &str, chunk: &CodeChunk) -> f64 {
+    let raw_terms: std::collections::HashSet<String> = query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|term| term.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let path_terms: std::collections::HashSet<String> = tokenize(&chunk.file_path)
+        .into_iter()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
+
+    let mut boost = 0.0;
+    if raw_terms.contains(&chunk.symbol_name.to_ascii_lowercase()) {
+        boost += 32.0;
+    }
+    boost += raw_terms.intersection(&path_terms).count() as f64 * 8.0;
+
+    let has_identifier = query.split_whitespace().any(|term| {
+        let has_lower = term.chars().any(char::is_lowercase);
+        let has_upper = term.chars().any(char::is_uppercase);
+        (has_lower && has_upper) || term.contains('_') || term.contains('.')
+    });
+    if has_identifier {
+        let extension = std::path::Path::new(&chunk.file_path)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(extension.as_str(), "md" | "mdx" | "rst" | "txt" | "adoc") {
+            boost -= 8.0;
+        } else if !extension.is_empty() {
+            boost += 4.0;
+        }
+    }
+    boost
+}
+
 impl Default for BM25Index {
     fn default() -> Self {
         Self::new()
@@ -507,6 +544,10 @@ impl BM25Index {
                     scores[idx] += bm25;
                 }
             }
+        }
+
+        for &idx in &touched {
+            scores[idx] += structural_query_boost(query, &self.chunks[idx]);
         }
 
         let mut results: Vec<SearchResult> = touched
