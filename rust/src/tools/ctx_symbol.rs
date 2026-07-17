@@ -111,7 +111,7 @@ fn symbol_task_score(sym: &SymbolInfo, other_keywords_lower: &[String]) -> i64 {
         .filter(|k| path_lower.contains(k.as_str()))
         .count() as i64;
     // Path relevance dominates; exported is a weak tiebreak below it.
-    path_hits * 10 + if sym.is_exported { 1 } else { 0 }
+    path_hits * 10 + i64::from(sym.is_exported)
 }
 
 /// Render one symbol resolved from a stable handle (`path#name@Lline`),
