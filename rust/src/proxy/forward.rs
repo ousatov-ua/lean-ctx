@@ -607,6 +607,27 @@ pub(super) const ALLOWED_REQUEST_HEADERS: &[&str] = &[
     "cache-control",
     "x-goog-api-key",
     "x-goog-api-client",
+    // Grok CLI → cli-chat-proxy.grok.com (subscription rail). Enumerated like
+    // Codex/OpenAI above — no prefix wildcards. Missing `x-grok-client-version`
+    // makes upstream return 426 Upgrade Required with version "(none)".
+    "x-xai-token-auth",
+    "x-models-etag",
+    "x-grok-client-version",
+    "x-grok-client-identifier",
+    "x-grok-client-mode",
+    "x-grok-client-surface",
+    "x-grok-model-override",
+    "x-grok-agent-id",
+    "x-grok-session-id",
+    "x-grok-turn-id",
+    "x-grok-conv-id",
+    "x-grok-req-id",
+    "x-grok-deployment-id",
+    "x-grok-user-id",
+    "x-grok-context-window",
+    "x-grok-max-completion-tokens",
+    "x-grok-doom-loop-check",
+    "x-grok-managed-gateway",
 ];
 
 pub(super) fn is_allowed_request_header(name: &str) -> bool {
@@ -1362,6 +1383,39 @@ mod tests {
             is_forwarded_response_header("mcp-session-id"),
             "MCP session id response header must be forwarded downstream"
         );
+    }
+
+    #[test]
+    fn forwards_grok_cli_chat_proxy_headers() {
+        // Grok CLI → cli-chat-proxy.grok.com. Stripping these used to yield
+        // HTTP 426 Upgrade Required with client-version "(none)" on /responses.
+        for required in [
+            "x-xai-token-auth",
+            "x-models-etag",
+            "x-grok-client-version",
+            "x-grok-client-identifier",
+            "x-grok-client-mode",
+            "x-grok-client-surface",
+            "x-grok-model-override",
+            "x-grok-agent-id",
+            "x-grok-session-id",
+            "x-grok-turn-id",
+            "x-grok-conv-id",
+            "x-grok-req-id",
+            "x-grok-deployment-id",
+            "x-grok-user-id",
+            "x-grok-context-window",
+            "x-grok-max-completion-tokens",
+            "x-grok-doom-loop-check",
+            "x-grok-managed-gateway",
+        ] {
+            assert!(
+                ALLOWED_REQUEST_HEADERS.contains(&required),
+                "request header `{required}` must be on the allowlist"
+            );
+        }
+        // Internal gateway tag must stay off the allowlist (enterprise#11).
+        assert!(!is_allowed_request_header("x-leanctx-project"));
     }
 
     #[test]
