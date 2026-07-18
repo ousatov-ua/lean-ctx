@@ -202,3 +202,49 @@ pub fn is_full_mode() -> bool {
         || std::env::var("LEAN_CTX_LAZY_TOOLS")
             .is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false"))
 }
+
+#[cfg(test)]
+mod conditional_schema_tests {
+    use super::*;
+
+    #[test]
+    fn action_dispatched_tools_publish_conditional_requirements() {
+        let tools = crate::server::registry::build_registry().tool_defs();
+        for name in [
+            "ctx_callgraph",
+            "ctx_expand",
+            "ctx_graph",
+            "ctx_search",
+            "ctx_execute",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("missing tool {name}"));
+            let branches = tool
+                .input_schema
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("{name} must publish oneOf action branches"));
+            assert!(branches.len() >= 2, "{name} needs multiple action branches");
+            assert!(
+                branches.iter().all(|branch| branch.get("required").is_some()
+                    || branch.get("anyOf").is_some()),
+                "{name} action branches must declare required inputs"
+            );
+        }
+
+        let knowledge = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "ctx_knowledge")
+            .expect("ctx_knowledge registered");
+        assert!(
+            knowledge
+                .input_schema
+                .get("allOf")
+                .and_then(Value::as_array)
+                .is_some_and(|branches| branches.len() >= 3),
+            "ctx_knowledge must condition remember/search/gotcha inputs"
+        );
+    }
+}

@@ -286,7 +286,7 @@ File-level dependency graph queries.
 action=symbol path="file.rs::fnName" returns the DEFINITION (not usages — use ctx_search for references). neighbors=imports±direction, impact=reverse-dep blast radius, path from→to=dependency chain, diff since=HEAD~1=git change impact, diagram kind=deps|calls (Mermaid).
 For understanding code use ctx_compose FIRST.
 
-Parameters: `action`*, `depth`, `format`, `kind`, `path`, `project_root`, `since`, `to`
+Parameters: `action`, `depth`, `format`, `kind`, `path`, `project_root`, `since`, `to`
 
 ## `ctx_handoff`
 
@@ -339,7 +339,7 @@ action=consolidate imports latest session if present, runs lifecycle, then frees
 action=gotcha trigger='X' resolution='Y' for known pitfalls.
 mode=semantic|exact for recall. category groups related facts.
 
-Parameters: `action`*, `as_of`, `category`, `confidence`, `dry_run`, `examples`, `format`, `key`, `limit`, `merge`, `mode`, `path`, `pattern_type`, `query`, `resolution`, `severity`, `store`, `trigger`, `value`
+Parameters: `action`*, `as_of`, `category`, `confidence`, `content`, `dry_run`, `examples`, `format`, `key`, `limit`, `merge`, `mode`, `path`, `pattern_type`, `query`, `resolution`, `severity`, `store`, `trigger`, `value`
 
 ## `ctx_ledger`
 
@@ -440,7 +440,7 @@ replace_symbol(path, name, new_body) | create(path, new_text) | replace_all(path
 Batch: ops:[{op, path, ...}] — not replace_symbol/replace_all.
 CONFLICT = stale anchors, re-read. Line-only patch (no hash) → error.
 
-Parameters: `dry_run`, `end_hash`, `end_line`, `find`, `hash`, `line`, `name`, `new_body`, `new_text`, `op`, `ops`, `path`*, `replace`, `start_hash`, `start_line`
+Parameters: `dry_run`, `end_hash`, `end_line`, `find`, `hash`, `line`, `name`, `new_body`, `new_text`, `op`, `ops`, `path`, `replace`, `start_hash`, `start_line`
 
 ## `ctx_plan`
 
@@ -523,7 +523,7 @@ Parameters: `format`
 
 ## `ctx_read`
 
-Read source files. mode REQUIRED — choose by intent (see `mode` below).
+Read source files. mode recommended — choose by intent (see `mode` below); defaults to auto when omitted.
 To UNDERSTAND code run ctx_compose FIRST; ctx_read after it identified files.
 anchored → edit by reference via ctx_patch (no exact-recall).
 
@@ -600,7 +600,7 @@ Parameters: `action`*, `agent`
 
 ## `ctx_search`
 
-Search code; `action` picks the engine (default regex). regex(pattern) | semantic(query, by meaning) | symbol(name, AST-exact; or handle=path#name@Lline) | reindex | find_related(file_path,line). anchored=true tags hits for ctx_patch. queries:[{pattern}] for batch. Run ctx_compose FIRST.
+Search code: regex(pattern, default) | semantic(query) | symbol(name|handle) | reindex | find_related(file_path,line). anchored=true enables ctx_patch refs; queries batches regex searches. Run ctx_compose FIRST.
 
 Parameters: `action`, `anchored`, `exclude`, `exclude_pattern`, `file`, `file_path`, `handle`, `include`, `kind`, `line`, `max_results`, `mode`, `name`, `path`, `paths`, `pattern`, `queries`, `query`, `top_k`
 

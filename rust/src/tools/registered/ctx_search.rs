@@ -60,10 +60,9 @@ impl McpTool for CtxSearchTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_search",
-            "Search code; `action` picks the engine (default regex). \
-             regex(pattern) | semantic(query, by meaning) | symbol(name, AST-exact; \
-             or handle=path#name@Lline) | reindex | find_related(file_path,line). \
-             anchored=true tags hits for ctx_patch. queries:[{pattern}] for batch. Run ctx_compose FIRST.",
+            "Search code: regex(pattern, default) | semantic(query) | symbol(name|handle) | \
+             reindex | find_related(file_path,line). anchored=true enables ctx_patch refs; \
+             queries batches regex searches. Run ctx_compose FIRST.",
             json!({
                 "type": "object",
                 "properties": {
@@ -74,26 +73,48 @@ impl McpTool for CtxSearchTool {
                     "pattern": { "type": "string" },
                     "query": { "type": "string" },
                     "name": { "type": "string" },
-                    "handle": { "type": "string", "description": "path#name@Lline (exact, stable)" },
-                    "path": { "type": "string", "description": "Scope dir/root" },
+                    "handle": { "type": "string" },
+                    "path": { "type": "string" },
                     "paths": { "type": "array", "items": { "type": "string" } },
                     "include": { "type": "string", "description": "Glob, e.g. *.rs" },
                     "exclude": { "type": "string" },
-                    "exclude_pattern": { "type": "string", "description": "drop lines matching (grep -v)" },
+                    "exclude_pattern": { "type": "string" },
                     "anchored": { "type": "boolean" },
                     "max_results": { "type": "integer" },
                     "top_k": { "type": "integer" },
                     "mode": { "type": "string", "enum": ["bm25", "dense", "hybrid"] },
                     "file": { "type": "string" },
-                    "kind": { "type": "string", "description": "fn|struct|class|trait|enum" },
+                    "kind": { "type": "string" },
                     "file_path": { "type": "string" },
                     "line": { "type": "integer" },
                     "queries": {
                         "type": "array",
-                        "items": { "type": "object" },
-                        "description": "[{pattern,include?,exclude?}] batch"
+                        "items": { "type": "object" }
                     }
-                }
+                },
+                "oneOf": [
+                    {
+                        "properties": { "action": { "enum": ["regex"] } },
+                        "anyOf": [{ "required": ["pattern"] }, { "required": ["queries"] }]
+                    },
+                    {
+                        "properties": { "action": { "const": "semantic" } },
+                        "required": ["action", "query"]
+                    },
+                    {
+                        "properties": { "action": { "const": "symbol" } },
+                        "required": ["action"],
+                        "anyOf": [{ "required": ["name"] }, { "required": ["handle"] }]
+                    },
+                    {
+                        "properties": { "action": { "const": "reindex" } },
+                        "required": ["action"]
+                    },
+                    {
+                        "properties": { "action": { "const": "find_related" } },
+                        "required": ["action", "file_path", "line"]
+                    }
+                ]
             }),
         )
     }

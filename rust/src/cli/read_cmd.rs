@@ -568,7 +568,8 @@ pub fn cmd_find(args: &[String]) {
     let substring = raw_pattern.to_lowercase();
 
     let mut found = false;
-    for entry in ignore::WalkBuilder::new(path)
+    let walk_root = crate::core::walk_filter::explicit_walk_root(std::path::Path::new(path));
+    for entry in ignore::WalkBuilder::new(&walk_root)
         .hidden(true)
         .git_ignore(true)
         .git_global(true)

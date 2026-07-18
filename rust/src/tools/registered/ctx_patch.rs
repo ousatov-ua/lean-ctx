@@ -45,7 +45,7 @@ impl McpTool for CtxPatchTool {
                     "find": { "type": "string", "description": "Literal text to find (replace_all)" },
                     "replace": { "type": "string", "description": "Replacement text (replace_all)" },
                     "dry_run": { "type": "boolean", "description": "Preview only, do not write (replace_all)" },
-                    "ops": { "type": "array", "items": { "type": "object" }, "description": "Batch: each item is an op object that may carry its own 'path' (cross-file); it falls back to the top-level 'path'. When 'ops' is present the top-level 'path' is optional." }
+                    "ops": { "type": "array", "items": { "type": "object" }, "description": "Batch ops; per-op path overrides optional top-level path." }
                 }
             }),
         )
@@ -82,9 +82,10 @@ impl McpTool for CtxPatchTool {
         // batch may span files and needs no top-level `path`. A single op still
         // requires the top-level `path`.
         let groups = plan_groups(args, ctx)?;
+        validate_cross_file_options(args, groups.len())?;
+        let output_path = (groups.len() == 1).then(|| groups[0].0.clone());
 
         let mut texts = Vec::with_capacity(groups.len());
-        let mut last_path = String::new();
         for (path, ops) in groups {
             let patch_params = crate::tools::ctx_patch::PatchParams {
                 path: path.clone(),
@@ -97,8 +98,8 @@ impl McpTool for CtxPatchTool {
                 allow_lossy_utf8,
                 validate_syntax,
             };
-            texts.push(apply_one(ctx, &patch_params)?);
-            last_path = path;
+            let output = apply_one(ctx, &patch_params)?;
+            texts.push(format!("[{path}]\n{output}"));
         }
 
         Ok(ToolOutput {
@@ -106,12 +107,33 @@ impl McpTool for CtxPatchTool {
             original_tokens: 0,
             saved_tokens: 0,
             mode: None,
-            path: Some(last_path),
+            path: output_path,
             changed: false,
             shell_outcome: None,
             content_blocks: None,
         })
     }
+}
+
+/// Options with one top-level value cannot be applied safely to multiple files:
+/// one digest cannot describe several preimages, and one explicit backup path
+/// would be overwritten by the second file. Reject before any write occurs.
+fn validate_cross_file_options(
+    args: &Map<String, Value>,
+    file_count: usize,
+) -> Result<(), ErrorData> {
+    if file_count <= 1 {
+        return Ok(());
+    }
+    for key in ["expected_md5", "backup_path"] {
+        if args.contains_key(key) {
+            return Err(ErrorData::invalid_params(
+                format!("cross-file ctx_patch batches do not support top-level '{key}'"),
+                None,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Build the per-file work list. A single op targets the top-level `path`
@@ -482,5 +504,14 @@ mod batch_grouping_tests {
     fn empty_ops_rejected() {
         let err = group_ops_by_path(&[], None).unwrap_err();
         assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn cross_file_rejects_single_value_preimage_and_backup_options() {
+        for key in ["expected_md5", "backup_path"] {
+            let args = Map::from_iter([(key.to_string(), json!("one-value"))]);
+            assert!(validate_cross_file_options(&args, 2).is_err());
+            assert!(validate_cross_file_options(&args, 1).is_ok());
+        }
     }
 }

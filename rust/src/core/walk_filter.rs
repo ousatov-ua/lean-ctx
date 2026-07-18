@@ -23,6 +23,23 @@ const VENDOR_DIR_NAMES: &[&str] = &["node_modules", "__pycache__", "bower_compon
 /// `pyvenv.cfg`, so a source folder that happens to be called `venv` survives.
 const VENV_DIR_NAMES: &[&str] = &[".venv", "venv"];
 
+/// Resolve an explicitly requested Windows directory junction before handing it
+/// to `ignore::WalkBuilder`. The walker can treat a reparse-point root as a
+/// leaf, while normal file reads transparently follow it (#1003). Canonicalizing
+/// only the already-jailed root preserves the rule that nested links are never
+/// followed and strips Windows' verbatim prefix for `ignore` compatibility.
+pub fn explicit_walk_root(root: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        return crate::core::pathutil::canonicalize_raw(root)
+            .unwrap_or_else(|_| root.to_path_buf());
+    }
+    #[cfg(not(windows))]
+    {
+        root.to_path_buf()
+    }
+}
+
 /// Returns `true` when `entry` is a vendor/dependency directory that should
 /// never be descended into during a scan.
 pub fn is_vendor_dir(entry: &ignore::DirEntry) -> bool {

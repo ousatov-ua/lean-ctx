@@ -41,7 +41,17 @@ where
     S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
     E: Send + 'static,
 {
-    let interval = keepalive_interval();
+    keepalive_stream_with_interval(inner, keepalive_interval())
+}
+
+fn keepalive_stream_with_interval<S, E>(
+    inner: S,
+    interval: Duration,
+) -> impl Stream<Item = Result<Bytes, E>> + Send + Unpin
+where
+    S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
+    E: Send + 'static,
+{
     Box::pin(futures::stream::unfold(
         (inner, interval),
         |(mut inner, interval)| async move {
@@ -60,11 +70,10 @@ mod tests {
 
     #[tokio::test]
     async fn keepalive_injected_during_idle() {
-        unsafe { std::env::set_var("LEAN_CTX_PROXY_SSE_KEEPALIVE_SECS", "1") };
         let (mut tx, rx) = futures::channel::mpsc::channel::<Result<Bytes, std::io::Error>>(8);
         let stream = rx.map(|item| item);
 
-        let mut wrapped = keepalive_stream(Box::pin(stream));
+        let mut wrapped = keepalive_stream_with_interval(Box::pin(stream), Duration::from_secs(1));
 
         let item = tokio::time::timeout(Duration::from_secs(3), wrapped.next())
             .await

@@ -56,7 +56,21 @@ impl McpTool for CtxExecuteTool {
                         "type": "string",
                         "description": "File path for action=file (language auto-detected)."
                     }
-                }
+                },
+                "oneOf": [
+                    {
+                        "properties": { "action": { "enum": ["code"] } },
+                        "required": ["language", "code"]
+                    },
+                    {
+                        "properties": { "action": { "const": "batch" } },
+                        "required": ["action", "items"]
+                    },
+                    {
+                        "properties": { "action": { "const": "file" } },
+                        "required": ["action", "path"]
+                    }
+                ]
             }),
         )
     }

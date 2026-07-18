@@ -13,7 +13,9 @@ pub fn handle(
     show_hidden: bool,
     respect_gitignore: bool,
 ) -> (String, usize) {
-    let root = Path::new(path);
+    let requested_root = Path::new(path);
+    let walk_root = crate::core::walk_filter::explicit_walk_root(requested_root);
+    let root = walk_root.as_path();
     if root.is_file() {
         let parent = root
             .parent()
@@ -250,6 +252,27 @@ mod tests {
         assert!(
             opt_out.contains("node_modules"),
             "respect_gitignore=false must reveal vendor dirs: {opt_out}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tree_walks_explicit_directory_reparse_root() {
+        use std::os::windows::fs::symlink_dir;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("target");
+        let link = tmp.path().join("junction");
+        std::fs::create_dir_all(&target).expect("target");
+        std::fs::write(target.join("visible.rs"), "fn visible() {}\n").expect("fixture");
+        if symlink_dir(&target, &link).is_err() {
+            // Windows hosts without Developer Mode cannot create this fixture.
+            return;
+        }
+        let (out, _) = handle(&link.to_string_lossy(), 2, false, true);
+        assert!(
+            out.contains("visible.rs"),
+            "junction root must be traversed: {out}"
         );
     }
 }
