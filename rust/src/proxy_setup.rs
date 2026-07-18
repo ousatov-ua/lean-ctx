@@ -463,7 +463,7 @@ fn install_grok_env(home: &Path, port: u16, quiet: bool, force: bool) {
         // Seed registry providers only on the live install path.
         match mode {
             GrokAuthMode::Subscription => {
-                ensure_proxy_provider(GROK_CHAT_PROVIDER_ID, GROK_CHAT_UPSTREAM, quiet)
+                ensure_proxy_provider(GROK_CHAT_PROVIDER_ID, GROK_CHAT_UPSTREAM, quiet);
             }
             GrokAuthMode::ApiKey => ensure_proxy_provider(XAI_PROVIDER_ID, XAI_UPSTREAM, quiet),
             GrokAuthMode::None => {}
