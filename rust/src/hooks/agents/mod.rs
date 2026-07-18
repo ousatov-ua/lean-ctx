@@ -8,6 +8,7 @@ mod copilot;
 mod crush;
 mod cursor;
 mod gemini;
+mod grok;
 mod hermes;
 mod jetbrains;
 mod kiro;
@@ -48,6 +49,7 @@ pub(super) use gemini::{
     install_gemini_deny_hook, install_gemini_hook, install_gemini_hook_config,
     install_gemini_hook_scripts,
 };
+pub(super) use grok::install_grok_mcp;
 pub(super) use hermes::install_hermes_hook_with_mode;
 pub(super) use jetbrains::install_jetbrains_hook;
 pub(super) use kiro::install_kiro_hook;

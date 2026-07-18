@@ -184,13 +184,13 @@ pub fn start_on_port(port: u16) -> bool {
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "stop", SYSTEMD_SERVICE])
             .output();
-        if !release_proxy_port(port, false) {
-            false
-        } else {
+        if release_proxy_port(port, false) {
             std::process::Command::new("systemctl")
                 .args(["--user", "start", SYSTEMD_SERVICE])
                 .status()
                 .is_ok_and(|status| status.success())
+        } else {
+            false
         }
     }
 

@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, mpsc};
 use std::time::{Duration, Instant};
 
 const READER_RESULT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -15,6 +15,20 @@ pub(crate) fn execute_command_with_env(
     cwd: &str,
     extra_env: &std::collections::HashMap<String, String>,
     timeout_ms: Option<u64>,
+) -> (String, i32) {
+    execute_command_with_env_cancellable(command, cwd, extra_env, timeout_ms, None)
+}
+
+/// Execute a command under the normal shell policy, with an optional cooperative
+/// cancellation signal used by explicit background jobs. The signal is checked
+/// by the same watchdog that enforces `timeout_ms`, so cancellation kills the
+/// complete Unix process group rather than only the shell leader.
+pub(crate) fn execute_command_with_env_cancellable(
+    command: &str,
+    cwd: &str,
+    extra_env: &std::collections::HashMap<String, String>,
+    timeout_ms: Option<u64>,
+    cancel: Option<&AtomicBool>,
 ) -> (String, i32) {
     let (shell, flag) = crate::shell::shell_and_flag();
     let normalized_cmd = crate::tools::ctx_shell::normalize_command_for_shell(command);
@@ -95,18 +109,23 @@ pub(crate) fn execute_command_with_env(
 
     let timeout = command_timeout(command, timeout_ms);
     let start = Instant::now();
-    let (code, timed_out) = loop {
+    let (code, timed_out, cancelled) = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break (status.code().unwrap_or(1), false),
+            Ok(Some(status)) => break (status.code().unwrap_or(1), false, false),
             Ok(None) => {
+                if cancel.is_some_and(|signal| signal.load(std::sync::atomic::Ordering::Acquire)) {
+                    kill_timed_out_child(&mut child);
+                    let _ = child.wait();
+                    break (130, false, true);
+                }
                 if start.elapsed() >= timeout {
                     kill_timed_out_child(&mut child);
                     let _ = child.wait();
-                    break (124, true);
+                    break (124, true, false);
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => break (1, false),
+            Err(_) => break (1, false, false),
         }
     };
 
@@ -157,6 +176,12 @@ pub(crate) fn execute_command_with_env(
             "ERROR: command timed out after {}ms",
             timeout.as_millis()
         ));
+    }
+    if cancelled {
+        if !text.ends_with('\n') && !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("ERROR: command cancelled");
     }
 
     (text, code)

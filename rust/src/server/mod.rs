@@ -1,3 +1,4 @@
+pub mod background_shell;
 pub mod bounded_lock;
 pub mod bypass_hint;
 pub mod compaction_sync;

@@ -30,9 +30,15 @@ impl McpTool for CtxShellTool {
                     "raw": { "type": "boolean", "description": "Skip compression (verbatim)" },
                     "cwd": { "type": "string", "description": "Working dir (persists across calls)" },
                     "timeout_ms": { "type": "integer", "description": "Per-call timeout in ms (max 3600000). Overridden by LEAN_CTX_SHELL_TIMEOUT_MS." },
-                    "env": { "type": "object", "description": "Extra env vars", "additionalProperties": { "type": "string" } }
+                    "env": { "type": "object", "description": "Extra env vars", "additionalProperties": { "type": "string" } },
+                    "run_in_background": { "type": "boolean", "description": "Detach immediately and return a job id. The command keeps timeout_ms; poll or cancel with background_action and job_id." },
+                    "background_action": { "type": "string", "enum": ["status", "cancel"], "description": "Inspect or cancel a background ctx_shell job." },
+                    "job_id": { "type": "string", "description": "Job id returned by run_in_background." }
                 },
-                "required": ["command"]
+                "anyOf": [
+                    { "required": ["command"] },
+                    { "required": ["background_action", "job_id"] }
+                ]
             }),
         )
     }
@@ -42,6 +48,57 @@ impl McpTool for CtxShellTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
     ) -> Result<ToolOutput, ErrorData> {
+        if let Some(action) = get_str(args, "background_action") {
+            let id = get_str(args, "job_id").ok_or_else(|| {
+                ErrorData::invalid_params("job_id is required with background_action", None)
+            })?;
+            let state = match action.as_str() {
+                "status" => crate::server::background_shell::status(&id),
+                "cancel" => crate::server::background_shell::cancel(&id),
+                _ => {
+                    return Err(ErrorData::invalid_params(
+                        "background_action must be status or cancel",
+                        None,
+                    ));
+                }
+            };
+            let Some(state) = state else {
+                return Ok(ToolOutput {
+                    shell_outcome: Some(ShellOutcome::Exit(1)),
+                    content_blocks: None,
+                    ..ToolOutput::simple(format!("[background:{id} not found]"))
+                });
+            };
+            let (text, exit_code) = match state {
+                crate::server::background_shell::JobState::Running => {
+                    (format!("[background:{id} running]"), 0)
+                }
+                crate::server::background_shell::JobState::Completed { output, exit_code } => (
+                    format!(
+                        "[background:{id} completed]\n{}{}",
+                        redact_shell_output_secrets(&output),
+                        if exit_code == 0 {
+                            String::new()
+                        } else {
+                            format!("\n[exit:{exit_code}]")
+                        }
+                    ),
+                    exit_code,
+                ),
+                crate::server::background_shell::JobState::Cancelled { output } => (
+                    format!(
+                        "[background:{id} cancelled]\n{}\n[exit:130]",
+                        redact_shell_output_secrets(&output)
+                    ),
+                    130,
+                ),
+            };
+            return Ok(ToolOutput {
+                shell_outcome: Some(ShellOutcome::Exit(exit_code)),
+                content_blocks: None,
+                ..ToolOutput::simple(text)
+            });
+        }
         let command = get_str(args, "command")
             .ok_or_else(|| ErrorData::invalid_params("command is required", None))?;
         let timeout_ms = get_int(args, "timeout_ms").and_then(|n| u64::try_from(n).ok());
@@ -207,6 +264,19 @@ impl McpTool for CtxShellTool {
                         .collect()
                 })
                 .unwrap_or_default();
+
+            if get_bool(args, "run_in_background").unwrap_or(false) {
+                let job_id = crate::server::background_shell::start(
+                    cmd_clone, cwd_clone, extra_env, timeout_ms,
+                );
+                return Ok(ToolOutput {
+                    shell_outcome: Some(ShellOutcome::Exit(0)),
+                    content_blocks: None,
+                    ..ToolOutput::simple(format!(
+                        "[background:{job_id} started — use ctx_shell(background_action=\"status\", job_id=\"{job_id}\") to poll or background_action=\"cancel\" to stop it]"
+                    ))
+                });
+            }
 
             let (raw_output, exit_code) = crate::server::execute::execute_command_with_env(
                 &cmd_clone, &cwd_clone, &extra_env, timeout_ms,

@@ -118,7 +118,7 @@ use agents::{
     install_codebuddy_project_hooks, install_codex_hook, install_copilot_hook,
     install_crush_hook_with_mode, install_cursor_deny_hook, install_cursor_hook_config,
     install_cursor_hook_scripts, install_cursor_hook_with_mode, install_gemini_deny_hook,
-    install_gemini_hook, install_gemini_hook_config, install_gemini_hook_scripts,
+    install_gemini_hook, install_gemini_hook_config, install_gemini_hook_scripts, install_grok_mcp,
     install_hermes_hook_with_mode, install_jetbrains_hook, install_kiro_hook,
     install_openclaw_hook, install_opencode_hook_with_mode, install_pi_hook_with_mode,
     install_qoder_hook, install_qoder_hook_with_mode, install_windsurf_hooks,
@@ -939,6 +939,7 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
             // `~/.gemini/settings.json`, so install the plugin too (#284).
             install_antigravity_cli_hook();
         }
+        "grok" | "grok-build" => install_grok_mcp(),
         "antigravity" => install_antigravity_hook(),
         "antigravity-cli" => install_antigravity_cli_hook(),
         "augment" => install_mcp_json_agent(
@@ -1025,9 +1026,11 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
             eprintln!("Unknown agent: {agent}");
             eprintln!("  Supported: aider, amazonq, amp, antigravity, antigravity-cli, augment,");
             eprintln!(
-                "    claude, cline, codebuddy, codex, continue, copilot, crush, cursor, emacs, gemini,"
+                "    claude, cline, codebuddy, codex, continue, copilot, crush, cursor, emacs, gemini, grok,"
             );
-            eprintln!("    hermes, jetbrains, kiro, neovim, openclaw, opencode, pi, qoder,");
+            eprintln!(
+                "    grok-build, hermes, jetbrains, kiro, neovim, openclaw, opencode, pi, qoder,"
+            );
             eprintln!("    qoderwork, qwen, roo, sublime, trae, verdent, vscode, windsurf, zed");
             std::process::exit(1);
         }

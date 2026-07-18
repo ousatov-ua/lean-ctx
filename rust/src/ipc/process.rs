@@ -230,19 +230,26 @@ fn protected_self_pids() -> std::collections::HashSet<u32> {
 
         // SAFETY: getpgrp() takes no arguments and cannot fail.
         let own_pgid = unsafe { libc::getpgrp() };
-        if own_pgid > 0
-            && let Ok(output) = std::process::Command::new("pgrep")
-                .args(["-g", &own_pgid.to_string()])
-                .output()
-        {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                if let Ok(pid) = line.trim().parse::<u32>() {
-                    protected.insert(pid);
-                }
-            }
+        if own_pgid > 0 {
+            protected.extend(process_group_pids(own_pgid));
         }
     }
     protected
+}
+
+#[cfg(unix)]
+fn process_group_pids(pgid: libc::pid_t) -> Vec<u32> {
+    std::process::Command::new("pgrep")
+        .args(["-g", &pgid.to_string()])
+        .output()
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Find all PIDs of processes whose executable name matches `name`.
@@ -480,20 +487,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn protected_pids_cover_own_process_group() {
-        let protected = protected_self_pids();
         // SAFETY: getpgrp() takes no arguments and cannot fail.
         let pgid = unsafe { libc::getpgrp() };
-        let out = std::process::Command::new("pgrep")
-            .args(["-g", &pgid.to_string()])
-            .output()
-            .expect("pgrep runs");
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if let Ok(pid) = line.trim().parse::<u32>() {
-                assert!(
-                    protected.contains(&pid),
-                    "group member {pid} missing from protected set"
-                );
-            }
+        // Snapshot before `protected_self_pids`: querying with another `pgrep`
+        // afterwards races with that query process joining the same foreground
+        // group and tests an impossible temporal invariant.
+        let members = process_group_pids(pgid);
+        let protected = protected_self_pids();
+        for pid in members {
+            assert!(
+                protected.contains(&pid),
+                "group member {pid} missing from protected set"
+            );
         }
     }
 
