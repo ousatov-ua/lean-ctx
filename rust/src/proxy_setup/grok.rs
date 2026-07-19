@@ -387,27 +387,11 @@ pub(crate) fn uninstall_grok_env_at(grok_dir: &Path, quiet: bool) {
 
 /// Read `[endpoints].models_base_url` from a Grok config.toml body.
 pub(crate) fn grok_models_base_url(content: &str) -> Option<String> {
-    let mut in_endpoints = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_endpoints = trimmed == "[endpoints]";
-            continue;
-        }
-        if in_endpoints
-            && let Some(rest) = trimmed
-                .strip_prefix("models_base_url")
-                .map(str::trim)
-                .and_then(|r| r.strip_prefix('='))
-                .map(str::trim)
-        {
-            let val = rest.trim_matches(|c| c == '"' || c == '\'');
-            if !val.is_empty() {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
+    let doc = content.parse::<toml_edit::DocumentMut>().ok()?;
+    doc.get("endpoints")?
+        .get("models_base_url")?
+        .as_str()
+        .map(String::from)
 }
 
 pub(crate) fn grok_config_has_local_proxy_entry(content: &str) -> bool {
@@ -417,80 +401,53 @@ pub(crate) fn grok_config_has_local_proxy_entry(content: &str) -> bool {
 }
 
 /// Upsert `[endpoints].models_base_url = "..."` preserving other content.
+///
+/// Fail-closed on invalid TOML (returns `existing` unchanged). If `endpoints`
+/// exists as a non-table (scalar/array), it is replaced with a table so index
+/// assignment cannot panic.
 pub(crate) fn upsert_grok_models_base_url(existing: &str, proxy_url: &str) -> String {
-    let desired = format!("models_base_url = \"{proxy_url}\"");
-    let mut out = String::with_capacity(existing.len() + 64);
-    let mut in_endpoints = false;
-    let mut saw_endpoints = false;
-    let mut wrote_key = false;
-
-    for line in existing.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_endpoints && !wrote_key {
-                out.push_str(&desired);
-                out.push('\n');
-                wrote_key = true;
-            }
-            in_endpoints = trimmed == "[endpoints]";
-            if in_endpoints {
-                saw_endpoints = true;
-            }
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        if in_endpoints && trimmed.starts_with("models_base_url") && trimmed.contains('=') {
-            out.push_str(&desired);
-            out.push('\n');
-            wrote_key = true;
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
+    let Ok(mut doc) = existing.parse::<toml_edit::DocumentMut>() else {
+        return existing.to_string();
+    };
+    // Scalar/array `endpoints` cannot be indexed; replace with a real table.
+    if doc
+        .get("endpoints")
+        .is_some_and(|item| !item.is_table() && !item.is_inline_table() && !item.is_none())
+    {
+        doc["endpoints"] = toml_edit::table();
     }
-
-    if in_endpoints && !wrote_key {
-        out.push_str(&desired);
-        out.push('\n');
-        wrote_key = true;
-    }
-    if !saw_endpoints {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("\n[endpoints]\n");
-        out.push_str(&desired);
-        out.push('\n');
-        let _ = wrote_key;
-    }
-    out
+    let endpoints = doc["endpoints"].or_insert(toml_edit::table());
+    endpoints["models_base_url"] = toml_edit::value(proxy_url);
+    doc.to_string()
 }
 
 /// Remove only a local lean-ctx proxy `models_base_url` from Grok config.
+///
+/// Handles standard tables (`[endpoints]`) and inline tables
+/// (`endpoints = { ... }`). Fail-closed on invalid TOML.
 pub(crate) fn strip_grok_proxy_entries(content: &str) -> String {
-    let mut out = String::with_capacity(content.len());
-    let mut in_endpoints = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_endpoints = trimmed == "[endpoints]";
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        if in_endpoints
-            && trimmed.starts_with("models_base_url")
-            && trimmed.contains('=')
-            && let Some(rest) = trimmed
-                .split_once('=')
-                .map(|(_, v)| v.trim().trim_matches(|c| c == '"' || c == '\''))
-            && is_local_lean_ctx_url(rest)
-        {
-            continue; // drop local proxy line
-        }
-        out.push_str(line);
-        out.push('\n');
+    let Ok(mut doc) = content.parse::<toml_edit::DocumentMut>() else {
+        return content.to_string();
+    };
+    let should_strip = doc
+        .get("endpoints")
+        .and_then(|e| e.get("models_base_url"))
+        .and_then(|v| v.as_str())
+        .is_some_and(is_local_lean_ctx_url);
+    if !should_strip {
+        return content.to_string();
     }
-    out
+    let empty = if let Some(tbl) = doc["endpoints"].as_table_mut() {
+        tbl.remove("models_base_url");
+        tbl.is_empty()
+    } else if let Some(tbl) = doc["endpoints"].as_inline_table_mut() {
+        tbl.remove("models_base_url");
+        tbl.is_empty()
+    } else {
+        return content.to_string();
+    };
+    if empty {
+        doc.remove("endpoints");
+    }
+    doc.to_string()
 }

@@ -961,6 +961,68 @@ fn upsert_grok_models_base_url_is_idempotent() {
 }
 
 #[test]
+fn upsert_grok_models_base_url_replaces_non_table_endpoints() {
+    let url = "http://127.0.0.1:4444/providers/xai/v1";
+    // Must not panic when endpoints is a scalar.
+    let out = upsert_grok_models_base_url("endpoints = \"oops\"\n", url);
+    assert_eq!(grok_models_base_url(&out).as_deref(), Some(url));
+}
+
+#[test]
+fn strip_grok_proxy_entries_handles_inline_table() {
+    let url = "http://127.0.0.1:4444/providers/xai/v1";
+    let content = format!("endpoints = {{ models_base_url = \"{url}\" }}\n");
+    assert!(
+        grok_config_has_local_proxy_entry(&content),
+        "read must see inline table local URL"
+    );
+    let stripped = strip_grok_proxy_entries(&content);
+    assert!(
+        !stripped.contains("models_base_url"),
+        "strip must clear inline models_base_url:\n{stripped}"
+    );
+    assert!(!grok_config_has_local_proxy_entry(&stripped));
+}
+
+#[test]
+fn grok_models_base_url_reads_dotted_keys_and_strip_clears() {
+    let url = "http://127.0.0.1:4444/providers/xai/v1";
+    let content = format!("endpoints.models_base_url = \"{url}\"\n");
+    assert_eq!(grok_models_base_url(&content).as_deref(), Some(url));
+    let stripped = strip_grok_proxy_entries(&content);
+    assert_eq!(grok_models_base_url(&stripped), None);
+}
+
+#[test]
+fn grok_toml_helpers_fail_closed_on_invalid_toml() {
+    let bad = "[[[\n";
+    let url = "http://127.0.0.1:4444/providers/xai/v1";
+    assert_eq!(upsert_grok_models_base_url(bad, url), bad);
+    assert_eq!(strip_grok_proxy_entries(bad), bad);
+    assert_eq!(grok_models_base_url(bad), None);
+}
+
+#[test]
+fn upsert_grok_models_base_url_preserves_comments_and_siblings() {
+    let url = "http://127.0.0.1:4444/providers/xai/v1";
+    let content = "# keep me\n[ui]\ntheme = \"dark\"\n";
+    let out = upsert_grok_models_base_url(content, url);
+    assert!(out.contains("# keep me"), "comment preserved:\n{out}");
+    assert!(out.contains("theme"), "sibling table preserved:\n{out}");
+    assert_eq!(grok_models_base_url(&out).as_deref(), Some(url));
+}
+
+#[test]
+fn grok_models_base_url_reads_single_quoted_string() {
+    let content =
+        "[endpoints]\nmodels_base_url = 'http://127.0.0.1:4444/providers/xai/v1'\n";
+    assert_eq!(
+        grok_models_base_url(content).as_deref(),
+        Some("http://127.0.0.1:4444/providers/xai/v1")
+    );
+}
+
+#[test]
 fn effective_grok_auth_mode_force_none_coerces_to_subscription() {
     let home = tempfile::tempdir().unwrap();
     // No auth.json, no models_base_url → None without force.
