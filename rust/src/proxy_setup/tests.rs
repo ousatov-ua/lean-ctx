@@ -1014,8 +1014,7 @@ fn upsert_grok_models_base_url_preserves_comments_and_siblings() {
 
 #[test]
 fn grok_models_base_url_reads_single_quoted_string() {
-    let content =
-        "[endpoints]\nmodels_base_url = 'http://127.0.0.1:4444/providers/xai/v1'\n";
+    let content = "[endpoints]\nmodels_base_url = 'http://127.0.0.1:4444/providers/xai/v1'\n";
     assert_eq!(
         grok_models_base_url(content).as_deref(),
         Some("http://127.0.0.1:4444/providers/xai/v1")
