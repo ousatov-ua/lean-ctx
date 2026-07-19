@@ -318,12 +318,9 @@ impl ProgressIndicator {
 
     fn render_determinate(label: &str, done: u64, total: u64) -> String {
         let total = total.max(1);
-        let pct = ((done as f64 / total as f64) * 100.0)
-            .min(100.0)
-            .round() as u32;
-        let filled =
-            (((done as f64 / total as f64) * PROGRESS_BAR_WIDTH as f64).round() as usize)
-                .min(PROGRESS_BAR_WIDTH);
+        let pct = ((done as f64 / total as f64) * 100.0).min(100.0).round() as u32;
+        let filled = (((done as f64 / total as f64) * PROGRESS_BAR_WIDTH as f64).round() as usize)
+            .min(PROGRESS_BAR_WIDTH);
 
         let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH);
         for i in 0..PROGRESS_BAR_WIDTH {

@@ -93,7 +93,9 @@ pub fn get(root: &str, component: IndexComponent) -> ProgressSnapshot {
     let g = map()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    g.get(&(root.to_string(), component)).copied().unwrap_or_default()
+    g.get(&(root.to_string(), component))
+        .copied()
+        .unwrap_or_default()
 }
 
 pub fn clear(root: &str, component: IndexComponent) {
@@ -149,10 +151,7 @@ mod tests {
         let root = "__test_index_progress_pct__";
         clear_root(root);
         report(root, IndexComponent::Semantic, 15, 10);
-        assert_eq!(
-            get(root, IndexComponent::Semantic).percent(),
-            Some(100)
-        );
+        assert_eq!(get(root, IndexComponent::Semantic).percent(), Some(100));
         clear_root(root);
     }
 
@@ -181,10 +180,7 @@ mod tests {
             g.report(2, 5);
             panic!("boom");
         }));
-        assert_eq!(
-            get(root, IndexComponent::Bm25),
-            ProgressSnapshot::default()
-        );
+        assert_eq!(get(root, IndexComponent::Bm25), ProgressSnapshot::default());
         clear_root(root);
     }
 }
