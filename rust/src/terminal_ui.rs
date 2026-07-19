@@ -238,7 +238,7 @@ const PROGRESS_BAR_WIDTH: usize = 20;
 /// * **Indeterminate** (`total == 0`): bouncing arrow L↔R inside the bar
 ///
 /// Renders on stderr so stdout stays free for machine-readable output.
-/// Non-TTY: silent ticks; only [`finish`] prints a line.
+/// Non-TTY: silent ticks; only \[`finish`\] prints a line.
 #[derive(Debug)]
 pub struct ProgressIndicator {
     label: String,
