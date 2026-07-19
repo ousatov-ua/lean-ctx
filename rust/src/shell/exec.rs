@@ -1079,7 +1079,9 @@ mod exec_tests {
         crate::test_env::set_var("LEAN_CTX_HOOK_CHILD", "1");
         crate::test_env::set_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE", "git");
 
-        let code = super::exec_argv(&["true".to_string()]);
+        // #1022: `true` is now a SHELL_BUILTIN (bypasses allowlist).
+        // Use `xxd` which is a real binary and not in the override list.
+        let code = super::exec_argv(&["xxd".to_string()]);
 
         crate::test_env::remove_var("LEAN_CTX_HOOK_CHILD");
         crate::test_env::remove_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE");

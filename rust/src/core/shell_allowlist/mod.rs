@@ -281,24 +281,136 @@ fn read_heredoc_delim(bytes: &[u8], start: usize) -> Option<(String, bool, usize
 /// `shell_strict_mode = true` (GH #391 — the strict knob previously only
 /// changed the log line and never actually blocked).
 fn check_substitution_in_args(command: &str, strict: bool) -> Result<(), ShellError> {
-    if has_expanding_substitution_in_args(command) {
-        if strict {
-            tracing::warn!(
-                "[SECURITY] Command substitution in arguments blocked (shell_strict_mode=true): {command}"
-            );
-            return Err(format!(
-                "[BLOCKED — DO NOT RETRY] Command substitution ($(), backticks, <()/>()) in \
-                 arguments is blocked because shell_strict_mode = true. \
-                 This is a permanent security restriction.\n\
-                 Command: {command}"
-            )
-            .into());
-        }
-        tracing::warn!(
-            "[SECURITY] Command substitution in arguments detected (warn-only, set shell_strict_mode=true to block): {command}"
-        );
+    if !has_expanding_substitution_in_args(command) {
+        return Ok(());
     }
+
+    // Extract inner commands from $(...) and check against allowlist + builtins.
+    // Only warn/block if the inner command is genuinely non-allowlisted (#1024).
+    let inner_cmds = extract_substitution_commands(command);
+    if inner_cmds.is_empty() {
+        return Ok(());
+    }
+
+    let allowlist = effective_allowlist();
+    let dangerous: Vec<&str> = inner_cmds
+        .iter()
+        .filter(|inner| {
+            let base = extract_base_from_segment(inner);
+            !base.is_empty()
+                && !SHELL_BUILTINS.contains(&base.as_str())
+                && !allowlist.iter().any(|a| a == &base)
+        })
+        .map(String::as_str)
+        .collect();
+
+    if dangerous.is_empty() {
+        return Ok(());
+    }
+
+    let names: Vec<String> = dangerous
+        .iter()
+        .map(|c| extract_base_from_segment(c))
+        .collect();
+
+    if strict {
+        tracing::warn!(
+            "[SECURITY] Command substitution blocked (shell_strict_mode=true): {}",
+            names.join(", ")
+        );
+        return Err(format!(
+            "[BLOCKED — DO NOT RETRY] Command substitution with non-allowlisted command: {}. \
+             Add to allowlist with `lean-ctx allow <cmd>` or set shell_strict_mode=false.\n\
+             Command: {command}",
+            names.join(", ")
+        )
+        .into());
+    }
+    tracing::warn!(
+        "[SECURITY] Command substitution with non-allowlisted command (warn-only): {}",
+        names.join(", ")
+    );
     Ok(())
+}
+
+/// Extracts the base commands from `$(...)` substitutions in argument position.
+/// Reuses the same single-quote / backslash-aware scanning as
+/// `has_expanding_substitution_in_args` but collects the inner command text.
+fn extract_substitution_commands(command: &str) -> Vec<String> {
+    let bytes = command.as_bytes();
+    let len = bytes.len();
+    let mut results = Vec::new();
+    let mut i = 0;
+    let mut in_single_quote = false;
+    let mut seen_space_after_cmd = false;
+
+    while i < len {
+        let ch = bytes[i];
+        if in_single_quote {
+            if ch == b'\'' {
+                in_single_quote = false;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == b'\\' {
+            i = (i + 2).min(len);
+            continue;
+        }
+        match ch {
+            b'\'' => {
+                in_single_quote = true;
+                i += 1;
+            }
+            b' ' | b'\t' if !seen_space_after_cmd => {
+                seen_space_after_cmd = true;
+                i += 1;
+            }
+            _ if !seen_space_after_cmd => {
+                i += 1;
+            }
+            _ => {
+                if ch == b'$'
+                    && i + 1 < len
+                    && bytes[i + 1] == b'('
+                    && let Some(inner) = extract_paren_content(bytes, i + 1)
+                {
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        results.push(trimmed.to_string());
+                    }
+                    i += 2 + inner.len() + 1;
+                    continue;
+                }
+                i += 1;
+            }
+        }
+    }
+    results
+}
+
+/// Extracts content between `(` at `start` and matching `)`, handling nesting.
+fn extract_paren_content(bytes: &[u8], start: usize) -> Option<String> {
+    if start >= bytes.len() || bytes[start] != b'(' {
+        return None;
+    }
+    let mut depth: u32 = 1;
+    let mut i = start + 1;
+    while i < bytes.len() && depth > 0 {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth > 0 {
+            i += 1;
+        }
+    }
+    if depth == 0 {
+        Some(String::from_utf8_lossy(&bytes[start + 1..i]).to_string())
+    } else {
+        None
+    }
 }
 
 /// Check for $(), backticks, <(, >( in arguments wherever the shell would
@@ -584,6 +696,16 @@ fn heredoc_blocked_message(base: &str) -> String {
 /// Commands that are unconditionally blocked regardless of allowlist membership.
 /// These provide direct arbitrary code execution or re-enter the shell.
 const UNCONDITIONAL_BLOCKED: &[&str] = &["eval", "exec", "source", "."];
+
+/// POSIX shell builtins that are executed by the shell itself — they cannot
+/// spawn an external process or escape any sandbox. Builtins bypass the
+/// allowlist check entirely (#1022).
+const SHELL_BUILTINS: &[&str] = &[
+    "exit", "command", ":", "true", "false", "cd", "echo", "test", "[", "read", "set", "unset",
+    "export", "local", "return", "shift", "wait", "trap", "type", "hash", "pwd", "printf", "let",
+    "declare", "readonly", "getopts", "umask", "ulimit", "break", "continue", "bg", "fg", "jobs",
+    "times", "builtin", "enable", "shopt", "complete", "compgen",
+];
 
 /// Interpreters that can execute arbitrary code via -c/-e flags.
 const INTERPRETER_COMMANDS: &[&str] = &[
@@ -1268,6 +1390,9 @@ fn check_all_segments(command: &str, allowlist: &[String]) -> Result<(), ShellEr
                  Command: {command}"
             )
             .into());
+        }
+        if SHELL_BUILTINS.contains(&base.as_str()) {
+            continue;
         }
         check_interpreter_abuse(seg, allowlist)?;
         check_dangerous_flags(seg)?;

@@ -84,27 +84,13 @@ pub(crate) fn default_shell_allowlist() -> Vec<String> {
         "cksum",
         "b2sum",
         "xxhsum",
-        "echo",
-        "printf",
-        "true",
-        "false",
-        "test",
-        // #855: `[` is `test`'s bracket-form alias — same builtin, same zero
-        // external-execution surface, but was missing here even though `test`
-        // itself was already allowlisted. `break`/`continue`/`return` are pure
-        // loop/function control-flow builtins (no external process, no I/O) —
-        // an `if …; then break; fi` inside an otherwise-allowlisted loop body
-        // shouldn't need its own `lean-ctx allow` round-trip.
-        "[",
-        "break",
-        "continue",
-        "return",
+        // NOTE: echo, printf, true, false, test, [, break, continue, return,
+        // cd, pwd are now handled by SHELL_BUILTINS in shell_allowlist/mod.rs
+        // (#1022) and no longer need to appear here.
         "expr",
         // #855: `seq` is the standard way to drive a bounded numeric `for`
         // loop (`for i in $(seq 1 10)`) — a common, safe idiom.
         "seq",
-        "cd",
-        "pwd",
         "basename",
         "dirname",
         "realpath",
@@ -131,9 +117,12 @@ pub(crate) fn default_shell_allowlist() -> Vec<String> {
         "tree",
         "du",
         "df",
-        // Read-only process and host inspection. Process control stays opt-in:
-        // `kill`, `pkill`, and `killall` can disrupt user services (#996).
+        // Process inspection and control. Agents need to reap self-spawned
+        // processes; orphaned PIDs are the greater risk (#1021, supersedes #996).
         "ps",
+        "kill",
+        "pkill",
+        "killall",
         "pgrep",
         "pidof",
         "pstree",
@@ -330,8 +319,8 @@ mod tests {
         }
         for tool in ["kill", "pkill", "killall"] {
             assert!(
-                !defaults.contains(&tool.to_string()),
-                "{tool} must remain an explicit opt-in"
+                defaults.contains(&tool.to_string()),
+                "{tool} must be in the default allowlist (#1021)"
             );
         }
     }

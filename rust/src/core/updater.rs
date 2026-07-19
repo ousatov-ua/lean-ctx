@@ -616,6 +616,12 @@ fn post_update_rewire(skip_rules: bool) {
     }
 
     // PHASE 2: Run setup which writes MCP configs (always) and rules (if opted in).
+    // #1026: shell hooks are refreshed here — but install_all_with_style
+    // respects shell_hook_disabled, so users who opt out keep control.
+    if !cfg.shell_hook_disabled_effective() {
+        eprintln!("  \u{2139} Refreshing shell hooks in ~/.zshenv / ~/.bashenv.");
+        eprintln!("    Set shell_hook_disabled=true to prevent this in future updates.");
+    }
     let opts = crate::setup::SetupOptions {
         non_interactive: true,
         yes: true,

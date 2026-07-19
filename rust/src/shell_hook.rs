@@ -334,6 +334,16 @@ pub fn install_all(quiet: bool) {
 /// produced by this invocation shares one suffix, even if the wall
 /// clock ticks over while we're walking the slots.
 pub fn install_all_with_style(quiet: bool, style: Style) {
+    let cfg = crate::core::config::Config::load();
+    if cfg.shell_hook_disabled_effective() {
+        if !quiet {
+            eprintln!(
+                "lean-ctx: shell hook disabled (shell_hook_disabled=true or LEAN_CTX_NO_HOOK).                  Skipping hook installation."
+            );
+        }
+        return;
+    }
+
     let Some(home) = dirs::home_dir() else {
         tracing::error!("Cannot resolve home directory");
         return;
@@ -453,7 +463,7 @@ const REDIRECT_SKIP_MARKERS: &[&str] = &[
 /// (see [`REDIRECT_SKIP_MARKERS`]).
 fn redirect_block(exec_var: &str, env_check: &str) -> String {
     let mut lines = vec![format!(
-        "if [[ -z \"$LEAN_CTX_ACTIVE\" && -n \"${exec_var}\" ]] \\"
+        "if [[ -z \"$LEAN_CTX_ACTIVE\" && -z \"$LEAN_CTX_NO_HOOK\" && -n \"${exec_var}\" ]] \\"
     )];
     for marker in REDIRECT_SKIP_MARKERS {
         lines.push(format!("  && [[ \"${exec_var}\" != *\"{marker}\"* ]] \\"));
@@ -585,6 +595,14 @@ fn build_env_check() -> String {
         .map(|v| format!("-n \"${v}\""))
         .collect();
     format!("[[ {} ]]", checks.join(" || "))
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+    pub fn redirect_block_for_test(exec_var: &str, env_check: &str) -> String {
+        redirect_block(exec_var, env_check)
+    }
 }
 
 #[cfg(test)]
