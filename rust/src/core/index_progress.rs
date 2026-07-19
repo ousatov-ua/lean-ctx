@@ -1,12 +1,13 @@
 //! Shared progress counters for index builds (BM25, semantic, graph).
-//!
 //! Build code reports here; CLI / status_json read snapshots. Decouples
 //! builders from the orchestrator (no module cycles).
+//!
+//! Prefer [`ProgressGuard`] at phase boundaries so counters clear on every exit
+//! path (including panics via `Drop`).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// Which index component is reporting progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IndexComponent {
     Graph,
@@ -14,74 +15,104 @@ pub enum IndexComponent {
     Semantic,
 }
 
-/// Snapshot of progress for one component.
-///
-/// `total == 0` means indeterminate (caller should show a bouncing indicator).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ProgressSnapshot {
     pub done: u64,
     pub total: u64,
 }
 
 impl ProgressSnapshot {
-    /// `true` when a percentage can be shown.
+    /// `true` when a known total exists (determinate bar).
     pub fn is_determinate(&self) -> bool {
         self.total > 0
     }
 
-    /// Percent complete in `0..=100`. Returns `None` when indeterminate.
     pub fn percent(&self) -> Option<u8> {
         if self.total == 0 {
             return None;
         }
-        let pct = ((self.done as f64 / self.total as f64) * 100.0).round() as u64;
+        let pct = (self.done.saturating_mul(100)) / self.total;
         Some(pct.min(100) as u8)
     }
 }
 
-fn registry() -> &'static Mutex<HashMap<(String, IndexComponent), ProgressSnapshot>> {
-    static REG: OnceLock<Mutex<HashMap<(String, IndexComponent), ProgressSnapshot>>> =
-        OnceLock::new();
-    REG.get_or_init(|| Mutex::new(HashMap::new()))
+/// Clears the component counter when dropped (including panic unwind).
+pub struct ProgressGuard {
+    root: String,
+    component: IndexComponent,
+    cleared: bool,
 }
 
-/// Report progress for `component` under `project_root`.
-///
-/// Pass `total = 0` for indeterminate phases (e.g. model download).
-pub fn report(project_root: &str, component: IndexComponent, done: u64, total: u64) {
-    let mut map = registry()
+impl ProgressGuard {
+    pub fn new(root: impl Into<String>, component: IndexComponent) -> Self {
+        Self {
+            root: root.into(),
+            component,
+            cleared: false,
+        }
+    }
+
+    pub fn report(&self, done: u64, total: u64) {
+        report(&self.root, self.component, done, total);
+    }
+
+    /// Disable auto-clear (rarely needed).
+    pub fn disarm(mut self) {
+        self.cleared = true;
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        if !self.cleared {
+            clear(&self.root, self.component);
+        }
+    }
+}
+
+type ProgressMap = HashMap<(String, IndexComponent), ProgressSnapshot>;
+
+fn map() -> &'static Mutex<ProgressMap> {
+    static MAP: OnceLock<Mutex<ProgressMap>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Report progress for a project root + component.
+/// `total == 0` means indeterminate (spinner / bouncing arrow).
+pub fn report(root: &str, component: IndexComponent, done: u64, total: u64) {
+    let mut g = map()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.insert(
-        (project_root.to_string(), component),
+    g.insert(
+        (root.to_string(), component),
         ProgressSnapshot { done, total },
     );
 }
 
-/// Clear progress for one component (call when a phase finishes or is skipped).
-pub fn clear(project_root: &str, component: IndexComponent) {
-    let mut map = registry()
+pub fn get(root: &str, component: IndexComponent) -> ProgressSnapshot {
+    let g = map()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.remove(&(project_root.to_string(), component));
+    g.get(&(root.to_string(), component)).copied().unwrap_or_default()
 }
 
-/// Clear all progress for a project root.
-pub fn clear_root(project_root: &str) {
-    let mut map = registry()
+pub fn clear(root: &str, component: IndexComponent) {
+    let mut g = map()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.retain(|(root, _), _| root != project_root);
+    g.remove(&(root.to_string(), component));
 }
 
-/// Read current progress for a component (defaults to indeterminate zeros).
-pub fn get(project_root: &str, component: IndexComponent) -> ProgressSnapshot {
-    let map = registry()
+pub fn clear_root(root: &str) {
+    let mut g = map()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.get(&(project_root.to_string(), component))
-        .copied()
-        .unwrap_or_default()
+    g.retain(|(r, _), _| r != root);
+}
+
+/// Convenience for BM25 file-count progress (avoids repeating the component).
+pub fn report_bm25(root: &str, done: u64, total: u64) {
+    report(root, IndexComponent::Bm25, done, total);
 }
 
 #[cfg(test)]
@@ -89,33 +120,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_get_clear_roundtrip() {
-        let root = "/tmp/lean-ctx-progress-test-root";
+    fn report_get_clear() {
+        let root = "__test_index_progress_report__";
         clear_root(root);
-        assert!(!get(root, IndexComponent::Bm25).is_determinate());
-
         report(root, IndexComponent::Bm25, 3, 10);
-        let snap = get(root, IndexComponent::Bm25);
-        assert_eq!(snap, ProgressSnapshot { done: 3, total: 10 });
-        assert_eq!(snap.percent(), Some(30));
-
-        report(root, IndexComponent::Semantic, 0, 0);
-        assert!(!get(root, IndexComponent::Semantic).is_determinate());
-
+        let s = get(root, IndexComponent::Bm25);
+        assert_eq!(s.done, 3);
+        assert_eq!(s.total, 10);
+        assert_eq!(s.percent(), Some(30));
+        assert!(s.is_determinate());
         clear(root, IndexComponent::Bm25);
-        assert_eq!(get(root, IndexComponent::Bm25).total, 0);
+        assert_eq!(get(root, IndexComponent::Bm25), ProgressSnapshot::default());
+    }
+
+    #[test]
+    fn indeterminate_when_total_zero() {
+        let root = "__test_index_progress_indet__";
+        clear_root(root);
+        report(root, IndexComponent::Graph, 0, 0);
+        let s = get(root, IndexComponent::Graph);
+        assert!(!s.is_determinate());
+        assert_eq!(s.percent(), None);
         clear_root(root);
     }
 
     #[test]
     fn percent_caps_at_100() {
+        let root = "__test_index_progress_pct__";
+        clear_root(root);
+        report(root, IndexComponent::Semantic, 15, 10);
         assert_eq!(
-            ProgressSnapshot {
-                done: 12,
-                total: 10
-            }
-            .percent(),
+            get(root, IndexComponent::Semantic).percent(),
             Some(100)
         );
+        clear_root(root);
+    }
+
+    #[test]
+    fn guard_clears_on_drop() {
+        let root = "__test_index_progress_guard__";
+        clear_root(root);
+        {
+            let g = ProgressGuard::new(root, IndexComponent::Semantic);
+            g.report(1, 4);
+            assert_eq!(get(root, IndexComponent::Semantic).done, 1);
+        }
+        assert_eq!(
+            get(root, IndexComponent::Semantic),
+            ProgressSnapshot::default()
+        );
+        clear_root(root);
+    }
+
+    #[test]
+    fn guard_clears_after_panic() {
+        let root = "__test_index_progress_guard_panic__";
+        clear_root(root);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let g = ProgressGuard::new(root, IndexComponent::Bm25);
+            g.report(2, 5);
+            panic!("boom");
+        }));
+        assert_eq!(
+            get(root, IndexComponent::Bm25),
+            ProgressSnapshot::default()
+        );
+        clear_root(root);
     }
 }

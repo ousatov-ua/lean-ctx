@@ -45,6 +45,12 @@ impl Component {
 #[derive(Debug)]
 struct ProjectBuild {
     worker_running: bool,
+    /// Cleared on worker claim; set when the graph phase of this run finishes.
+    /// Used by CLI wait loops so they do not exit during the claim→start gap
+    /// or the graph→BM25 handoff (search pre-warm keeps `worker_running`).
+    graph_run_done: bool,
+    /// Cleared on worker claim; set when the BM25 phase of this run finishes.
+    bm25_run_done: bool,
     /// Set the first time a heavy-index tool lazily pre-warms this root (#152).
     /// Prevents re-triggering a full rebuild on every subsequent dispatch — the
     /// tools' own `load_or_build` paths handle staleness from then on.
@@ -61,6 +67,8 @@ impl ProjectBuild {
     fn new() -> Self {
         Self {
             worker_running: false,
+            graph_run_done: true,
+            bm25_run_done: true,
             warm_triggered: false,
             graph: Component::new(),
             bm25: Component::new(),
@@ -260,6 +268,8 @@ fn try_claim_worker(project_root: &str) -> bool {
         false
     } else {
         s.worker_running = true;
+        s.graph_run_done = false;
+        s.bm25_run_done = false;
         true
     }
 }
@@ -337,13 +347,12 @@ fn run_build_worker(root: &str) {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             start_component(&mut s.graph);
         }
-        // Graph scan has no reliable unit total → indeterminate.
-        crate::core::index_progress::report(
-            &graph_root,
+        // Graph scan has no reliable unit total → indeterminate. Guard clears on exit.
+        let guard = crate::core::index_progress::ProgressGuard::new(
+            graph_root.clone(),
             crate::core::index_progress::IndexComponent::Graph,
-            0,
-            0,
         );
+        guard.report(0, 0);
         let graph_result = std::panic::catch_unwind(|| {
             let (idx, _cache) = graph_index::scan_with_content_cache(&graph_root);
             if let Err(e) = idx.save() {
@@ -351,20 +360,17 @@ fn run_build_worker(root: &str) {
             }
             crate::core::code_health::persist::refresh_if_stale(&graph_root, &idx);
         });
-        crate::core::index_progress::clear(
-            &graph_root,
-            crate::core::index_progress::IndexComponent::Graph,
-        );
-        if let Ok(()) = graph_result {
+        drop(guard);
+        {
             let mut s = graph_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            finish_ok(&mut s.graph);
-        } else {
-            let mut s = graph_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            finish_err(&mut s.graph, "graph index build panicked".to_string());
+            if let Ok(()) = graph_result {
+                finish_ok(&mut s.graph);
+            } else {
+                finish_err(&mut s.graph, "graph index build panicked".to_string());
+            }
+            s.graph_run_done = true;
         }
     };
 
@@ -377,6 +383,10 @@ fn run_build_worker(root: &str) {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             start_component(&mut s.bm25);
         }
+        let _progress = crate::core::index_progress::ProgressGuard::new(
+            bm25_root.clone(),
+            crate::core::index_progress::IndexComponent::Bm25,
+        );
         let bm = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let root_pb = Path::new(&bm25_root);
             let lock_name = bm25_index_lock_name(root_pb);
@@ -396,26 +406,22 @@ fn run_build_worker(root: &str) {
             let outcome = idx.save(root_pb);
             (idx.doc_count, Some(outcome))
         }));
-        crate::core::index_progress::clear(
-            &bm25_root,
-            crate::core::index_progress::IndexComponent::Bm25,
-        );
-        if let Ok((doc_count, save_res)) = bm {
+        {
             let mut s = bm25_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            finish_ok(&mut s.bm25);
-            s.bm25.note = Some(match save_res {
-                Some(outcome) => bm25_build_note(doc_count, &outcome),
-                None => format!(
-                    "loaded shared BM25 index ({doc_count} chunks) — build in progress in another process"
-                ),
-            });
-        } else {
-            let mut s = bm25_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            finish_err(&mut s.bm25, "bm25 build panicked".to_string());
+            if let Ok((doc_count, save_res)) = bm {
+                finish_ok(&mut s.bm25);
+                s.bm25.note = Some(match save_res {
+                    Some(outcome) => bm25_build_note(doc_count, &outcome),
+                    None => format!(
+                        "loaded shared BM25 index ({doc_count} chunks) — build in progress in another process"
+                    ),
+                });
+            } else {
+                finish_err(&mut s.bm25, "bm25 build panicked".to_string());
+            }
+            s.bm25_run_done = true;
         }
     };
 
@@ -476,6 +482,12 @@ pub fn build_semantic(project_root: &str) {
         start_component(&mut s.semantic);
     }
 
+    // Guard clears progress on every exit (incl. early returns / panics).
+    let _progress = crate::core::index_progress::ProgressGuard::new(
+        project_root.to_string(),
+        crate::core::index_progress::IndexComponent::Semantic,
+    );
+
     let bm25_idx = try_load_bm25_index(project_root);
     match bm25_idx.as_ref() {
         Some(idx) if idx.doc_count > 0 => {
@@ -483,10 +495,6 @@ pub fn build_semantic(project_root: &str) {
             let mut s = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            crate::core::index_progress::clear(
-                project_root,
-                crate::core::index_progress::IndexComponent::Semantic,
-            );
             match outcome {
                 crate::core::embedding_index::EmbeddingBuildOutcome::Ready => {
                     finish_ok(&mut s.semantic);
@@ -501,6 +509,8 @@ pub fn build_semantic(project_root: &str) {
                 crate::core::embedding_index::EmbeddingBuildOutcome::ModelNotAvailable(
                     ref reason,
                 ) => {
+                    // Not a hard failure — semantic is optional. Surface the reason
+                    // so users know why dense search is cold (#249).
                     s.semantic.state = State::Idle;
                     s.semantic.note = Some(format!("embedding model not available: {reason}"));
                 }
@@ -513,13 +523,10 @@ pub fn build_semantic(project_root: &str) {
             }
         }
         _ => {
-            crate::core::index_progress::clear(
-                project_root,
-                crate::core::index_progress::IndexComponent::Semantic,
-            );
             let mut s = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // No BM25 docs → nothing to embed. Leave semantic Idle with a note.
             s.semantic.state = State::Idle;
             s.semantic.note =
                 Some("BM25 index is empty or unavailable — nothing to embed".to_string());
@@ -694,6 +701,89 @@ pub fn try_load_graph_index(project_root: &str) -> Option<ProjectIndex> {
 
 pub fn try_load_bm25_index(project_root: &str) -> Option<BM25Index> {
     BM25Index::load(Path::new(project_root))
+}
+
+/// Typed progress snapshot for one index component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlotProgress {
+    pub building: bool,
+    pub done: u64,
+    pub total: u64,
+}
+
+impl SlotProgress {
+    pub fn is_determinate(&self) -> bool {
+        self.building && self.total > 0
+    }
+}
+
+/// Root-scoped view of index build progress for CLI wait loops.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressView {
+    pub worker_running: bool,
+    /// Graph phase of the current worker run has finished (ok or err).
+    pub graph_run_done: bool,
+    /// BM25 phase of the current worker run has finished (ok or err).
+    pub bm25_run_done: bool,
+    pub graph: SlotProgress,
+    pub bm25: SlotProgress,
+    pub semantic: SlotProgress,
+}
+
+impl ProgressView {
+    /// Graph + BM25 pipeline still in flight for this root.
+    ///
+    /// True from worker claim through BM25 completion — covers the claim→start
+    /// race and the graph→BM25 handoff without waiting for search pre-warm.
+    pub fn graph_bm25_active(&self) -> bool {
+        self.worker_running && !(self.graph_run_done && self.bm25_run_done)
+    }
+
+    pub fn semantic_active(&self) -> bool {
+        self.semantic.building
+    }
+}
+
+/// Snapshot progress for a project root (typed; no JSON scrape).
+pub fn progress_view(project_root: &str) -> ProgressView {
+    use crate::core::index_progress::{self, IndexComponent};
+    let (worker_running, graph_run_done, bm25_run_done, graph_b, bm25_b, sem_b) = {
+        let state = entry_for(project_root);
+        let s = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            s.worker_running,
+            s.graph_run_done,
+            s.bm25_run_done,
+            matches!(s.graph.state, State::Building),
+            matches!(s.bm25.state, State::Building),
+            matches!(s.semantic.state, State::Building),
+        )
+    };
+    let g = index_progress::get(project_root, IndexComponent::Graph);
+    let b = index_progress::get(project_root, IndexComponent::Bm25);
+    let sem = index_progress::get(project_root, IndexComponent::Semantic);
+    ProgressView {
+        worker_running,
+        graph_run_done,
+        bm25_run_done,
+        graph: SlotProgress {
+            building: graph_b,
+            done: g.done,
+            total: g.total,
+        },
+        bm25: SlotProgress {
+            building: bm25_b,
+            done: b.done,
+            total: b.total,
+        },
+        semantic: SlotProgress {
+            building: sem_b,
+            done: sem.done,
+            total: sem.total,
+        },
+    }
 }
 
 /// Returns true if any project is currently building its indices.
@@ -919,6 +1009,33 @@ pub fn status_json(project_root: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_view_graph_bm25_active_logic() {
+        let idle = SlotProgress::default();
+        let mut v = ProgressView {
+            worker_running: true,
+            graph_run_done: false,
+            bm25_run_done: false,
+            graph: idle,
+            bm25: idle,
+            semantic: idle,
+        };
+        assert!(v.graph_bm25_active(), "claimed, phases not done");
+        v.graph_run_done = true;
+        assert!(v.graph_bm25_active(), "graph done, bm25 pending");
+        v.bm25_run_done = true;
+        assert!(
+            !v.graph_bm25_active(),
+            "both phases done — search pre-warm must not keep wait open"
+        );
+        v.worker_running = false;
+        assert!(!v.graph_bm25_active());
+        // Idle project (never claimed this process)
+        v.graph_run_done = true;
+        v.bm25_run_done = true;
+        assert!(!v.graph_bm25_active());
+    }
 
     #[test]
     fn status_json_is_valid_json() {

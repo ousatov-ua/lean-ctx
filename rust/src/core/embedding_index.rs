@@ -142,10 +142,6 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
             if let Err(e) = crate::core::embeddings::EmbeddingEngine::ensure_downloaded() {
                 let reason = format!("embedding model auto-download from HuggingFace failed: {e}");
                 tracing::warn!("[embedding_index] build_or_update failed: {reason}");
-                crate::core::index_progress::clear(
-                    &root_key,
-                    crate::core::index_progress::IndexComponent::Semantic,
-                );
                 return EmbeddingBuildOutcome::ModelNotAvailable(reason);
             }
         }
@@ -236,10 +232,6 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
                 }
                 Err(e) => {
                     tracing::error!("[embedding_index] batch embed failed: {e}");
-                    crate::core::index_progress::clear(
-                        &root_key,
-                        crate::core::index_progress::IndexComponent::Semantic,
-                    );
                     return EmbeddingBuildOutcome::Failed;
                 }
             }
@@ -252,20 +244,12 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
 
         if let Err(e) = idx.save(root) {
             tracing::error!("[embedding_index] save failed: {e}");
-            crate::core::index_progress::clear(
-                &root_key,
-                crate::core::index_progress::IndexComponent::Semantic,
-            );
             return EmbeddingBuildOutcome::Failed;
         }
 
         tracing::info!(
             "[embedding_index] successfully persisted {count} file embeddings ({total} chunks)",
             total = bm25.chunks.len()
-        );
-        crate::core::index_progress::clear(
-            &root_key,
-            crate::core::index_progress::IndexComponent::Semantic,
         );
         EmbeddingBuildOutcome::Ready
     }

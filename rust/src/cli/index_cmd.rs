@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-use crate::core::index_progress::{self, IndexComponent};
 use crate::terminal_ui::ProgressIndicator;
 
 pub(crate) fn cmd_index(args: &[String]) {
@@ -203,103 +202,85 @@ pub(crate) fn cmd_index(args: &[String]) {
     }
 }
 
-/// Wait for graph + BM25 background build with a shared progress indicator.
+/// Wait for graph + BM25 with a shared progress indicator.
 ///
-/// Returns `false` on timeout (background work continues).
+/// Uses [`progress_view`] (typed) — no JSON scrape. Returns `false` on timeout
+/// (background work continues).
 fn wait_graph_bm25_progress(project_root: &str, timeout: Duration) -> bool {
     let mut progress = ProgressIndicator::new("indexes");
-    let started = Instant::now();
+    let start = Instant::now();
     loop {
-        let status = crate::core::index_orchestrator::status_json(project_root);
-        let building = status.contains("\"building\"");
-        if !building {
-            progress.finish(&format!(
-                "indexes (graph + BM25) done ({:.1}s)",
-                started.elapsed().as_secs_f64()
-            ));
+        let view = crate::core::index_orchestrator::progress_view(project_root);
+        if !view.graph_bm25_active() {
+            progress.finish("indexes (graph + BM25) done (search may still be warming)");
             return true;
         }
-        if started.elapsed() > timeout {
-            progress.finish("timeout (background build continues)");
+        apply_graph_bm25_progress(&mut progress, &view);
+        progress.tick();
+        if start.elapsed() > timeout {
+            progress.finish("indexes still building (timeout — check `lean-ctx index status`)");
             return false;
         }
-        // Prefer BM25 (measurable) when active; else graph (usually indeterminate).
-        let bm25_building = status_component_building(&status, "bm25_index");
-        let graph_building = status_component_building(&status, "graph_index");
-        apply_unified_progress(
-            &mut progress,
-            project_root,
-            &[
-                (IndexComponent::Bm25, "BM25", bm25_building),
-                (IndexComponent::Graph, "graph", graph_building),
-            ],
-        );
-        progress.tick();
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
-/// Run semantic build on a worker thread; show unified progress on the main thread.
-fn wait_semantic_progress(project_root: &str) {
+/// Build semantic on a worker thread while showing progress.
+///
+/// Returns `false` on timeout (worker keeps running).
+fn wait_semantic_progress(project_root: &str) -> bool {
     let root = project_root.to_string();
     let handle = std::thread::spawn(move || {
         crate::core::index_orchestrator::build_semantic(&root);
     });
     let mut progress = ProgressIndicator::new("semantic");
-    let started = Instant::now();
-    while !handle.is_finished() {
-        apply_unified_progress(
-            &mut progress,
-            project_root,
-            &[(IndexComponent::Semantic, "semantic", true)],
-        );
+    let start = Instant::now();
+    let timeout = Duration::from_mins(10);
+    loop {
+        if handle.is_finished() {
+            let _ = handle.join();
+            progress.finish("semantic done");
+            return true;
+        }
+        let view = crate::core::index_orchestrator::progress_view(project_root);
+        apply_semantic_progress(&mut progress, &view);
         progress.tick();
+        if start.elapsed() > timeout {
+            progress.finish("semantic still building (timeout — check `lean-ctx index status`)");
+            // JoinHandle drop detaches — leave worker running.
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = handle.join();
-    progress.finish(&format!(
-        "semantic index done ({:.1}s)",
-        started.elapsed().as_secs_f64()
-    ));
 }
 
-/// Drive a shared [`ProgressIndicator`] from live index progress counters.
-///
-/// `candidates` is priority-ordered: first still-active component with a
-/// determinate total wins the bar; otherwise the first active component shows
-/// an indeterminate bouncing arrow.
-fn apply_unified_progress(
+fn apply_graph_bm25_progress(
     progress: &mut ProgressIndicator,
-    project_root: &str,
-    candidates: &[(IndexComponent, &str, bool /* still_active */)],
+    view: &crate::core::index_orchestrator::ProgressView,
 ) {
-    for (comp, label, active) in candidates {
-        if !*active {
-            continue;
-        }
-        let snap = index_progress::get(project_root, *comp);
-        if snap.is_determinate() {
-            progress.set_label(*label);
-            progress.set(snap.done, snap.total);
-            return;
-        }
-    }
-    for (_comp, label, active) in candidates {
-        if !*active {
-            continue;
-        }
-        progress.set_label(*label);
+    if !view.graph_run_done {
+        progress.set_label("graph");
         progress.indeterminate();
         return;
     }
-    progress.indeterminate();
+    // BM25 phase (or graph→BM25 handoff).
+    progress.set_label("BM25");
+    if view.bm25.total > 0 {
+        progress.set(view.bm25.done, view.bm25.total);
+    } else {
+        progress.indeterminate();
+    }
 }
 
-/// Cheap check: does status JSON show this component as `"building"`?
-fn status_component_building(status_json: &str, key: &str) -> bool {
-    // status is compact JSON: `"bm25_index":{"state":"building",...}`
-    let needle = format!("\"{key}\":{{\"state\":\"building\"");
-    status_json.contains(&needle)
+fn apply_semantic_progress(
+    progress: &mut ProgressIndicator,
+    view: &crate::core::index_orchestrator::ProgressView,
+) {
+    if view.semantic.total > 0 {
+        progress.set(view.semantic.done, view.semantic.total);
+    } else {
+        progress.indeterminate();
+    }
 }
 
 /// First non-flag token, skipping the values of value-taking flags — so
