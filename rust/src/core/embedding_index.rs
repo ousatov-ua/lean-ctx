@@ -127,13 +127,25 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
         // initializes ORT, so the teardown-safety rationale for deferring the
         // `shared_engine()` load still holds: on download failure we return
         // without ever having touched the ONNX Runtime.
+        let root_key = root.to_string_lossy().to_string();
         if !crate::core::embeddings::EmbeddingEngine::is_available() {
             tracing::info!(
                 "[embedding_index] embedding model absent — downloading from HuggingFace"
             );
+            // Download has no reliable total → indeterminate progress.
+            crate::core::index_progress::report(
+                &root_key,
+                crate::core::index_progress::IndexComponent::Semantic,
+                0,
+                0,
+            );
             if let Err(e) = crate::core::embeddings::EmbeddingEngine::ensure_downloaded() {
                 let reason = format!("embedding model auto-download from HuggingFace failed: {e}");
                 tracing::warn!("[embedding_index] build_or_update failed: {reason}");
+                crate::core::index_progress::clear(
+                    &root_key,
+                    crate::core::index_progress::IndexComponent::Semantic,
+                );
                 return EmbeddingBuildOutcome::ModelNotAvailable(reason);
             }
         }
@@ -192,18 +204,46 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
         }
 
         let count = changed_files.len();
+        let chunk_total = changed_texts.len() as u64;
         tracing::info!(
             "[embedding_index] embedding {count} changed files ({total} chunks in index)",
             total = bm25.chunks.len()
         );
 
-        let batch_embeddings = match engine.embed_batch(&changed_texts) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("[embedding_index] batch embed failed: {e}");
-                return EmbeddingBuildOutcome::Failed;
+        crate::core::index_progress::report(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Semantic,
+            0,
+            chunk_total,
+        );
+
+        // Micro-batch so CLI can show determinate % (single giant embed_batch
+        // would only report 0% → 100%).
+        const EMBED_PROGRESS_BATCH: usize = 32;
+        let mut batch_embeddings: Vec<Vec<f32>> = Vec::with_capacity(changed_texts.len());
+        let mut embedded = 0usize;
+        for text_chunk in changed_texts.chunks(EMBED_PROGRESS_BATCH) {
+            match engine.embed_batch(text_chunk) {
+                Ok(mut v) => {
+                    embedded += text_chunk.len();
+                    batch_embeddings.append(&mut v);
+                    crate::core::index_progress::report(
+                        &root_key,
+                        crate::core::index_progress::IndexComponent::Semantic,
+                        embedded as u64,
+                        chunk_total,
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("[embedding_index] batch embed failed: {e}");
+                    crate::core::index_progress::clear(
+                        &root_key,
+                        crate::core::index_progress::IndexComponent::Semantic,
+                    );
+                    return EmbeddingBuildOutcome::Failed;
+                }
             }
-        };
+        }
 
         let new_embeddings: Vec<(usize, Vec<f32>)> =
             changed_indices.into_iter().zip(batch_embeddings).collect();
@@ -212,12 +252,20 @@ pub fn build_or_update(root: &Path, bm25: &super::bm25_index::BM25Index) -> Embe
 
         if let Err(e) = idx.save(root) {
             tracing::error!("[embedding_index] save failed: {e}");
+            crate::core::index_progress::clear(
+                &root_key,
+                crate::core::index_progress::IndexComponent::Semantic,
+            );
             return EmbeddingBuildOutcome::Failed;
         }
 
         tracing::info!(
             "[embedding_index] successfully persisted {count} file embeddings ({total} chunks)",
             total = bm25.chunks.len()
+        );
+        crate::core::index_progress::clear(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Semantic,
         );
         EmbeddingBuildOutcome::Ready
     }

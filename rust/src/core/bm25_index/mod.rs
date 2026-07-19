@@ -405,8 +405,24 @@ impl BM25Index {
     ) -> Self {
         let mut index = Self::new();
         const MAX_FILE_SIZE_BYTES: u64 = 2 * 1024 * 1024;
+        let root_key = root.to_string_lossy().to_string();
+        let total = files.len() as u64;
+        crate::core::index_progress::report(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Bm25,
+            0,
+            total,
+        );
 
         for (i, rel) in files.iter().enumerate() {
+            if i.is_multiple_of(16) || i + 1 == files.len() {
+                crate::core::index_progress::report(
+                    &root_key,
+                    crate::core::index_progress::IndexComponent::Bm25,
+                    (i + 1) as u64,
+                    total,
+                );
+            }
             if i.is_multiple_of(500) && crate::core::memory_guard::is_under_pressure() {
                 tracing::warn!(
                     "[bm25: stopping incremental rebuild at file {i}/{} due to memory pressure]",

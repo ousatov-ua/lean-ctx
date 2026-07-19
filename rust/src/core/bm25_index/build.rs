@@ -249,6 +249,14 @@ impl BM25Index {
     ) -> Self {
         let mut index = Self::new();
         let max_batch_size = max_batch_size.clamp(1, MAX_BATCH_FILES);
+        let root_key = root.to_string_lossy().to_string();
+        let total = files.len() as u64;
+        crate::core::index_progress::report(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Bm25,
+            0,
+            total,
+        );
         let mut files_done = 0;
         while files_done < files.len() {
             if parallel_build_must_stop("bm25", files_done) {
@@ -267,6 +275,12 @@ impl BM25Index {
                 index.files.insert(pf.rel, pf.state);
             }
             files_done = batch_end;
+            crate::core::index_progress::report(
+                &root_key,
+                crate::core::index_progress::IndexComponent::Bm25,
+                files_done as u64,
+                total,
+            );
             crate::core::memory_guard::jemalloc_purge();
         }
         index.finalize();
@@ -292,6 +306,14 @@ impl BM25Index {
         let empty_hint: HashMap<String, String> = HashMap::new();
 
         let mut index = Self::new();
+        let root_key = root.to_string_lossy().to_string();
+        let total = files.len() as u64;
+        crate::core::index_progress::report(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Bm25,
+            0,
+            total,
+        );
         let mut files_done = 0;
         while files_done < files.len() {
             if parallel_build_must_stop("bm25-incr", files_done) {
@@ -310,6 +332,12 @@ impl BM25Index {
                 index.files.insert(pf.rel, pf.state);
             }
             files_done = batch_end;
+            crate::core::index_progress::report(
+                &root_key,
+                crate::core::index_progress::IndexComponent::Bm25,
+                files_done as u64,
+                total,
+            );
             crate::core::memory_guard::jemalloc_purge();
         }
         index.finalize();
@@ -325,8 +353,24 @@ impl BM25Index {
     ) -> Self {
         let mut index = Self::new();
         let mut cache_hits = 0usize;
+        let root_key = root.to_string_lossy().to_string();
+        let total = files.len() as u64;
+        crate::core::index_progress::report(
+            &root_key,
+            crate::core::index_progress::IndexComponent::Bm25,
+            0,
+            total,
+        );
 
         for (i, rel) in files.iter().enumerate() {
+            if i.is_multiple_of(16) || i + 1 == files.len() {
+                crate::core::index_progress::report(
+                    &root_key,
+                    crate::core::index_progress::IndexComponent::Bm25,
+                    (i + 1) as u64,
+                    total,
+                );
+            }
             if i.is_multiple_of(500) && crate::core::memory_guard::is_under_pressure() {
                 tracing::warn!(
                     "[bm25: stopping build at file {i}/{} due to memory pressure]",

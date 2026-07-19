@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+use crate::core::index_progress::{self, IndexComponent};
+use crate::terminal_ui::ProgressIndicator;
+
 pub(crate) fn cmd_index(args: &[String]) {
     let project_root = super::common::detect_project_root(args);
     let root = Path::new(&project_root);
@@ -38,22 +41,9 @@ pub(crate) fn cmd_index(args: &[String]) {
             }));
             crate::core::index_orchestrator::ensure_all_background(&project_root);
 
-            let started = std::time::Instant::now();
-            let timeout = Duration::from_mins(5);
-            eprint!("building indexes (graph + BM25)");
-            loop {
-                std::thread::sleep(Duration::from_millis(500));
-                let status = crate::core::index_orchestrator::status_json(&project_root);
-                if !status.contains("\"building\"") {
-                    break;
-                }
-                eprint!(".");
-                if started.elapsed() > timeout {
-                    eprintln!(" timeout (background build continues)");
-                    return;
-                }
+            if !wait_graph_bm25_progress(&project_root, Duration::from_mins(5)) {
+                return;
             }
-            eprintln!(" done");
 
             // Surface the BM25 build outcome so the operator knows the index
             // state (issue #249).
@@ -94,22 +84,9 @@ pub(crate) fn cmd_index(args: &[String]) {
             }
             crate::core::index_orchestrator::ensure_all_background(&project_root);
 
-            let started = std::time::Instant::now();
-            let timeout = Duration::from_mins(5);
-            eprintln!("rebuilding indexes (graph + BM25)");
-            loop {
-                std::thread::sleep(Duration::from_millis(500));
-                let status = crate::core::index_orchestrator::status_json(&project_root);
-                if !status.contains("\"building\"") {
-                    break;
-                }
-                eprint!(".");
-                if started.elapsed() > timeout {
-                    eprintln!(" timeout (background build continues)");
-                    return;
-                }
+            if !wait_graph_bm25_progress(&project_root, Duration::from_mins(5)) {
+                return;
             }
-            eprintln!(" done");
 
             // Surface the BM25 build outcome (chunk count + persisted size, or the
             // "too large to persist" remedy) so the operator is never left guessing.
@@ -126,8 +103,7 @@ pub(crate) fn cmd_index(args: &[String]) {
             eprintln!("property graph mirrored from graph_index during index build");
 
             // Build semantic (dense embedding) index on top of the fresh BM25.
-            eprintln!("building semantic (dense embedding) index ...");
-            crate::core::index_orchestrator::build_semantic(&project_root);
+            wait_semantic_progress(&project_root);
             let sem = crate::core::index_orchestrator::semantic_summary(&project_root);
             match sem.state {
                 "ready" => eprintln!("  semantic index ready"),
@@ -183,25 +159,12 @@ pub(crate) fn cmd_index(args: &[String]) {
             if !disk.bm25_index.exists {
                 eprintln!("BM25 index not found — building graph + BM25 first ...");
                 crate::core::index_orchestrator::ensure_all_background(&project_root);
-                let started = std::time::Instant::now();
-                let timeout = Duration::from_mins(5);
-                loop {
-                    std::thread::sleep(Duration::from_millis(500));
-                    let status = crate::core::index_orchestrator::status_json(&project_root);
-                    if !status.contains("\"building\"") {
-                        break;
-                    }
-                    eprint!(".");
-                    if started.elapsed() > timeout {
-                        eprintln!(" timeout");
-                        return;
-                    }
+                if !wait_graph_bm25_progress(&project_root, Duration::from_mins(5)) {
+                    return;
                 }
-                eprintln!(" done");
             }
 
-            eprintln!("building semantic (dense embedding) index ...");
-            crate::core::index_orchestrator::build_semantic(&project_root);
+            wait_semantic_progress(&project_root);
             let sem = crate::core::index_orchestrator::semantic_summary(&project_root);
             match sem.state {
                 "ready" => eprintln!("semantic index ready"),
@@ -238,6 +201,105 @@ pub(crate) fn cmd_index(args: &[String]) {
             );
         }
     }
+}
+
+/// Wait for graph + BM25 background build with a shared progress indicator.
+///
+/// Returns `false` on timeout (background work continues).
+fn wait_graph_bm25_progress(project_root: &str, timeout: Duration) -> bool {
+    let mut progress = ProgressIndicator::new("indexes");
+    let started = Instant::now();
+    loop {
+        let status = crate::core::index_orchestrator::status_json(project_root);
+        let building = status.contains("\"building\"");
+        if !building {
+            progress.finish(&format!(
+                "indexes (graph + BM25) done ({:.1}s)",
+                started.elapsed().as_secs_f64()
+            ));
+            return true;
+        }
+        if started.elapsed() > timeout {
+            progress.finish("timeout (background build continues)");
+            return false;
+        }
+        // Prefer BM25 (measurable) when active; else graph (usually indeterminate).
+        let bm25_building = status_component_building(&status, "bm25_index");
+        let graph_building = status_component_building(&status, "graph_index");
+        apply_unified_progress(
+            &mut progress,
+            project_root,
+            &[
+                (IndexComponent::Bm25, "BM25", bm25_building),
+                (IndexComponent::Graph, "graph", graph_building),
+            ],
+        );
+        progress.tick();
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Run semantic build on a worker thread; show unified progress on the main thread.
+fn wait_semantic_progress(project_root: &str) {
+    let root = project_root.to_string();
+    let handle = std::thread::spawn(move || {
+        crate::core::index_orchestrator::build_semantic(&root);
+    });
+    let mut progress = ProgressIndicator::new("semantic");
+    let started = Instant::now();
+    while !handle.is_finished() {
+        apply_unified_progress(
+            &mut progress,
+            project_root,
+            &[(IndexComponent::Semantic, "semantic", true)],
+        );
+        progress.tick();
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = handle.join();
+    progress.finish(&format!(
+        "semantic index done ({:.1}s)",
+        started.elapsed().as_secs_f64()
+    ));
+}
+
+/// Drive a shared [`ProgressIndicator`] from live index progress counters.
+///
+/// `candidates` is priority-ordered: first still-active component with a
+/// determinate total wins the bar; otherwise the first active component shows
+/// an indeterminate bouncing arrow.
+fn apply_unified_progress(
+    progress: &mut ProgressIndicator,
+    project_root: &str,
+    candidates: &[(IndexComponent, &str, bool /* still_active */)],
+) {
+    for (comp, label, active) in candidates {
+        if !*active {
+            continue;
+        }
+        let snap = index_progress::get(project_root, *comp);
+        if snap.is_determinate() {
+            progress.set_label(*label);
+            progress.set(snap.done, snap.total);
+            return;
+        }
+    }
+    for (_comp, label, active) in candidates {
+        if !*active {
+            continue;
+        }
+        progress.set_label(*label);
+        progress.indeterminate();
+        return;
+    }
+    progress.indeterminate();
+}
+
+/// Cheap check: does status JSON show this component as `"building"`?
+fn status_component_building(status_json: &str, key: &str) -> bool {
+    // status is compact JSON: `"bm25_index":{"state":"building",...}`
+    let needle = format!("\"{key}\":{{\"state\":\"building\"");
+    status_json.contains(&needle)
 }
 
 /// First non-flag token, skipping the values of value-taking flags — so

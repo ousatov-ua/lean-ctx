@@ -337,6 +337,13 @@ fn run_build_worker(root: &str) {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             start_component(&mut s.graph);
         }
+        // Graph scan has no reliable unit total → indeterminate.
+        crate::core::index_progress::report(
+            &graph_root,
+            crate::core::index_progress::IndexComponent::Graph,
+            0,
+            0,
+        );
         let graph_result = std::panic::catch_unwind(|| {
             let (idx, _cache) = graph_index::scan_with_content_cache(&graph_root);
             if let Err(e) = idx.save() {
@@ -344,6 +351,10 @@ fn run_build_worker(root: &str) {
             }
             crate::core::code_health::persist::refresh_if_stale(&graph_root, &idx);
         });
+        crate::core::index_progress::clear(
+            &graph_root,
+            crate::core::index_progress::IndexComponent::Graph,
+        );
         if let Ok(()) = graph_result {
             let mut s = graph_state
                 .lock()
@@ -385,6 +396,10 @@ fn run_build_worker(root: &str) {
             let outcome = idx.save(root_pb);
             (idx.doc_count, Some(outcome))
         }));
+        crate::core::index_progress::clear(
+            &bm25_root,
+            crate::core::index_progress::IndexComponent::Bm25,
+        );
         if let Ok((doc_count, save_res)) = bm {
             let mut s = bm25_state
                 .lock()
@@ -468,6 +483,10 @@ pub fn build_semantic(project_root: &str) {
             let mut s = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            crate::core::index_progress::clear(
+                project_root,
+                crate::core::index_progress::IndexComponent::Semantic,
+            );
             match outcome {
                 crate::core::embedding_index::EmbeddingBuildOutcome::Ready => {
                     finish_ok(&mut s.semantic);
@@ -494,6 +513,10 @@ pub fn build_semantic(project_root: &str) {
             }
         }
         _ => {
+            crate::core::index_progress::clear(
+                project_root,
+                crate::core::index_progress::IndexComponent::Semantic,
+            );
             let mut s = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -697,9 +720,23 @@ struct ComponentStatus<'a> {
     last_error: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<&'a str>,
+    /// Units completed while `building` (files/chunks). Omitted when idle/ready.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_done: Option<u64>,
+    /// Total units; `Some(0)` while building means indeterminate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_total: Option<u64>,
 }
 
-fn component_status(c: &Component) -> ComponentStatus<'_> {
+fn component_status(
+    c: &Component,
+    progress: crate::core::index_progress::ProgressSnapshot,
+) -> ComponentStatus<'_> {
+    let (progress_done, progress_total) = if matches!(c.state, State::Building) {
+        (Some(progress.done), Some(progress.total))
+    } else {
+        (None, None)
+    };
     ComponentStatus {
         state: match c.state {
             State::Idle => "idle",
@@ -712,6 +749,8 @@ fn component_status(c: &Component) -> ComponentStatus<'_> {
         duration_ms: c.duration_ms,
         last_error: c.last_error.as_deref(),
         note: c.note.as_deref(),
+        progress_done,
+        progress_total,
     }
 }
 
@@ -854,11 +893,23 @@ pub fn status_json(project_root: &str) -> String {
     let s = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let graph_p = crate::core::index_progress::get(
+        project_root,
+        crate::core::index_progress::IndexComponent::Graph,
+    );
+    let bm25_p = crate::core::index_progress::get(
+        project_root,
+        crate::core::index_progress::IndexComponent::Bm25,
+    );
+    let semantic_p = crate::core::index_progress::get(
+        project_root,
+        crate::core::index_progress::IndexComponent::Semantic,
+    );
     let res = StatusResponse {
         project_root,
-        graph_index: component_status(&s.graph),
-        bm25_index: component_status(&s.bm25),
-        semantic_index: component_status(&s.semantic),
+        graph_index: component_status(&s.graph, graph_p),
+        bm25_index: component_status(&s.bm25, bm25_p),
+        semantic_index: component_status(&s.semantic, semantic_p),
         disk,
         index_filters: crate::core::index_filter::IndexFileFilter::effective().summary(),
     };
