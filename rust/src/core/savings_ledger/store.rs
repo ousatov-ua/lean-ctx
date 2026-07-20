@@ -15,10 +15,14 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use fs2::FileExt;
 
-use super::event::{EvidenceClass, MeasurementMethod, SavingsEvent, compute_hash};
+use super::event::{
+    CustomerApproval, EvidenceClass, MeasurementMethod, SavingsEvent, SettlementStatus,
+    compute_hash,
+};
 use super::evidence_projection::{
     LedgerProjectionErrorV2, MAX_LEDGER_SNAPSHOT_BYTES_V2, VerifiedLedgerSnapshotV2,
 };
+use crate::core::ocla_bus::{self, FeedbackOutcome, OclaEvent};
 
 pub const GENESIS: &str = "genesis";
 const TAIL_READ_BYTES: u64 = 8192;
@@ -500,6 +504,121 @@ pub fn query_by_attribution_group(path: &Path, group: &str) -> Vec<SavingsEvent>
         .collect()
 }
 
+fn update_event<F>(path: &Path, entry_hash: &str, update: F) -> std::io::Result<SavingsEvent>
+where
+    F: FnOnce(&mut SavingsEvent),
+{
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    file.lock_exclusive()?;
+    let result = (|| {
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+
+        let mut events: Vec<SavingsEvent> = content
+            .lines()
+            .map(|line| {
+                serde_json::from_str(line)
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+            })
+            .collect::<Result<_, _>>()?;
+        let index = events
+            .iter()
+            .position(|event| event.entry_hash == entry_hash)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("ledger entry not found: {entry_hash}"),
+                )
+            })?;
+        update(&mut events[index]);
+
+        let mut rewritten = String::new();
+        for event in &events {
+            let line = serde_json::to_string(event)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+            rewritten.push_str(&line);
+            rewritten.push('\n');
+        }
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(rewritten.as_bytes())?;
+        file.flush()?;
+        rechain_locked(&mut file)?;
+
+        file.seek(SeekFrom::Start(0))?;
+        let mut final_content = String::new();
+        file.read_to_string(&mut final_content)?;
+        final_content
+            .lines()
+            .nth(index)
+            .and_then(|line| serde_json::from_str(line).ok())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "updated ledger entry could not be read",
+                )
+            })
+    })();
+    let _ = FileExt::unlock(&file);
+    result
+}
+
+fn emit_approval_change(entry_hash: &str, approval: &CustomerApproval) {
+    let outcome = match approval {
+        CustomerApproval::Approved => FeedbackOutcome::Accept,
+        CustomerApproval::Disputed | CustomerApproval::Superseded => FeedbackOutcome::Reject,
+        CustomerApproval::Pending => FeedbackOutcome::Partial,
+    };
+    ocla_bus::emit(OclaEvent::FeedbackRecorded {
+        session_id: entry_hash.to_string(),
+        outcome,
+        tool: Some("savings_ledger".to_string()),
+    });
+}
+
+fn emit_settlement_change(entry_hash: &str, status: &SettlementStatus) {
+    ocla_bus::emit(OclaEvent::OutcomeRecorded {
+        session_id: entry_hash.to_string(),
+        accepted: matches!(status, SettlementStatus::Settled),
+        implicit: false,
+    });
+}
+
+/// Marks one ledger event with the customer's approval state and re-chains the ledger.
+pub fn approve_event(
+    path: &Path,
+    entry_hash: &str,
+    approval: CustomerApproval,
+) -> std::io::Result<SavingsEvent> {
+    let event = update_event(path, entry_hash, |event| {
+        event.customer_approval = Some(approval.clone());
+    })?;
+    emit_approval_change(&event.entry_hash, &approval);
+    Ok(event)
+}
+
+/// Marks one ledger event with its settlement state and re-chains the ledger.
+pub fn settle_event(
+    path: &Path,
+    entry_hash: &str,
+    status: SettlementStatus,
+) -> std::io::Result<SavingsEvent> {
+    let event = update_event(path, entry_hash, |event| {
+        event.settlement_status = Some(status.clone());
+    })?;
+    emit_settlement_change(&event.entry_hash, &status);
+    Ok(event)
+}
+
+/// Returns positive-savings events that have not received customer approval.
+pub fn query_pending_approval(path: &Path) -> Vec<SavingsEvent> {
+    load(path)
+        .into_iter()
+        .filter(|event| event.customer_approval.is_none() && event.saved_usd > 0.0)
+        .collect()
+}
+
 /// Aggregates event count, saved tokens, and saved USD by mechanism.
 pub fn summarize_by_mechanism(path: &Path) -> BTreeMap<String, MechanismSummary> {
     let mut summaries: BTreeMap<String, MechanismSummary> = BTreeMap::new();
@@ -906,6 +1025,53 @@ mod tests {
         assert_eq!(compression.saved_tokens, 125);
         assert!((compression.saved_usd - 125.0 / 1_000_000.0 * 3.0).abs() < 1e-9);
         assert_eq!(result.get("routing").unwrap().saved_tokens, 40);
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn approve_event_updates_state_and_rechains() {
+        let p = temp_path("approve");
+        let original = append(&p, sample(100)).unwrap();
+
+        let updated = approve_event(&p, &original.entry_hash, CustomerApproval::Approved).unwrap();
+
+        assert_eq!(updated.customer_approval, Some(CustomerApproval::Approved));
+        assert!(verify(&p).valid);
+        assert_eq!(
+            load(&p)[0].customer_approval,
+            Some(CustomerApproval::Approved)
+        );
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn settle_event_updates_state_and_rechains() {
+        let p = temp_path("settle");
+        let original = append(&p, sample(100)).unwrap();
+
+        let updated = settle_event(&p, &original.entry_hash, SettlementStatus::Settled).unwrap();
+
+        assert_eq!(updated.settlement_status, Some(SettlementStatus::Settled));
+        assert!(verify(&p).valid);
+        assert_eq!(
+            load(&p)[0].settlement_status,
+            Some(SettlementStatus::Settled)
+        );
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn query_pending_approval_filters_unapproved_positive_savings() {
+        let p = temp_path("pending-approval");
+        append(&p, sample(100)).unwrap();
+        append(&p, sample(0)).unwrap();
+        let approved = append(&p, sample(50)).unwrap();
+        approve_event(&p, &approved.entry_hash, CustomerApproval::Approved).unwrap();
+
+        let pending = query_pending_approval(&p);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].saved_tokens, 100);
+        assert!(pending[0].customer_approval.is_none());
         let _ = fs::remove_file(&p);
     }
 }
