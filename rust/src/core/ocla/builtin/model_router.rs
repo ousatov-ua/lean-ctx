@@ -21,7 +21,7 @@ impl BuiltinModelRouter {
         Self::with_rules(Config::load().proxy.routing)
     }
 
-    fn with_rules(rules: RoutingRules) -> Self {
+    pub(crate) fn with_rules(rules: RoutingRules) -> Self {
         Self { rules }
     }
 }
@@ -61,9 +61,7 @@ impl ModelRouter for BuiltinModelRouter {
             },
             |decision| {
                 let model = decision.routed_model;
-                let provider = decision
-                    .routed_provider
-                    .unwrap_or_else(|| infer_provider(&model));
+                let provider = decision.routed_provider.unwrap_or_default();
                 let changed = decision.model_changed;
                 (model, provider, decision.tier, changed)
             },
@@ -79,7 +77,10 @@ impl ModelRouter for BuiltinModelRouter {
         Ok(RoutingDecision {
             model,
             provider,
-            reasoning_budget_tokens: 4096,
+            reasoning_budget_tokens: u64::try_from(
+                Config::load().context_budget_tokens_effective(),
+            )
+            .unwrap_or(u64::MAX),
             decision_ref: format!("route:{}", request.context.request_id),
         })
     }
@@ -100,6 +101,7 @@ fn infer_provider(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ocla::registry::OclaRegistry;
     use crate::core::ocla::types::OclaRequestContext;
     use std::collections::BTreeMap;
 
@@ -166,5 +168,21 @@ mod tests {
         assert_eq!(decision.model, "default");
         assert_eq!(decision.provider, "unknown");
         assert_eq!(decision.decision_ref, "route:r1");
+    }
+
+    #[test]
+    fn registry_with_builtins_routes_model() {
+        let registry = OclaRegistry::with_builtins();
+        let decision = registry
+            .model_router
+            .route_model(route_req(&["gpt-4o"]))
+            .unwrap();
+
+        assert_eq!(decision.model, "gpt-4o");
+        assert_eq!(decision.provider, "openai");
+        assert_eq!(
+            decision.reasoning_budget_tokens,
+            u64::try_from(Config::load().context_budget_tokens_effective()).unwrap_or(u64::MAX)
+        );
     }
 }

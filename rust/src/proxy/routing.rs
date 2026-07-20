@@ -26,6 +26,15 @@
 use crate::core::config::{
     ResolvedProvider, RoutingRules, Upstreams, WireShape, parse_route_target,
 };
+use crate::core::ocla::registry::OclaRegistry;
+use crate::core::ocla::types::{ModelRouteRequest, OclaRequestContext};
+
+#[cfg(test)]
+use crate::core::ocla::builtin::model_router::BuiltinModelRouter;
+#[cfg(test)]
+use crate::core::ocla::registry::with_test_registry;
+#[cfg(test)]
+use std::sync::Arc;
 
 /// What the router decided for one request. Applied by the forward path:
 /// `model` already swapped in the body by [`route_request`]; the caller
@@ -89,12 +98,42 @@ pub fn route_request(
         return None;
     }
 
+    #[cfg(test)]
+    let _registry_guard = {
+        let mut registry = OclaRegistry::with_builtins();
+        registry.model_router = Arc::new(BuiltinModelRouter::with_rules(rules.clone()));
+        Some(with_test_registry(registry))
+    };
+
     let target = rules.aliases.get(&requested).cloned().or_else(|| {
-        let decision = super::model_router::route(parsed, rules)?;
-        Some(match decision.routed_provider {
-            Some(provider) => format!("{provider}:{}", decision.routed_model),
-            None => decision.routed_model,
-        })
+        let content_ref = extract_user_query(parsed, request_shape)?;
+        let request_id = format!(
+            "proxy-routing:{}",
+            blake3::hash(&serde_json::to_vec(parsed).ok()?).to_hex()
+        );
+        let request = ModelRouteRequest {
+            context: OclaRequestContext {
+                request_id,
+                session_id: "proxy-routing".into(),
+                agent_id: "proxy-routing".into(),
+                content_ref,
+                tenant_id: None,
+            },
+            candidate_models: vec![requested.clone()],
+            maximum_cost_micros: None,
+            maximum_latency_ms: None,
+        };
+        let decision = OclaRegistry::global()
+            .model_router
+            .route_model(request)
+            .ok()?;
+        if decision.model == requested {
+            None
+        } else if decision.provider.is_empty() {
+            Some(decision.model)
+        } else {
+            Some(format!("{}:{}", decision.provider, decision.model))
+        }
     })?;
     let (provider, new_model) = parse_route_target(&target)?;
     let new_model = new_model.to_string();
