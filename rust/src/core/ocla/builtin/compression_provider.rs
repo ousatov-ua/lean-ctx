@@ -10,30 +10,46 @@ use std::sync::OnceLock;
 
 use crate::core::compressor;
 use crate::core::config::Config;
+use crate::core::ocla::OclaError;
 use crate::core::ocla::content_port::CompressionContentPort;
 use crate::core::ocla::traits::{CompressionProvider, OclaService};
 use crate::core::ocla::types::{
-    CompressionRequest, CompressionResult, OclaCapability, OclaCapabilityKind,
-    OclaCapabilityStatus, OclaResult, OCLA_API_VERSION,
+    CompressionRequest, CompressionResult, OCLA_API_VERSION, OclaCapability, OclaCapabilityKind,
+    OclaCapabilityStatus, OclaResult,
 };
-use crate::core::ocla::OclaError;
 use crate::core::ocla_bus::{self, OclaEvent};
 use crate::core::tokens;
 
 static DEFAULT_PORT: OnceLock<Option<CompressionContentPort>> = OnceLock::new();
 
+fn port_from_project_root(root_str: Option<String>) -> Option<CompressionContentPort> {
+    let root_str = root_str?;
+    if root_str.trim().is_empty() || root_str == "." {
+        return None;
+    }
+    let root = PathBuf::from(root_str);
+    let mut component_path = PathBuf::new();
+    for component in root.components() {
+        component_path.push(component.as_os_str());
+        if component_path
+            .symlink_metadata()
+            .ok()?
+            .file_type()
+            .is_symlink()
+        {
+            return None;
+        }
+    }
+    if !root.symlink_metadata().ok()?.is_dir() {
+        return None;
+    }
+    let canonical = root.canonicalize().ok()?;
+    Some(CompressionContentPort::new(canonical))
+}
+
 fn try_default_port() -> Option<&'static CompressionContentPort> {
     DEFAULT_PORT
-        .get_or_init(|| {
-            let root_str = Config::find_project_root()?;
-            let root = PathBuf::from(&root_str);
-            let canonical = root.canonicalize().ok()?;
-            let meta = canonical.symlink_metadata().ok()?;
-            if !meta.is_dir() || meta.file_type().is_symlink() {
-                return None;
-            }
-            Some(CompressionContentPort::new(canonical))
-        })
+        .get_or_init(|| port_from_project_root(Config::find_project_root()))
         .as_ref()
 }
 
@@ -301,6 +317,79 @@ mod tests {
             msg.contains("resolve") || msg.contains("No such file") || msg.contains("not found"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn no_gain_rejects_before_persisting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let content = "let value = 1;\n";
+        fs::write(root.join("small.rs"), content).unwrap();
+        let compressed = compressor::aggressive_compress(content, Some("rs"));
+        let source_tokens = tokens::count_tokens(&compressed) as u64;
+        assert!(source_tokens > 0);
+        let ref_key = format!("blake3:{}", blake3::hash(compressed.as_bytes()).to_hex());
+        let port = CompressionContentPort::new(&root);
+
+        let err = BuiltinCompressionProvider::new()
+            .compress_with_port(
+                CompressionRequest {
+                    context: ctx(),
+                    source_ref: "file:small.rs".into(),
+                    source_tokens,
+                    target_tokens: 100,
+                    quality_policy_ref: None,
+                },
+                &port,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("no gain"));
+        assert!(port.retrieve(&ref_key).is_err());
+    }
+
+    #[test]
+    fn target_cap_rejects_before_persisting() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let content = "// repeated documentation\nfn main() {\n    let value = 1;\n}\n";
+        fs::write(root.join("target.rs"), content).unwrap();
+        let compressed = compressor::aggressive_compress(content, Some("rs"));
+        let delivered_tokens = tokens::count_tokens(&compressed) as u64;
+        assert!(delivered_tokens > 1);
+        let ref_key = format!("blake3:{}", blake3::hash(compressed.as_bytes()).to_hex());
+        let port = CompressionContentPort::new(&root);
+
+        let err = BuiltinCompressionProvider::new()
+            .compress_with_port(
+                CompressionRequest {
+                    context: ctx(),
+                    source_ref: "file:target.rs".into(),
+                    source_tokens: tokens::count_tokens(content) as u64,
+                    target_tokens: delivered_tokens - 1,
+                    quality_policy_ref: None,
+                },
+                &port,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("exceeds target"));
+        assert!(port.retrieve(&ref_key).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_root_symlink_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("root-link");
+        std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+        assert!(port_from_project_root(Some(link.to_string_lossy().into_owned())).is_none());
+    }
+
+    #[test]
+    fn project_root_empty_or_dot_is_unavailable() {
+        assert!(port_from_project_root(Some(String::new())).is_none());
+        assert!(port_from_project_root(Some(".".into())).is_none());
     }
 
     #[test]
