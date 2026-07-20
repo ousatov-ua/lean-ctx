@@ -650,6 +650,33 @@ mod tests {
     }
 
     #[test]
+    fn bedrock_sigv4_signs_mock_session_credentials() {
+        let credentials = Credentials {
+            access_key: "AKIDEXAMPLE".into(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
+            session_token: Some("session-token".into()),
+        };
+        let mut headers = HeaderMap::new();
+        sign_headers_at(
+            &Method::POST,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/demo/invoke",
+            &mut headers,
+            b"{}",
+            &credentials,
+            "us-east-1",
+            SERVICE,
+            "20240301T000000Z",
+        )
+        .unwrap();
+        assert_eq!(headers["x-amz-security-token"], "session-token");
+        assert!(
+            headers[header::AUTHORIZATION].to_str().unwrap().contains(
+                "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"
+            )
+        );
+    }
+
+    #[test]
     fn eventstream_sigv4_binds_exact_binary_payload() {
         let credentials = Credentials {
             access_key: "AKIDEXAMPLE".into(),
@@ -883,5 +910,98 @@ mod tests {
             Credentials::from_environment(),
             Err(SigningError::MissingCredential)
         ));
+    }
+
+    #[test]
+    fn malformed_credentials_fail_closed() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var(ACCESS_KEY_ENV, "AKID\nEXAMPLE");
+        crate::test_env::set_var(SECRET_KEY_ENV, "secret");
+        assert!(matches!(
+            Credentials::from_environment(),
+            Err(SigningError::InvalidCredential)
+        ));
+
+        crate::test_env::set_var(ACCESS_KEY_ENV, "A".repeat(MAX_CREDENTIAL_BYTES + 1));
+        assert!(matches!(
+            Credentials::from_environment(),
+            Err(SigningError::InvalidCredential)
+        ));
+        crate::test_env::remove_var(ACCESS_KEY_ENV);
+        crate::test_env::remove_var(SECRET_KEY_ENV);
+    }
+
+    #[test]
+    fn malformed_signing_inputs_return_typed_errors() {
+        let credentials = Credentials {
+            access_key: "AKIDEXAMPLE".into(),
+            secret_key: "secret".into(),
+            session_token: None,
+        };
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            sign_headers_at(
+                &Method::POST,
+                "not a URL",
+                &mut headers,
+                b"{}",
+                &credentials,
+                "us-east-1",
+                SERVICE,
+                "20240301T000000Z",
+            ),
+            Err(SigningError::InvalidUrl)
+        );
+        assert_eq!(
+            sign_headers_at(
+                &Method::POST,
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/demo/invoke",
+                &mut headers,
+                b"{}",
+                &credentials,
+                "us-east-1",
+                SERVICE,
+                "20240301T000000",
+            ),
+            Err(SigningError::InvalidTimestamp)
+        );
+    }
+
+    #[test]
+    fn malformed_eventstream_frames_fail_closed() {
+        let mut frame = event_frame(
+            br#"{"amazon-bedrock-invocationMetrics":{"inputTokenCount":1,"outputTokenCount":1}}"#,
+        );
+        frame[8] ^= 1;
+        let mut stream = EventStreamScanner::new(crate::proxy::usage::Scanner::new(
+            crate::proxy::usage::Provider::Anthropic,
+            None,
+        ));
+        stream.feed(&frame);
+        assert!(stream.finalize().is_none());
+
+        let mut stream = EventStreamScanner::new(crate::proxy::usage::Scanner::new(
+            crate::proxy::usage::Provider::Anthropic,
+            None,
+        ));
+        stream.feed(&[0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(stream.finalize().is_none());
+
+        let mut stream = EventStreamScanner::new(crate::proxy::usage::Scanner::new(
+            crate::proxy::usage::Provider::Anthropic,
+            None,
+        ));
+        stream.feed(&event_frame(b"not-json"));
+        assert!(stream.finalize().is_none());
+    }
+
+    #[tokio::test]
+    async fn stalled_eventstream_can_be_bounded_by_request_timeout() {
+        let stream = tee_eventstream(
+            futures::stream::pending::<Result<Vec<u8>, std::convert::Infallible>>(),
+            crate::proxy::usage::Scanner::new(crate::proxy::usage::Provider::Anthropic, None),
+        );
+        let result = tokio::time::timeout(std::time::Duration::ZERO, stream.next()).await;
+        assert!(result.is_err());
     }
 }
