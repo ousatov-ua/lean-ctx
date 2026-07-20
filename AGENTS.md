@@ -41,7 +41,7 @@ lean-ctx ls src/              # directory map
 When working on lean-ctx itself:
 
 1. **Build without stopping the installed runtime**: `cd rust && cargo build --release`
-2. **Test without stopping the installed runtime**: `cargo test --lib` + `cargo clippy -- -W clippy::all`
+2. **Test without stopping the installed runtime**: `cargo test --lib` + `cargo clippy --all-features -- -D warnings` + `cargo fmt --check`
 3. **Install**: `lean-ctx dev-install` (build→atomic stop/install→restart)
 
 Do not run `lean-ctx stop` before builds or tests. It unloads the user's global
@@ -116,6 +116,16 @@ GitHub remote must stay clean: only `main` + `cla-signatures` + max 1 active PR 
 - Zero clippy warnings, all tests pass
 - Security: PathJail, Shell Allowlist, bounded_lock, no hardcoded secrets
 - No mock data, no placeholders, no stubs
+
+## Quality Gate
+
+Before every commit, all three checks must pass:
+
+```bash
+cargo test --lib 2>&1 | tail -5       # must show 0 failed
+cargo clippy --all-features -- -D warnings
+cargo fmt --check
+```
 
 ## Output Determinism (#498)
 
