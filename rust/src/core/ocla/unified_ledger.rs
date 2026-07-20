@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 
-use super::types::OclaResult;
+use fs2::FileExt;
+
+use super::types::{OclaError, OclaResult};
+use crate::core::savings_ledger::SavingsEvent;
 
 /// Unified P5 savings event combining the legacy chain fields with
 /// cross-capability attribution and analysis metadata.
@@ -36,6 +42,131 @@ pub trait UnifiedLedger: Send + Sync {
     fn query_by_attribution(&self, id: &str) -> OclaResult<Option<UnifiedSavingsEventV2>>;
 }
 
+/// File-backed implementation used during the P5 dual-write migration.
+pub(crate) struct FileUnifiedLedger {
+    path: PathBuf,
+}
+
+impl FileUnifiedLedger {
+    pub(crate) fn from_data_dir() -> OclaResult<Self> {
+        let data_dir = crate::core::data_dir::lean_ctx_data_dir()
+            .map_err(|error| OclaError::InvalidRequest(error.to_string()))?;
+        Ok(Self::new(data_dir.join("savings/unified_ledger.jsonl")))
+    }
+
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn io_error(error: impl std::fmt::Display) -> OclaError {
+        OclaError::InvalidRequest(format!("unified ledger I/O failed: {error}"))
+    }
+
+    fn read_events(&self) -> OclaResult<Vec<UnifiedSavingsEventV2>> {
+        let file = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Self::io_error(error)),
+        };
+        file.lock_shared().map_err(Self::io_error)?;
+        let result = (|| {
+            BufReader::new(&file)
+                .lines()
+                .map(|line| {
+                    let line = line.map_err(Self::io_error)?;
+                    serde_json::from_str(&line).map_err(Self::io_error)
+                })
+                .collect()
+        })();
+        let _ = file.unlock();
+        result
+    }
+
+    pub(crate) fn from_savings_event(event: &SavingsEvent) -> OclaResult<UnifiedSavingsEventV2> {
+        let timestamp_epoch_ms = chrono::DateTime::parse_from_rfc3339(&event.ts)
+            .map_err(Self::io_error)?
+            .timestamp_millis();
+        let timestamp_epoch_ms = u64::try_from(timestamp_epoch_ms)
+            .map_err(|error| Self::io_error(format!("invalid event timestamp: {error}")))?;
+
+        Ok(UnifiedSavingsEventV2 {
+            tool_name: event.tool.clone(),
+            mode: event.mechanism.clone(),
+            original_tokens: event.baseline_tokens,
+            compressed_tokens: event.actual_tokens,
+            saved_tokens: event.saved_tokens,
+            content_hash: event.repo_hash.clone(),
+            timestamp_epoch_ms,
+            prev_hash: event.prev_hash.clone(),
+            event_hash: event.entry_hash.clone(),
+            intent: event.intent_tag.clone(),
+            outcome: event.outcome.clone(),
+            routing_decision: event.model_routed.clone(),
+            agent_id: Some(event.agent_id.clone()),
+            efficiency_etpao: None,
+            attribution_id: event
+                .attribution_id
+                .clone()
+                .unwrap_or_else(|| event.repo_hash.clone()),
+        })
+    }
+}
+
+impl UnifiedLedger for FileUnifiedLedger {
+    fn record_unified(&self, event: UnifiedSavingsEventV2) -> OclaResult<String> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(Self::io_error)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(Self::io_error)?;
+        file.lock_exclusive().map_err(Self::io_error)?;
+        let result = (|| {
+            file.seek(SeekFrom::Start(0)).map_err(Self::io_error)?;
+            let mut last_hash = None;
+            for line in BufReader::new(&file).lines() {
+                let line = line.map_err(Self::io_error)?;
+                let previous: UnifiedSavingsEventV2 =
+                    serde_json::from_str(&line).map_err(Self::io_error)?;
+                last_hash = Some(previous.event_hash);
+            }
+            if event.prev_hash != last_hash.as_deref().unwrap_or("genesis") {
+                return Err(OclaError::InvalidRequest(
+                    "unified ledger chain link mismatch".into(),
+                ));
+            }
+            let line = serde_json::to_string(&event).map_err(Self::io_error)?;
+            file.seek(SeekFrom::End(0)).map_err(Self::io_error)?;
+            writeln!(file, "{line}").map_err(Self::io_error)?;
+            Ok(event.event_hash.clone())
+        })();
+        let _ = file.unlock();
+        result
+    }
+
+    fn verify_chain(&self) -> OclaResult<bool> {
+        let events = self.read_events()?;
+        Ok(events.iter().enumerate().all(|(index, event)| {
+            event.prev_hash
+                == if index == 0 {
+                    "genesis"
+                } else {
+                    events[index - 1].event_hash.as_str()
+                }
+        }))
+    }
+
+    fn query_by_attribution(&self, id: &str) -> OclaResult<Option<UnifiedSavingsEventV2>> {
+        Ok(self
+            .read_events()?
+            .into_iter()
+            .find(|event| event.attribution_id == id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +194,43 @@ mod tests {
         assert_eq!(event.saved_tokens, 600);
         assert_eq!(event.attribution_id, "attribution:test");
         assert_eq!(event.intent.as_deref(), Some("summarize"));
+    }
+
+    #[test]
+    fn file_ledger_records_verifies_and_queries_events() {
+        let path = std::env::temp_dir().join(format!(
+            "lean-ctx-unified-ledger-{}.jsonl",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let ledger = FileUnifiedLedger::new(path.clone());
+        let event = UnifiedSavingsEventV2 {
+            tool_name: "ctx_read".into(),
+            mode: "compression".into(),
+            original_tokens: 100,
+            compressed_tokens: 40,
+            saved_tokens: 60,
+            content_hash: "repo".into(),
+            timestamp_epoch_ms: 1,
+            prev_hash: "genesis".into(),
+            event_hash: "event-1".into(),
+            intent: None,
+            outcome: None,
+            routing_decision: None,
+            agent_id: Some("agent".into()),
+            efficiency_etpao: None,
+            attribution_id: "attr".into(),
+        };
+        assert_eq!(ledger.record_unified(event).unwrap(), "event-1");
+        assert!(ledger.verify_chain().unwrap());
+        assert_eq!(
+            ledger
+                .query_by_attribution("attr")
+                .unwrap()
+                .unwrap()
+                .saved_tokens,
+            60
+        );
+        let _ = fs::remove_file(path);
     }
 }

@@ -28,6 +28,8 @@ pub use store::{
 
 use std::sync::OnceLock;
 
+use crate::core::ocla::unified_ledger::{FileUnifiedLedger, UnifiedLedger};
+
 fn enabled() -> bool {
     enabled_from(std::env::var("LEAN_CTX_SAVINGS_LEDGER").ok().as_deref())
 }
@@ -162,6 +164,17 @@ fn new_event(tool: &str) -> SavingsEvent {
     }
 }
 
+fn append_with_unified(path: &std::path::Path, event: SavingsEvent) {
+    let Ok(event) = store::append(path, event) else {
+        return;
+    };
+    let unified = FileUnifiedLedger::from_savings_event(&event)
+        .and_then(|event| FileUnifiedLedger::from_data_dir()?.record_unified(event));
+    if let Err(error) = unified {
+        tracing::warn!(%error, "failed to dual-write unified savings event");
+    }
+}
+
 /// Best-effort append of one auditable savings event for a value-producing read.
 /// Skips zero-saving events (keeps the ledger meaningful and cheap) and never panics.
 pub fn record_read_event(original_tokens: usize, saved_tokens: usize) {
@@ -193,7 +206,7 @@ pub fn record_tool_event(tool: &str, baseline_tokens: usize, actual_tokens: usiz
     event.saved_tokens = saved as u64;
     event.saved_usd = saved as f64 / 1_000_000.0 * event.unit_price_per_m_usd;
     event.confidence = Some(1.0);
-    let _ = store::append(&path, event);
+    append_with_unified(&path, event);
 }
 
 /// Best-effort append of a *routing* savings event (enterprise#13/#19): the gateway served
@@ -236,7 +249,7 @@ pub fn record_routing_event(requested_model: &str, serving_model: &str, input_to
     // saved_tokens stays 0: routing saves dollars at equal tokens. Token
     // savings remain the compression mechanism's dimension.
     event.saved_usd = saved_usd;
-    let _ = store::append(&path, event);
+    append_with_unified(&path, event);
 }
 
 /// Best-effort append of a *caching* savings event: provider prompt-cache reads billed
@@ -258,7 +271,7 @@ pub fn record_caching_event(model: &str, cache_read_tokens: u64, discount_usd: f
     event.baseline_tokens = cache_read_tokens;
     event.actual_tokens = cache_read_tokens;
     event.saved_usd = discount_usd;
-    let _ = store::append(&path, event);
+    append_with_unified(&path, event);
 }
 
 /// Best-effort append of a *bounce* event (G7): a compressed read later invalidated by a
@@ -278,7 +291,7 @@ pub fn record_bounce_event(wasted_tokens: usize) {
     event.actual_tokens = wasted;
     event.bounce_adjustment = wasted;
     event.saved_usd = -(wasted as f64 / 1_000_000.0 * event.unit_price_per_m_usd);
-    let _ = store::append(&path, event);
+    append_with_unified(&path, event);
 }
 
 /// Total bounce-adjusted tokens recorded, optionally limited to the last `days` (by event
@@ -394,6 +407,9 @@ mod tests {
 
         let ledger = dir.join("savings").join("ledger.jsonl");
         let content = std::fs::read_to_string(&ledger).expect("ledger written");
+        let unified_path = dir.join("savings").join("unified_ledger.jsonl");
+        let unified_content =
+            std::fs::read_to_string(&unified_path).expect("unified ledger written");
         crate::test_env::remove_var("LEAN_CTX_DATA_DIR");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -410,6 +426,19 @@ mod tests {
         );
         assert_eq!(ev.evidence_class, Some(event::EvidenceClass::Measured));
         assert_eq!(ev.confidence, Some(1.0));
+
+        let unified: crate::core::ocla::unified_ledger::UnifiedSavingsEventV2 =
+            serde_json::from_str(unified_content.lines().next().unwrap()).unwrap();
+        assert_eq!(unified.tool_name, ev.tool);
+        assert_eq!(unified.mode, ev.mechanism);
+        assert_eq!(unified.original_tokens, ev.baseline_tokens);
+        assert_eq!(unified.compressed_tokens, ev.actual_tokens);
+        assert_eq!(unified.saved_tokens, ev.saved_tokens);
+        assert_eq!(unified.content_hash, ev.repo_hash);
+        assert_eq!(unified.prev_hash, ev.prev_hash);
+        assert_eq!(unified.event_hash, ev.entry_hash);
+        assert_eq!(unified.agent_id.as_deref(), Some(ev.agent_id.as_str()));
+        assert_eq!(unified.attribution_id, ev.repo_hash);
     }
 
     /// enterprise#19: a gateway route (requested ≠ serving) lands as a
