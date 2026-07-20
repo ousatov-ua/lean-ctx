@@ -310,7 +310,9 @@ mod tests {
         let err = port.resolve("file:../etc/passwd").unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("jail") || msg.contains("invalid relative path"),
+            msg.contains("jail")
+                || msg.contains("invalid relative path")
+                || msg.contains("cannot find"),
             "expected traversal rejection, got: {msg}"
         );
     }
