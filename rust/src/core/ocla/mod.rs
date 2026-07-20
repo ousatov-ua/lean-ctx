@@ -11,6 +11,8 @@ pub mod traits;
 pub mod types;
 pub mod unified_ledger;
 pub mod wire;
+#[cfg(feature = "http-server")]
+pub mod wire_api;
 
 pub use registry::OclaRegistry;
 pub use traits::*;
