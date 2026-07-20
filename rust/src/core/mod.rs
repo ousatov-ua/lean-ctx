@@ -376,6 +376,7 @@ pub mod error;
 pub mod events;
 pub mod eviction_orchestrator;
 pub mod evidence;
+pub mod evidence_classification;
 pub mod evidence_ledger;
 pub mod extension_registry;
 pub mod extractors;
