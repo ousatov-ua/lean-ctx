@@ -4,8 +4,8 @@
 //! events to OclaBus. Evidence references are content-addressed (blake3 of
 //! the evidence payload), ensuring deterministic, replay-safe identifiers.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::core::ocla::traits::{OclaService, SavingsLedger};
 use crate::core::ocla::types::{OclaCapability, OclaCapabilityKind, OclaResult, SavingsEvidence};
@@ -39,6 +39,47 @@ impl BuiltinSavingsLedger {
         }
         let saved = self.total_saved.load(Ordering::Relaxed);
         saved.saturating_mul(1000) / original
+    }
+
+    pub fn verify_evidence(&self, evidence_ref: &str) -> OclaResult<bool> {
+        if evidence_ref.trim().is_empty() {
+            return Ok(false);
+        }
+
+        let evidence = {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            entries
+                .iter()
+                .find(|entry| entry.evidence_ref == evidence_ref)
+                .cloned()
+        };
+        let Some(evidence) = evidence else {
+            return Ok(false);
+        };
+        if evidence.delivered_tokens > evidence.original_tokens {
+            return Ok(false);
+        }
+
+        let ledger_verification = crate::core::savings_ledger::verify();
+        if !ledger_verification.valid {
+            return Ok(false);
+        }
+
+        let saved = evidence.original_tokens - evidence.delivered_tokens;
+        if saved == 0 {
+            return Ok(true);
+        }
+
+        Ok(crate::core::savings_ledger::all_events()
+            .iter()
+            .any(|event| {
+                event.baseline_tokens == evidence.original_tokens
+                    && event.actual_tokens == evidence.delivered_tokens
+                    && event.saved_tokens == saved
+            }))
     }
 }
 
@@ -156,5 +197,26 @@ mod tests {
         ledger.record_savings(evidence(100, 100)).unwrap();
 
         assert!(!dir.path().join("savings").join("ledger.jsonl").exists());
+    }
+
+    #[test]
+    fn verifies_recorded_evidence() {
+        let _dir = crate::core::data_dir::isolated_data_dir();
+        let ledger = BuiltinSavingsLedger::new();
+        let ref_id = ledger.record_savings(evidence(1000, 250)).unwrap();
+
+        assert!(ledger.verify_evidence(&ref_id).unwrap());
+    }
+
+    #[test]
+    fn rejects_missing_and_inconsistent_evidence() {
+        let ledger = BuiltinSavingsLedger::new();
+        assert!(!ledger.verify_evidence("missing").unwrap());
+
+        let invalid = evidence(100, 200);
+        let ref_id = invalid.evidence_ref.clone();
+        ledger.entries.lock().unwrap().push(invalid);
+
+        assert!(!ledger.verify_evidence(&ref_id).unwrap());
     }
 }
