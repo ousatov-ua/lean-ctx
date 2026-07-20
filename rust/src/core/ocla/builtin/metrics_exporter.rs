@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use crate::core::ocla::traits::{MetricsExporter, OclaService};
 use crate::core::ocla::types::{MetricPoint, OclaCapability, OclaCapabilityKind, OclaResult};
 
-const MAX_POINTS_PER_METRIC: usize = 1024;
+const MAX_POINTS_PER_METRIC: usize = 1000;
 
 pub struct BuiltinMetricsExporter {
     state: Mutex<MetricsState>,
@@ -43,6 +43,25 @@ impl BuiltinMetricsExporter {
             })
             .unwrap_or_default()
     }
+
+    fn validate_metric_point(point: &MetricPoint) -> OclaResult<()> {
+        point.context.validate()?;
+        if point.name.trim().is_empty() {
+            return Err(crate::core::ocla::types::OclaError::InvalidRequest(
+                "metric name is required".into(),
+            ));
+        }
+        if point
+            .dimensions
+            .iter()
+            .any(|(key, value)| key.trim().is_empty() || value.trim().is_empty())
+        {
+            return Err(crate::core::ocla::types::OclaError::InvalidRequest(
+                "metric dimensions require non-empty keys and values".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for BuiltinMetricsExporter {
@@ -59,6 +78,15 @@ impl OclaService for BuiltinMetricsExporter {
 
 impl MetricsExporter for BuiltinMetricsExporter {
     fn export_metrics(&self, metrics: Vec<MetricPoint>) -> OclaResult<()> {
+        if metrics.is_empty() {
+            return Err(crate::core::ocla::types::OclaError::InvalidRequest(
+                "metric batch must not be empty".into(),
+            ));
+        }
+        for point in &metrics {
+            Self::validate_metric_point(point)?;
+        }
+
         let mut state = self
             .state
             .lock()
@@ -114,12 +142,36 @@ mod tests {
     }
 
     #[test]
-    fn bounded_per_metric() {
+    fn bounded_per_metric_fifo_eviction() {
         let exporter = BuiltinMetricsExporter::new();
-        let batch: Vec<_> = (0..1100).map(|i| point("x", i)).collect();
+        let batch: Vec<_> = (0..1001).map(|i| point("x", i)).collect();
         exporter.export_metrics(batch).unwrap();
 
         let recent = exporter.recent("x", 2000);
-        assert_eq!(recent.len(), MAX_POINTS_PER_METRIC);
+        assert_eq!(recent.len(), 1000);
+        assert_eq!(recent.first().unwrap().value_milli, 1);
+        assert_eq!(recent.last().unwrap().value_milli, 1000);
+    }
+
+    #[test]
+    fn rejects_empty_and_invalid_batches_without_partial_export() {
+        let exporter = BuiltinMetricsExporter::new();
+        assert!(matches!(
+            exporter.export_metrics(Vec::new()),
+            Err(crate::core::ocla::types::OclaError::InvalidRequest(message))
+                if message == "metric batch must not be empty"
+        ));
+
+        exporter.export_metrics(vec![point("latency", 1)]).unwrap();
+        let invalid = point("", 2);
+        assert!(matches!(
+            exporter.export_metrics(vec![point("latency", 2), invalid]),
+            Err(crate::core::ocla::types::OclaError::InvalidRequest(message))
+                if message == "metric name is required"
+        ));
+
+        let recent = exporter.recent("latency", 10);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].value_milli, 1);
     }
 }
