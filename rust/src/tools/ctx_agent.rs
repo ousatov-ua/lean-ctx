@@ -2,6 +2,7 @@ use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 use crate::core::a2a::task::TaskStore;
 use crate::core::agents::{AgentDiary, AgentRegistry, AgentStatus, DiaryEntryType};
 use crate::core::evidence_ledger::EvidenceLedgerV1;
+use crate::core::ocla::builtin::agent_gateway::BuiltinAgentGateway;
 
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
@@ -80,18 +81,16 @@ pub fn handle(
             if msg_privacy == PrivacyLevel::Private && to_agent.is_none() {
                 return "Error: private messages require to_agent".to_string();
             }
-            match AgentRegistry::mutate_locked(|registry| {
-                registry.post_message_full(
-                    from,
-                    to_agent,
-                    cat,
-                    msg,
-                    msg_privacy,
-                    msg_priority,
-                    _ttl_hours,
-                )
-            }) {
-                Ok((_, msg_id)) => {
+            match BuiltinAgentGateway::new().route_message(
+                from,
+                to_agent,
+                cat,
+                msg,
+                msg_privacy,
+                msg_priority,
+                _ttl_hours,
+            ) {
+                Ok(msg_id) => {
                     let target = to_agent.unwrap_or("all agents (broadcast)");
                     format!("Posted [{cat}] to {target}: {msg} (id: {msg_id})")
                 }
