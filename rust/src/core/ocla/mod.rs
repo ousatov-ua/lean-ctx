@@ -9,6 +9,7 @@ pub mod content_port;
 pub mod registry;
 pub mod traits;
 pub mod types;
+pub mod unified_ledger;
 pub mod wire;
 
 pub use registry::OclaRegistry;
