@@ -41,11 +41,7 @@ pub fn register(app: Command) -> Command {
                     .subcommand(
                         Command::new("query")
                             .about("List events by mechanism")
-                            .arg(
-                                clap::Arg::new("mechanism")
-                                    .long("mechanism")
-                                    .required(true),
-                            )
+                            .arg(clap::Arg::new("mechanism").long("mechanism").required(true))
                             .arg(
                                 clap::Arg::new("limit")
                                     .long("limit")
@@ -215,7 +211,10 @@ fn handle_ledger(matches: &ArgMatches) -> Result<()> {
                 .filter(|event| p5_presence(event).iter().any(|populated| *populated))
                 .count();
             println!("P5 coverage: {} events", events.len());
-            println!("Events with any P5 field: {events_with_p5}/{}", events.len());
+            println!(
+                "Events with any P5 field: {events_with_p5}/{}",
+                events.len()
+            );
             for (field, populated) in P5_FIELDS.iter().zip(p5_counts(&events)) {
                 println!("{field}: {populated}/{}", events.len());
             }

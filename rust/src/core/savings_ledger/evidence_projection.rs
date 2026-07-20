@@ -16,9 +16,9 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use serde::{Deserialize, Serialize};
 
-use super::event::{SavingsEvent, MECHANISM_CACHING, MECHANISM_COMPRESSION, MECHANISM_ROUTING};
-use super::store::GENESIS;
 use super::SignedSavingsBatchV1;
+use super::event::{MECHANISM_CACHING, MECHANISM_COMPRESSION, MECHANISM_ROUTING, SavingsEvent};
+use super::store::GENESIS;
 use crate::core::billing::settlement_evidence::{
     EvidenceStateV2, EvidenceTrustV2, SettlementEvidenceClaimV2, SettlementEvidenceClassV2,
     SettlementEvidenceItemV2, SettlementEvidenceManifestV2, SettlementPeriodV2,

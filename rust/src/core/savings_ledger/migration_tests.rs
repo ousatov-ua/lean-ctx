@@ -1,9 +1,9 @@
 use super::event::{
-    compute_hash, CustomerApproval, EvidenceClass, MeasurementMethod, SavingsEvent,
-    SettlementStatus, MECHANISM_COMPRESSION,
+    CustomerApproval, EvidenceClass, MECHANISM_COMPRESSION, MeasurementMethod, SavingsEvent,
+    SettlementStatus, compute_hash,
 };
 use super::store::{self, GENESIS};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 fn legacy_json() -> Value {

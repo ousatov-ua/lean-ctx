@@ -1,8 +1,7 @@
 //! Deterministic classification of savings evidence.
 
 use crate::core::savings_ledger::event::{
-    EvidenceClass, MeasurementMethod, MECHANISM_CACHING, MECHANISM_COMPRESSION,
-    MECHANISM_ROUTING,
+    EvidenceClass, MECHANISM_CACHING, MECHANISM_COMPRESSION, MECHANISM_ROUTING, MeasurementMethod,
 };
 
 /// Classify the measurement method and evidence strength for a savings event.
@@ -18,9 +17,7 @@ pub fn classify(
             MECHANISM_COMPRESSION if has_tokenizer_count => {
                 (MeasurementMethod::DirectCount, EvidenceClass::Measured)
             }
-            MECHANISM_COMPRESSION => {
-                (MeasurementMethod::DirectCount, EvidenceClass::Approximated)
-            }
+            MECHANISM_COMPRESSION => (MeasurementMethod::DirectCount, EvidenceClass::Approximated),
             MECHANISM_ROUTING => (
                 MeasurementMethod::BaselineEstimate,
                 EvidenceClass::Approximated,

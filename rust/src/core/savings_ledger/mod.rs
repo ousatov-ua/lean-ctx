@@ -14,16 +14,16 @@ pub mod store;
 #[cfg(test)]
 mod migration_tests;
 
-pub use event::{SavingsEvent, MECHANISM_CACHING, MECHANISM_COMPRESSION, MECHANISM_ROUTING};
+pub use event::{MECHANISM_CACHING, MECHANISM_COMPRESSION, MECHANISM_ROUTING, SavingsEvent};
 pub use evidence_projection::{
-    load_projection_artifact_v2, project_settlement_attribution_v2, LedgerAttributionLinkV2,
-    LedgerEvidenceProjectionV2, LedgerEvidenceSourceBindingV2, LedgerProjectionErrorV2,
-    VerifiedLedgerSnapshotV2,
+    LedgerAttributionLinkV2, LedgerEvidenceProjectionV2, LedgerEvidenceSourceBindingV2,
+    LedgerProjectionErrorV2, VerifiedLedgerSnapshotV2, load_projection_artifact_v2,
+    project_settlement_attribution_v2,
 };
-pub use roi::{roi_report, RoiReport};
+pub use roi::{RoiReport, roi_report};
 pub use signed_batch::{BatchVerifyResult, SignedSavingsBatchV1};
 pub use store::{
-    read_verified_snapshot_v2, LedgerSnapshotReadErrorV2, LedgerSummary, VerifyResult,
+    LedgerSnapshotReadErrorV2, LedgerSummary, VerifyResult, read_verified_snapshot_v2,
 };
 
 use std::sync::OnceLock;
