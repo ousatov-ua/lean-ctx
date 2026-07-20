@@ -106,7 +106,6 @@ impl LeanCtxServer {
             crate::core::savings_ledger::record_tool_event(tool, original, output_tokens);
         }
 
-
         // OCLA ObservationHook: project every MCP tool call as a structured
         // observation for the canonical observation capability.
         {

@@ -109,9 +109,7 @@ pub fn flush_if_due() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match guard.as_ref() {
-            Some((_, _, last_flush)) => {
-                last_flush.elapsed().as_secs() >= FLUSH_INTERVAL_SECS
-            }
+            Some((_, _, last_flush)) => last_flush.elapsed().as_secs() >= FLUSH_INTERVAL_SECS,
             None => false,
         }
     };

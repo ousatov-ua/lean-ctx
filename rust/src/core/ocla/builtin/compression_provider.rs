@@ -9,12 +9,12 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::core::compressor;
+use crate::core::ocla::OclaError;
 use crate::core::ocla::content_port::CompressionContentPort;
 use crate::core::ocla::traits::{CompressionProvider, OclaService};
 use crate::core::ocla::types::{
     CompressionRequest, CompressionResult, OclaCapability, OclaCapabilityKind, OclaResult,
 };
-use crate::core::ocla::OclaError;
 use crate::core::ocla_bus::{self, OclaEvent};
 
 static DEFAULT_PORT: OnceLock<CompressionContentPort> = OnceLock::new();
@@ -65,9 +65,9 @@ impl CompressionProvider for BuiltinCompressionProvider {
                     let compressed_tokens =
                         (compressed_bytes.len() as u64 / 4).min(request.target_tokens);
 
-                    let ref_key = port.persist(compressed_bytes).map_err(|e| {
-                        OclaError::InvalidRequest(format!("persist failed: {e}"))
-                    })?;
+                    let ref_key = port
+                        .persist(compressed_bytes)
+                        .map_err(|e| OclaError::InvalidRequest(format!("persist failed: {e}")))?;
 
                     (ref_key, compressed_tokens)
                 }
