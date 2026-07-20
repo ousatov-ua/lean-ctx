@@ -3,12 +3,12 @@
 //!
 //! Security invariants:
 //! - All reads go through PathJail (no traversal outside project root)
-//! - Symlinks rejected via lstat on every component of the relative path
+//! - Unix reads use descriptor-relative openat with O_NOFOLLOW per component
 //! - Reads are bounded to MAX_CONTENT_BYTES (prevents OOM on large files)
 //! - Persisted refs use BLAKE3 content-addressing (collision-resistant)
 
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -42,11 +42,21 @@ impl Default for ContentCache {
 }
 
 impl CompressionContentPort {
-    pub fn new(project_root: impl Into<PathBuf>) -> Self {
-        Self {
-            project_root: project_root.into(),
-            cache: Mutex::new(ContentCache::default()),
+    pub fn new(project_root: impl Into<PathBuf>) -> Option<Self> {
+        let project_root = project_root.into();
+        let metadata = fs::symlink_metadata(&project_root).ok()?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return None;
         }
+        let project_root = project_root.canonicalize().ok()?;
+        let metadata = fs::symlink_metadata(&project_root).ok()?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return None;
+        }
+        Some(Self {
+            project_root,
+            cache: Mutex::new(ContentCache::default()),
+        })
     }
 
     /// Resolve a `file:<relative_path>` ref to bounded bytes.
@@ -60,30 +70,10 @@ impl CompressionContentPort {
         let _jailed = pathjail::jail_path(Path::new(rel_path), &self.project_root)
             .map_err(|e| OclaError::InvalidRequest(format!("path jail: {e}")))?;
 
-        // Canonicalize root to handle /tmp → /private/tmp on macOS
-        let canonical_root = self
-            .project_root
-            .canonicalize()
-            .unwrap_or_else(|_| self.project_root.clone());
-
-        // Walk each component and reject symlinks via symlink_metadata (lstat)
-        let mut current = canonical_root.clone();
-        for component in Path::new(rel_path).components() {
-            current = current.join(component);
-            let meta = current
-                .symlink_metadata()
-                .map_err(|e| OclaError::InvalidRequest(format!("resolve: {e}")))?;
-            if meta.file_type().is_symlink() {
-                return Err(OclaError::InvalidRequest(format!(
-                    "symlink detected at: {}",
-                    component.as_os_str().to_string_lossy()
-                )));
-            }
-        }
-
-        // At this point, `current` is the final path with no symlinks traversed
-        let meta = current
-            .symlink_metadata()
+        let file = open_content_file(&self.project_root, rel_path)
+            .map_err(|e| OclaError::InvalidRequest(format!("open: {e}")))?;
+        let meta = file
+            .metadata()
             .map_err(|e| OclaError::InvalidRequest(format!("metadata: {e}")))?;
 
         if !meta.file_type().is_file() {
@@ -96,11 +86,9 @@ impl CompressionContentPort {
             )));
         }
 
-        let mut file = fs::File::open(&current)
-            .map_err(|e| OclaError::InvalidRequest(format!("open: {e}")))?;
-
         let mut data = Vec::with_capacity(meta.len() as usize);
-        file.read_to_end(&mut data)
+        file.take((MAX_CONTENT_BYTES + 1) as u64)
+            .read_to_end(&mut data)
             .map_err(|e| OclaError::InvalidRequest(format!("read: {e}")))?;
 
         if data.len() > MAX_CONTENT_BYTES {
@@ -161,6 +149,107 @@ impl CompressionContentPort {
     }
 }
 
+#[cfg(unix)]
+fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    fn normalize_open_error(error: io::Error) -> io::Error {
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            io::Error::other("symlink detected")
+        } else {
+            error
+        }
+    }
+
+    fn open_directory(parent: libc::c_int, name: &std::ffi::OsStr) -> io::Result<OwnedFd> {
+        let name = CString::new(name.as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+        let fd = unsafe {
+            libc::openat(
+                parent,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            Err(normalize_open_error(io::Error::last_os_error()))
+        } else {
+            Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+    }
+
+    fn open_root(root: &Path) -> io::Result<OwnedFd> {
+        let root_name = CString::new("/").expect("literal has no NUL");
+        let fd = unsafe {
+            libc::open(
+                root_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(normalize_open_error(io::Error::last_os_error()));
+        }
+        let mut current = unsafe { OwnedFd::from_raw_fd(fd) };
+        for component in root.components() {
+            if let std::path::Component::Normal(name) = component {
+                current = open_directory(current.as_raw_fd(), name)?;
+            }
+        }
+        Ok(current)
+    }
+
+    let mut components = Vec::new();
+    for component in Path::new(relative).components() {
+        match component {
+            std::path::Component::Normal(name) => components.push(name),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid relative path",
+                ));
+            }
+        }
+    }
+    let (last, parents) = components
+        .split_last()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty relative path"))?;
+    let mut parent = open_root(root)?;
+    for name in parents {
+        parent = open_directory(parent.as_raw_fd(), name)?;
+    }
+    let name = CString::new(last.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+    let fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(normalize_open_error(io::Error::last_os_error()));
+    }
+    Ok(fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+}
+
+#[cfg(not(unix))]
+fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
+    let mut current = root.to_path_buf();
+    for component in Path::new(relative).components() {
+        current.push(component);
+        let metadata = current.symlink_metadata()?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::other("symlink detected"));
+        }
+    }
+    fs::OpenOptions::new().read(true).open(current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,8 +257,33 @@ mod tests {
     fn make_port() -> (tempfile::TempDir, CompressionContentPort) {
         let dir = tempfile::tempdir().unwrap();
         let canonical = dir.path().canonicalize().unwrap();
-        let port = CompressionContentPort::new(canonical);
+        let port = CompressionContentPort::new(canonical).unwrap();
         (dir, port)
+    }
+
+    #[test]
+    fn new_rejects_missing_root() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(CompressionContentPort::new(dir.path().join("missing")).is_none());
+    }
+
+    #[test]
+    fn new_rejects_file_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("root-file");
+        fs::write(&file, b"not a directory").unwrap();
+        assert!(CompressionContentPort::new(file).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_rejects_symlink_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-root");
+        let link = dir.path().join("root-link");
+        fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(CompressionContentPort::new(link).is_none());
     }
 
     #[test]
@@ -235,6 +349,49 @@ mod tests {
             result.unwrap_err().to_string().contains("symlink"),
             "error should mention symlink"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_survives_intermediate_directory_symlink_race() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        use std::thread;
+
+        let (dir, port) = make_port();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = dir.path().join("outside");
+        let safe_a = root.join("safe-a");
+        let branch = root.join("branch");
+        fs::create_dir_all(&safe_a).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(safe_a.join("target.txt"), b"safe").unwrap();
+        fs::write(outside.join("target.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(&outside, &branch).unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let attacker_stop = Arc::clone(&stop);
+        let attacker = thread::spawn(move || {
+            while !attacker_stop.load(Ordering::Relaxed) {
+                let _ = fs::remove_dir(&branch);
+                let _ = fs::remove_file(&branch);
+                let _ = fs::rename(&safe_a, &branch);
+                let _ = fs::rename(&branch, &safe_a);
+                let _ = fs::remove_dir(&branch);
+                let _ = fs::remove_file(&branch);
+                let _ = std::os::unix::fs::symlink(&outside, &branch);
+            }
+        });
+
+        for _ in 0..2_000 {
+            if let Ok(data) = port.resolve("file:branch/target.txt") {
+                assert_eq!(data, b"safe");
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        attacker.join().unwrap();
     }
 
     #[test]
