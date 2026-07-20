@@ -58,8 +58,11 @@ impl BuiltinObservationHook {
             .unwrap_or(0)
             .min(original);
         let delivered = original.saturating_sub(saved);
-        
-        let ratio = saved.saturating_mul(1000).checked_div(original).unwrap_or(0);
+
+        let ratio = saved
+            .saturating_mul(1000)
+            .checked_div(original)
+            .unwrap_or(0);
 
         observation
             .attributes
@@ -190,6 +193,46 @@ mod tests {
         assert_eq!(stored.attributes[DELIVERED_TOKENS], "60");
         assert_eq!(stored.attributes[COMPRESSION_RATIO_MILLI], "400");
         assert_eq!(stored.context.content_ref, "file:src/observed.rs");
+    }
+
+    #[test]
+    fn observe_valid_input_is_returned_by_recent() {
+        let hook = BuiltinObservationHook::new();
+        let observation = Observation {
+            context: ctx("session-valid"),
+            name: "compression".into(),
+            attributes: BTreeMap::from([
+                (ORIGINAL_TOKENS.into(), "80".into()),
+                (SAVED_TOKENS.into(), "20".into()),
+            ]),
+        };
+
+        hook.observe(observation).unwrap();
+
+        let recent = hook.recent("session-valid", 1);
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].name, "compression");
+        assert_eq!(recent[0].attributes[DELIVERED_TOKENS], "60");
+        assert_eq!(recent[0].attributes[COMPRESSION_RATIO_MILLI], "250");
+    }
+
+    #[test]
+    fn observe_zero_tokens_reports_zero_ratio() {
+        let hook = BuiltinObservationHook::new();
+        let observation = Observation {
+            context: ctx("session-empty"),
+            name: "empty".into(),
+            attributes: BTreeMap::from([
+                (ORIGINAL_TOKENS.into(), "0".into()),
+                (SAVED_TOKENS.into(), "0".into()),
+            ]),
+        };
+
+        hook.observe(observation).unwrap();
+
+        let stored = hook.recent("session-empty", 1);
+        assert_eq!(stored[0].attributes[DELIVERED_TOKENS], "0");
+        assert_eq!(stored[0].attributes[COMPRESSION_RATIO_MILLI], "0");
     }
 
     #[test]

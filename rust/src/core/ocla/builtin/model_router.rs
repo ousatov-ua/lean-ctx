@@ -50,21 +50,24 @@ impl ModelRouter for BuiltinModelRouter {
             "messages": [{"role": "user", "content": request.context.content_ref}]
         });
         let routed = crate::proxy::model_router::route(&body, &self.rules);
-        let (model, provider, tier, model_changed) = routed.map_or_else(|| {
+        let (model, provider, tier, model_changed) = routed.map_or_else(
+            || {
                 (
                     requested_model.clone(),
                     infer_provider(&requested_model),
                     "standard".to_string(),
                     false,
                 )
-            }, |decision| {
+            },
+            |decision| {
                 let model = decision.routed_model;
                 let provider = decision
                     .routed_provider
                     .unwrap_or_else(|| infer_provider(&model));
                 let changed = decision.model_changed;
                 (model, provider, decision.tier, changed)
-            });
+            },
+        );
 
         ocla_bus::emit(OclaEvent::ModelRouted {
             requested_model: requested_model.clone(),
@@ -157,9 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_candidates_defaults() {
+    fn unknown_model_falls_back_to_default() {
         let router = BuiltinModelRouter::new();
         let decision = router.route_model(route_req(&[])).unwrap();
         assert_eq!(decision.model, "default");
+        assert_eq!(decision.provider, "unknown");
+        assert_eq!(decision.decision_ref, "route:r1");
     }
 }
