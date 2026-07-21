@@ -151,6 +151,7 @@ gateway-server = [
 shape-xlat = ["http-server"]
 secure-update = []
 experimental = []
+context_kernel = []
 cloud-server = [
   "http-server",
   "dep:deadpool-postgres",
@@ -493,3 +494,4 @@ harness = false
 [patch.crates-io]
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp" }
 rmcp-macros = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp-macros" }
+

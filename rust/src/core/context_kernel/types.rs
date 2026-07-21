@@ -141,21 +141,11 @@ pub enum ContextObjectKind {
 }
 
 /// Freshness metadata associated with a context object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Freshness {
     pub created_at: String,
     pub ttl_secs: Option<u64>,
     pub stale: bool,
-}
-
-impl Default for Freshness {
-    fn default() -> Self {
-        Self {
-            created_at: String::new(),
-            ttl_secs: None,
-            stale: false,
-        }
-    }
 }
 
 /// Access sensitivity assigned to a context object.

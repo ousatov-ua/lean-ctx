@@ -1,6 +1,5 @@
 //! Built-in candidate providers for the context control kernel.
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use crate::core::context_field::{ContextItemId, ContextState, Provenance, ViewCosts};
@@ -11,7 +10,10 @@ use crate::core::procedural_memory::{ProceduralStore, Procedure};
 use crate::core::session::SessionState;
 use crate::core::tokens::count_tokens;
 
-use super::types::*;
+use super::types::{
+    CandidateProvider, ContextObjectKind, ContextObjectV1, Freshness, RetrievalContext,
+    SensitivityLevel, SideEffectPolicy,
+};
 
 const KNOWLEDGE_PROVIDER: &str = "knowledge.facts";
 const SESSION_PROVIDER: &str = "session.state";
@@ -365,6 +367,7 @@ pub fn default_providers(project_root: &str) -> Vec<Box<dyn CandidateProvider>> 
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn context_object(
     id: ContextItemId,
     kind: ContextObjectKind,

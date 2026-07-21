@@ -1,7 +1,7 @@
 //! Runtime integration helpers for the Context Control Kernel.
 
 use super::orchestrator::ContextKernel;
-use super::types::*;
+use super::types::{ContextPlanV1, ContextReceiptV1, PlanEntry, ReceiptOutcome, RetrievalContext};
 
 /// Result of kernel enrichment for compose integration.
 #[derive(Debug, Clone)]
@@ -40,10 +40,11 @@ pub fn kernel_enrich(
         .filter(|entry| entry.provider != "context.ledger")
         .collect();
 
-    (!enrichments.is_empty()).then(|| KernelEnrichment {
-        blocks: format_enrichment_blocks(&enrichments),
-        plan,
-    })
+    if enrichments.is_empty() {
+        return None;
+    }
+    let blocks = format_enrichment_blocks(&enrichments);
+    Some(KernelEnrichment { plan, blocks })
 }
 
 fn format_enrichment_blocks(entries: &[&PlanEntry]) -> String {
@@ -155,7 +156,7 @@ pub fn format_plan_summary(plan: &ContextPlanV1) -> String {
     ));
 
     let mut providers: Vec<_> = plan.provider_stats.iter().collect();
-    providers.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    providers.sort_unstable_by_key(|(k, _)| *k);
     for (provider, stat) in providers {
         out.push_str(&format!(
             "  {provider}: {}/{} candidates, {} tokens\n",
@@ -169,6 +170,7 @@ pub fn format_plan_summary(plan: &ContextPlanV1) -> String {
 mod tests {
     use std::collections::HashMap;
 
+    use super::super::types::{PlanBudget, ProviderStat};
     use super::*;
 
     fn plan() -> ContextPlanV1 {

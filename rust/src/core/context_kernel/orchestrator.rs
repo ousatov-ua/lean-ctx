@@ -8,7 +8,11 @@ use crate::core::context_field::{
     normalize_token_cost,
 };
 
-use super::types::*;
+use super::types::{
+    CandidateProvider, ContextObjectKind, ContextObjectV1, ContextPlanV1, ContextReceiptV1,
+    ExcludedEntry, PlanBudget, PlanEntry, ProviderStat, QualitySignal, ReceiptOutcome,
+    RetrievalContext,
+};
 
 /// The Context Control Kernel — orchestrates candidate gathering, Phi scoring,
 /// budget-optimal selection, and plan/receipt generation.
@@ -109,7 +113,7 @@ impl ContextKernel {
 
 fn dedup_by_content_ref(objects: &mut Vec<ContextObjectV1>) {
     let mut retained = HashMap::<String, usize>::new();
-    let mut deduplicated = Vec::with_capacity(objects.len());
+    let mut deduplicated: Vec<ContextObjectV1> = Vec::with_capacity(objects.len());
     for object in objects.drain(..) {
         match retained.get(&object.content_ref).copied() {
             Some(index) if object.confidence > deduplicated[index].confidence => {
@@ -247,10 +251,10 @@ fn build_plan(
         .iter()
         .map(|item| ExcludedEntry {
             object_id: item.id.clone(),
-            provider: objects
-                .get(&item.id)
-                .map(|(object, _)| object.source.clone())
-                .unwrap_or_else(|| "unknown".to_string()),
+            provider: objects.get(&item.id).map_or_else(
+                || "unknown".to_string(),
+                |(object, _)| object.source.clone(),
+            ),
             reason: item.reason.clone(),
         })
         .collect();
@@ -314,6 +318,7 @@ fn receipt_outcome_name(outcome: ReceiptOutcome) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::{Freshness, SensitivityLevel, SideEffectPolicy};
     use std::collections::HashMap;
 
     use crate::core::context_field::{ContextItemId, TokenBudget, ViewCosts};
