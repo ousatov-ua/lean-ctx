@@ -8,6 +8,7 @@ pub mod builtin;
 pub mod content_port;
 pub mod openapi;
 pub mod registry;
+pub mod response_cache;
 pub mod sidecar;
 pub mod traits;
 pub mod types;
