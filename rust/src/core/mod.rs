@@ -153,6 +153,7 @@ pub mod context_proof;
 pub mod context_proof_v2;
 pub mod context_radar;
 pub mod context_snapshot;
+pub(crate) mod conversation_scorer;
 pub mod cross_source_edges;
 pub mod cross_source_hints;
 

@@ -143,6 +143,43 @@ pub struct ArchiveConfig {
     pub inline_max_bytes: usize,
 }
 
+/// Opt-in conversation-history compression settings (#1123).
+///
+/// The proxy leaves conversation history byte-for-byte unchanged unless
+/// `compression_enabled` is true and the configured token threshold is met.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConversationConfig {
+    /// Enable message-level compression in the proxy. Default: false.
+    pub compression_enabled: bool,
+    /// Number of recent user turns (and their following messages) to preserve.
+    pub preserve_last_n_turns: usize,
+    /// Minimum estimated message-array size before compression starts.
+    pub compression_threshold_tokens: usize,
+    /// Minimum score for verbatim preservation.
+    pub min_score_to_preserve: f64,
+    /// Inclusive lower bound and exclusive upper bound for summaries.
+    pub summarize_score_range: [f64; 2],
+    /// Scores below this value are eligible for drop + CCR.
+    pub drop_score_below: f64,
+    /// Store dropped messages in the content-addressed recovery store.
+    pub ccr_store_dropped: bool,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            compression_enabled: false,
+            preserve_last_n_turns: 10,
+            compression_threshold_tokens: 50_000,
+            min_score_to_preserve: 0.5,
+            summarize_score_range: [0.2, 0.5],
+            drop_score_below: 0.2,
+            ccr_store_dropped: true,
+        }
+    }
+}
+
 impl Default for ArchiveConfig {
     fn default() -> Self {
         Self {

@@ -144,6 +144,35 @@ impl Config {
         override_if_some!(proxy.openai_upstream);
         override_if_some!(proxy.chatgpt_upstream);
         override_if_some!(proxy.gemini_upstream);
+        // Conversation compression is comfort-only, so trusted and untrusted
+        // project configs may tune it. Merge only keys present under the
+        // dedicated table so an omitted key never resets the global value.
+        if let Ok(value) = local_toml.parse::<toml::Value>()
+            && let Some(table) = value.get("conversation").and_then(toml::Value::as_table)
+        {
+            if table.contains_key("compression_enabled") {
+                self.conversation.compression_enabled = local.conversation.compression_enabled;
+            }
+            if table.contains_key("preserve_last_n_turns") {
+                self.conversation.preserve_last_n_turns = local.conversation.preserve_last_n_turns;
+            }
+            if table.contains_key("compression_threshold_tokens") {
+                self.conversation.compression_threshold_tokens =
+                    local.conversation.compression_threshold_tokens;
+            }
+            if table.contains_key("min_score_to_preserve") {
+                self.conversation.min_score_to_preserve = local.conversation.min_score_to_preserve;
+            }
+            if table.contains_key("summarize_score_range") {
+                self.conversation.summarize_score_range = local.conversation.summarize_score_range;
+            }
+            if table.contains_key("drop_score_below") {
+                self.conversation.drop_score_below = local.conversation.drop_score_below;
+            }
+            if table.contains_key("ccr_store_dropped") {
+                self.conversation.ccr_store_dropped = local.conversation.ccr_store_dropped;
+            }
+        }
         override_if_false!(autonomy.enabled);
         override_if_false!(autonomy.auto_preload);
         override_if_false!(autonomy.auto_dedup);

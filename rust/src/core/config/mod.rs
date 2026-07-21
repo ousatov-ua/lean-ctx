@@ -136,6 +136,9 @@ pub struct Config {
     pub providers: ProvidersConfig,
     #[serde(default)]
     pub proxy: ProxyConfig,
+    /// Conversation-history compression (`[conversation]`, opt-in; #1123).
+    #[serde(default)]
+    pub conversation: ConversationConfig,
     /// Whether the API proxy is enabled. Tri-state:
     /// - None: undecided (fresh install, will prompt on interactive setup)
     /// - Some(true): user opted in, proxy managed by lean-ctx
@@ -743,6 +746,7 @@ impl Default for Config {
             autonomy: AutonomyConfig::default(),
             providers: ProvidersConfig::default(),
             proxy: ProxyConfig::default(),
+            conversation: ConversationConfig::default(),
             proxy_enabled: None,
             proxy_port: None,
             proxy_timeout_ms: None,

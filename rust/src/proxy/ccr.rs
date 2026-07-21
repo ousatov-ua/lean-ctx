@@ -51,7 +51,8 @@ const SHELL_TEE_HASH_LEN: usize = 8;
 /// `{state}/tee/{prefix}_{blake3(content)[..16]}.log`. Pure (no I/O) so a stub
 /// embedding it stays byte-stable regardless of filesystem state. `prefix`
 /// segregates the producer (`proxy` for history-prune / live-compression stubs,
-/// `json` for the JSON crusher's lossy originals, #936) yet keeps one shared
+/// `conv` for conversation history messages, `json` for the JSON crusher's
+/// lossy originals, #936) yet keeps one shared
 /// store + one resolver ([`resolve_tee`]).
 fn tee_path(content: &str, prefix: &str) -> Option<PathBuf> {
     let dir = crate::core::paths::state_dir().ok()?.join("tee");
@@ -88,6 +89,19 @@ fn maybe_cleanup(tee_dir: &Path) {
 /// content → same path → the existing file is left untouched.
 pub(crate) fn persist(content: &str) -> Option<String> {
     persist_with(content, "proxy")
+}
+
+/// Persist a dropped conversation message under a compact `conv_` handle.
+///
+/// Conversation messages may be short, so unlike tool-output tees this path has
+/// no minimum-size gate. The returned basename is sufficient for `ctx_expand` and
+/// avoids putting machine-specific absolute paths into provider prompts.
+pub(crate) fn persist_conversation(content: &str) -> Option<String> {
+    let path = persist_with_min(content, "conv", 1)?;
+    Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
 }
 
 /// Persist a JSON crusher's verbatim original (#936) under the `json_` prefix and
@@ -128,7 +142,11 @@ pub(crate) fn persist_html(content: &str) -> Option<String> {
 }
 
 fn persist_with(content: &str, prefix: &str) -> Option<String> {
-    if content.len() < MIN_TEE_BYTES {
+    persist_with_min(content, prefix, MIN_TEE_BYTES)
+}
+
+fn persist_with_min(content: &str, prefix: &str, min_bytes: usize) -> Option<String> {
+    if content.len() < min_bytes {
         return None;
     }
     let path = tee_path(content, prefix)?;
@@ -181,6 +199,9 @@ fn canonical_tee_name(name: &str) -> Option<String> {
     if let Some(hash) = stem.strip_prefix("proxy_") {
         return is_hex(hash, TEE_HASH_LEN).then(|| format!("proxy_{hash}.log"));
     }
+    if let Some(hash) = stem.strip_prefix("conv_") {
+        return is_hex(hash, TEE_HASH_LEN).then(|| format!("conv_{hash}.log"));
+    }
     if let Some(hash) = stem.strip_prefix("json_") {
         return is_hex(hash, TEE_HASH_LEN).then(|| format!("json_{hash}.log"));
     }
@@ -217,8 +238,9 @@ fn is_shell_tee_name(name: &str) -> bool {
 /// Accepts every handle form a stub or footer can carry, with a fixed precedence
 /// so the forms can never collide (#936):
 ///
-/// 1. **Prefix forms** — `proxy_<16hex>(.log)`, `json_<16hex>(.log)`,
-///    `tbl_<16hex>(.log)`, `yaml_<16hex>(.log)`, or a bare `<16hex>` (→ `proxy_`,
+/// 1. **Prefix forms** — `proxy_<16hex>(.log)`, `conv_<16hex>(.log)`,
+///    `json_<16hex>(.log)`, `tbl_<16hex>(.log)`, `yaml_<16hex>(.log)`, or a bare
+///    `<16hex>` (→ `proxy_`,
 ///    back-compat). The proxy history-prune / live stubs and the JSON / tabular /
 ///    YAML crushers' lossy originals.
 /// 2. **Shell-tee form** — `<slug>_<8hex>.log` (`save_tee`), so every compressed
@@ -433,6 +455,33 @@ mod tests {
             persist("too small to bother").is_none(),
             "below MIN_TEE_BYTES there is no handle (the caller keeps its plain stub)"
         );
+    }
+
+    #[test]
+    fn conversation_handle_is_compact_and_deterministic() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let a = persist_conversation("{\"role\":\"user\",\"content\":\"hello\"}")
+            .expect("conversation handle");
+        let b = persist_conversation("{\"role\":\"user\",\"content\":\"hello\"}")
+            .expect("conversation handle");
+        assert_eq!(a, b);
+        assert!(a.starts_with("conv_") && a.ends_with(".log"));
+    }
+
+    #[test]
+    fn conversation_handle_resolves_short_messages() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let handle = persist_conversation("short conversation message").expect("handle");
+        assert!(resolve_tee(&handle).is_some());
+    }
+
+    #[test]
+    fn conversation_original_is_recoverable() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let original = "{\"role\":\"tool\",\"content\":\"recover me\"}";
+        let handle = persist_conversation(original).expect("handle");
+        let path = resolve_tee(&handle).expect("resolved handle");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
     }
 
     #[test]
