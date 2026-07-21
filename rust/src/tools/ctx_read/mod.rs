@@ -342,7 +342,27 @@ pub fn handle_with_task(
     crp_mode: CrpMode,
     task: Option<&str>,
 ) -> String {
-    handle_with_options(cache, path, mode, false, crp_mode, task)
+    let mut result = handle_with_options(cache, path, mode, false, crp_mode, task);
+
+    // Context Kernel: enrich read with cross-store context when task is available
+    {
+        if let (Some(task_str), Some(project_root)) =
+            (task, crate::core::config::Config::find_project_root())
+        {
+            let kernel_budget = 200;
+            if let Some(enrichment) = crate::core::context_kernel::bridge::kernel_enrich(
+                task_str,
+                &project_root,
+                kernel_budget,
+            ) && !enrichment.blocks.is_empty()
+            {
+                result.push_str("\n--- kernel context ---\n");
+                result.push_str(&enrichment.blocks);
+            }
+        }
+    }
+
+    result
 }
 
 /// Like `handle_with_task`, also returns the resolved mode name and pre-counted tokens.
