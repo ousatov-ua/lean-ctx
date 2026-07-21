@@ -9,6 +9,7 @@ pub mod builtin;
 pub mod content_port;
 pub mod openapi;
 pub mod registry;
+pub mod response_cache;
 pub mod routing_quality;
 pub mod sidecar;
 pub mod traits;
