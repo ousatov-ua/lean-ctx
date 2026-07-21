@@ -15,6 +15,8 @@ use super::codec::{
 use super::connector::schedule_provider_connector;
 use super::intent::classify_and_store_proxy_intent;
 
+#[path = "forward_trace_id.rs"]
+mod trace_id;
 /// Header set by Headroom when it has already compressed the request.
 const HEADROOM_COMPRESSED_HEADER: &str = "x-headroom-compressed";
 
@@ -57,11 +59,15 @@ pub async fn forward_request(
     extra_stream_types: &[&str],
 ) -> Result<Response, StatusCode> {
     let (mut parts, body) = req.into_parts();
+    let trace_id = trace_id::extract_or_generate_trace_id(&parts.headers);
     let body_limit = super::bedrock::request_body_limit(&parts).unwrap_or_else(max_body_bytes);
     let body_bytes = axum::body::to_bytes(body, body_limit)
         .await
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
-    let lineage = super::lineage::from_trusted_request(&parts, &body_bytes);
+    let mut lineage = super::lineage::from_trusted_request(&parts, &body_bytes);
+    if let Some(context) = lineage.as_mut() {
+        context.trace_id.clone_from(&trace_id);
+    }
 
     // Org-policy gate (enterprise#25): under a signed + trusted + enforced org
     // policy, refuse models outside the ceiling and requests over a hard
@@ -82,13 +88,11 @@ pub async fn forward_request(
                 tags.person,
                 tags.project
             );
-            return Ok(super::policy_gate::refusal_response(
-                &refusal,
-                provider_label,
-            ));
+            let mut response = super::policy_gate::refusal_response(&refusal, provider_label);
+            trace_id::inject_trace_id(&mut response, &trace_id);
+            return Ok(response);
         }
     }
-
     // Active router (enterprise#13): may rewrite `model` in the parsed body
     // (before compression, so exactly one serialization) and re-target the
     // upstream within the same wire shape. Fail-open: any miss routes nothing.
@@ -118,12 +122,10 @@ pub async fn forward_request(
             super::routing::route_request(parsed, provider_label, up, &routing_rules, xlat_ok)
         })
     };
-
     if is_headroom_compressed(&parts) {
         super::anthropic::set_headroom_request(true);
         super::prefix_cache_stats::record_headroom_compat();
     }
-
     let prepared = prepare_request_body(
         &parts,
         &body_bytes,
@@ -140,7 +142,6 @@ pub async fn forward_request(
     let parsed = prepared.parsed;
     let _intent_classification =
         classify_and_store_proxy_intent(&mut parts, parsed.as_ref(), lineage.as_ref(), &body_bytes);
-
     // Apply the routing decision to the wire: re-target the upstream and — for
     // registry providers holding their own key — swap the credential headers.
     let upstream_base = route
@@ -160,13 +161,11 @@ pub async fn forward_request(
         let breakdown = super::introspect::analyze_request(parsed, provider);
         state.introspect.record(breakdown);
     }
-
     // #895 Track B: assign output-savings holdout from the same pristine parsed
     // body that each provider's compressor receives. Only when active.
     let cohort = parsed
         .as_ref()
         .and_then(|p| cohort_arm(p, provider_label, default_path));
-
     if compression_candidate {
         // Shape label drives compression/routing; stats identity may differ —
         // Grok registry routes speak OpenAI shape but meter under "Grok".
@@ -294,8 +293,7 @@ pub async fn forward_request(
     }
     wire.counterfactual = counterfactual;
     let wire = Some(wire);
-
-    build_response(
+    let mut response = build_response(
         response,
         extra_stream_types,
         usage_provider,
@@ -304,7 +302,9 @@ pub async fn forward_request(
         wire,
         xlat,
     )
-    .await
+    .await?;
+    trace_id::inject_trace_id(&mut response, &trace_id);
+    Ok(response)
 }
 
 /// Requested model for the policy gate (enterprise#25): from the JSON body
