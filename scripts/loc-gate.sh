@@ -8,23 +8,16 @@ set -euo pipefail
 LIMIT=1500
 FROZEN_LIMIT=2000
 
-# Legacy files awaiting their split (Wave C and later). Paths relative to repo root.
-ALLOWLIST=(
-  rust/src/core/config/mod.rs
-  rust/src/core/config/tests.rs
-  rust/src/shell/compress/tests.rs
-  rust/src/http_server/mod.rs
-  rust/src/http_server/team/mod.rs
-  rust/src/core/shell_allowlist/mod.rs
-  rust/src/core/shell_allowlist/tests.rs
-  rust/src/proxy/forward.rs
-)
+# Legacy files awaiting their split. Paths relative to repo root.
+# R12: all 8 files split below 1500 LOC — allowlist is now empty.
+ALLOWLIST=()
 
 cd "$(dirname "$0")/.."
 
 is_allowed() {
   local f=$1
-  for a in "${ALLOWLIST[@]}"; do
+  local a
+  for a in "${ALLOWLIST[@]+"${ALLOWLIST[@]}"}"; do
     [[ "$f" == "$a" ]] && return 0
   done
   return 1
@@ -45,7 +38,7 @@ while IFS= read -r file; do
 done < <(find rust/src -name '*.rs' -type f)
 
 # Ratchet: allowlisted files that dropped under LIMIT must leave the list.
-for a in "${ALLOWLIST[@]}"; do
+for a in "${ALLOWLIST[@]+"${ALLOWLIST[@]}"}"; do
   if [[ -f "$a" ]]; then
     lines=$(wc -l <"$a" | tr -d ' ')
     if ((lines <= LIMIT)); then
@@ -59,6 +52,7 @@ for a in "${ALLOWLIST[@]}"; do
 done
 
 if ((fail == 0)); then
-  echo "LOC gate OK: all non-allowlisted Rust files <= $LIMIT lines (${#ALLOWLIST[@]} legacy files frozen <= $FROZEN_LIMIT)"
+  n=${#ALLOWLIST[@]}
+  echo "LOC gate OK: all non-allowlisted Rust files <= $LIMIT lines ($n legacy files frozen <= $FROZEN_LIMIT)"
 fi
 exit "$fail"

@@ -173,6 +173,7 @@ impl Config {
                 self.conversation.ccr_store_dropped = local.conversation.ccr_store_dropped;
             }
         }
+        override_if_key_present!("response_shaping", response_shaping);
         override_if_false!(autonomy.enabled);
         override_if_false!(autonomy.auto_preload);
         override_if_false!(autonomy.auto_dedup);
