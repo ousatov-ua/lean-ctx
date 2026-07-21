@@ -12,12 +12,13 @@ use serde::{Deserialize, Serialize};
 
 /// OCLA deployment settings.
 ///
-/// This wrapper maps the TOML shape `[ocla.sidecar]`; the sidecar runtime
-/// type remains in `core::ocla::sidecar` so it can be used independently.
+/// This wrapper maps the TOML shape `[ocla.sidecar]` and `[ocla.grpc]`; the
+/// runtime types remain in `core::ocla` so they can be used independently.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OclaConfig {
     pub sidecar: crate::core::ocla::sidecar::SidecarConfig,
+    pub grpc: crate::core::ocla::grpc_bridge::GrpcConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1099,7 +1100,7 @@ mod gateway_server_tests {
 
 #[cfg(test)]
 mod ocla_tests {
-    use super::OclaConfig;
+    use super::{GrpcConfig, OclaConfig};
     use crate::core::ocla::sidecar::SidecarConfig;
     use serde::Deserialize;
 
@@ -1142,5 +1143,21 @@ mod ocla_tests {
             Some("/etc/lean-ctx/key.pem")
         );
         assert!(sidecar.enabled);
+    }
+
+    #[test]
+    fn nested_grpc_toml_deserializes() {
+        let config: ConfigFile = toml::from_str(
+            r#"
+                [ocla.grpc]
+                enabled = true
+                listen = "127.0.0.1:60051"
+            "#,
+        )
+        .expect("OCLA gRPC config");
+
+        assert_eq!(config.ocla.grpc.listen, "127.0.0.1:60051");
+        assert!(config.ocla.grpc.enabled);
+        assert_eq!(GrpcConfig::default().listen, "127.0.0.1:50051");
     }
 }

@@ -7,6 +7,7 @@
 pub mod budget;
 pub mod builtin;
 pub mod content_port;
+pub mod grpc_bridge;
 pub mod health;
 pub mod openapi;
 pub mod registry;
