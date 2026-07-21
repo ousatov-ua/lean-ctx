@@ -172,6 +172,7 @@ Build succeeded with warnings.\n\
 
 /// #848: temp redirect targets are allowed
 #[test]
+#[cfg(unix)]
 fn temp_redirect_target_allowed() {
     assert!(crate::tools::ctx_shell::is_temp_redirect_target(
         "/tmp/build.log"

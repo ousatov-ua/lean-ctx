@@ -9,15 +9,17 @@ LIMIT=1500
 FROZEN_LIMIT=2000
 
 # Legacy files awaiting their split. Paths relative to repo root.
-# R12: all 8 files split below 1500 LOC — allowlist is now empty.
-ALLOWLIST=(
-)
+# All files split below 1500 LOC — allowlist is now empty.
+ALLOWLIST=()
 
 cd "$(dirname "$0")/.."
 
 is_allowed() {
   local f=$1
-  for a in "${ALLOWLIST[@]+"${ALLOWLIST[@]}"}"; do
+  if ((${#ALLOWLIST[@]} == 0)); then
+    return 1
+  fi
+  for a in "${ALLOWLIST[@]}"; do
     [[ "$f" == "$a" ]] && return 0
   done
   return 1
@@ -38,21 +40,22 @@ while IFS= read -r file; do
 done < <(find rust/src -name '*.rs' -type f)
 
 # Ratchet: allowlisted files that dropped under LIMIT must leave the list.
-for a in "${ALLOWLIST[@]+"${ALLOWLIST[@]}"}"; do
-  if [[ -f "$a" ]]; then
-    lines=$(wc -l <"$a" | tr -d ' ')
-    if ((lines <= LIMIT)); then
-      echo "FAIL: $a is now $lines lines (<= $LIMIT) — remove it from the allowlist in scripts/loc-gate.sh"
+if ((${#ALLOWLIST[@]} > 0)); then
+  for a in "${ALLOWLIST[@]}"; do
+    if [[ -f "$a" ]]; then
+      lines=$(wc -l <"$a" | tr -d ' ')
+      if ((lines <= LIMIT)); then
+        echo "FAIL: $a is now $lines lines (<= $LIMIT) — remove it from the allowlist in scripts/loc-gate.sh"
+        fail=1
+      fi
+    else
+      echo "FAIL: allowlisted file $a no longer exists — remove it from scripts/loc-gate.sh"
       fail=1
     fi
-  else
-    echo "FAIL: allowlisted file $a no longer exists — remove it from scripts/loc-gate.sh"
-    fail=1
-  fi
-done
+  done
+fi
 
 if ((fail == 0)); then
-  count=${#ALLOWLIST[@]+"${#ALLOWLIST[@]}"}
-  echo "LOC gate OK: all non-allowlisted Rust files <= $LIMIT lines (${count:-0} legacy files frozen <= $FROZEN_LIMIT)"
+  echo "LOC gate OK: all non-allowlisted Rust files <= $LIMIT lines (${#ALLOWLIST[@]} legacy files frozen <= $FROZEN_LIMIT)"
 fi
 exit "$fail"

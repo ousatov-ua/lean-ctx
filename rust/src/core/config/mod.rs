@@ -93,6 +93,7 @@ pub const EDIT_TOOL_NAMES: &[&str] = &["ctx_edit", "ctx_patch"];
 /// `/private/tmp` is the canonical target behind macOS's `/tmp` symlink, while
 /// `temp_dir()` also covers per-user scratch directories such as `$TMPDIR`.
 pub(crate) fn default_shell_write_allow_paths() -> Vec<String> {
+    #[allow(unused_mut)]
     let mut paths = vec![std::env::temp_dir().to_string_lossy().into_owned()];
     #[cfg(unix)]
     for path in ["/tmp", "/private/tmp", "/var/tmp"] {

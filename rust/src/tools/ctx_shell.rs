@@ -523,6 +523,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn validate_allows_literal_temp_redirect_and_tee_targets() {
         let paths = crate::core::config::default_shell_write_allow_paths();
         assert!(
@@ -576,6 +577,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn validate_allows_configured_external_write_path() {
         let paths = vec!["/var/agent-scratch".to_string()];
         assert!(
