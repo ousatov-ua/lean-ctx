@@ -354,12 +354,11 @@ fn resolve_symbol_root(args: &Map<String, Value>, session_root: &str) -> String 
         .or_else(|| get_str(args, "file"))
         .filter(|p| std::path::Path::new(p.as_str()).is_absolute());
 
-    if let Some(abs_path) = candidate {
-        if let Some(detected) = crate::core::protocol::detect_project_root(&abs_path) {
-            if detected != session_root {
-                return detected;
-            }
-        }
+    if let Some(abs_path) = candidate
+        && let Some(detected) = crate::core::protocol::detect_project_root(&abs_path)
+        && detected != session_root
+    {
+        return detected;
     }
     session_root.to_string()
 }

@@ -105,10 +105,27 @@ const NATIVE_BASELINE_TOKENS_PER_TURN: u64 = 2400;
 
 /// Conservative provider prompt-cache hit rate. Anthropic achieves ~90% on
 /// stable prefixes (#498), OpenAI ~50%. Default 75% cross-provider estimate.
+/// Returns 0.0 when `--no-cache-adjust` is active (#1104).
 fn provider_cache_hit_rate() -> f64 {
+    if no_cache_adjust_active() {
+        return 0.0;
+    }
     crate::core::config::Config::load()
         .dashboard_cache_hit_rate()
         .unwrap_or(0.75)
+}
+
+// #1104: `--no-cache-adjust` forces cache_rate=0 (worst-case view).
+std::thread_local! {
+    static NO_CACHE_ADJUST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub fn set_no_cache_adjust(v: bool) {
+    NO_CACHE_ADJUST.with(|c| c.set(v));
+}
+
+fn no_cache_adjust_active() -> bool {
+    NO_CACHE_ADJUST.with(std::cell::Cell::get)
 }
 
 /// Net-of-injection reconciliation with baseline + cache corrections (#1104).

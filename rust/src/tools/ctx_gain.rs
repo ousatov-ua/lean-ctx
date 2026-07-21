@@ -258,6 +258,7 @@ pub fn format_deep_themed(model: Option<&str>, limit: usize) -> String {
     format_cost_themed(&engine, &t, lim, model, &mut out);
     format_agents_themed(&engine, &t, lim, &mut out);
     format_heatmap_themed(&engine, &t, lim, &mut out);
+    format_injection_methodology(&t, &mut out);
     out.join("\n")
 }
 
@@ -482,6 +483,83 @@ fn format_agents_themed(
     }
 
     out.push(sec_line(""));
+    out.push(format!("  {}", t.box_bottom_square(w)));
+}
+
+/// #1104: Injection methodology note for `gain --deep`. Explains the baseline
+/// subtraction and cache-rate correction so the net-of-injection figure is
+/// transparent.
+fn format_injection_methodology(t: &crate::core::theme::Theme, out: &mut Vec<String>) {
+    use crate::core::theme::{self, pad_right};
+    let rst = theme::rst();
+    let dim = theme::dim();
+    let w = 70;
+    let ss = t.box_side_square();
+    let row = |s: &str| -> String { format!("  {ss}{}{ss}", pad_right(s, w)) };
+
+    let overhead = crate::core::context_overhead::ContextOverhead::cached();
+    let cache_rate = crate::core::config::Config::load()
+        .dashboard_cache_hit_rate()
+        .unwrap_or(0.75);
+
+    out.push(String::new());
+    out.push(format!(
+        "  {}",
+        t.box_top_labeled(w, "INJECTION METHODOLOGY")
+    ));
+    out.push(row(""));
+    out.push(row(&format!(
+        " {dim}lean-ctx injects a fixed per-turn prefix (tool schemas +{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}instructions + rules). The net-of-injection figure corrects{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}for two factors that the gross overhead overstates:{rst}"
+    )));
+    out.push(row(""));
+    out.push(row(&format!(
+        " {dim}1. Baseline: native IDE tools (Read/Grep/Shell/Glob/Write){rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}   also inject ~2,400 tok/turn. Only the delta above that{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}   baseline is lean-ctx overhead.{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}2. Cache: providers cache stable prefixes (Anthropic ~90%,{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}   OpenAI ~50%). Effective cost = delta × (1 − cache_rate).{rst}"
+    )));
+    out.push(row(""));
+    out.push(row(&format!(" {dim}Current config:{rst}")));
+    out.push(row(&format!(
+        " {dim}  Total overhead:  {} tok/turn ({} tools){rst}",
+        overhead.total_tokens(),
+        overhead.tool_count
+    )));
+    out.push(row(&format!(
+        " {dim}  Native baseline: 2,400 tok/turn{rst}"
+    )));
+    out.push(row(&format!(
+        " {dim}  Delta:           {} tok/turn{rst}",
+        (overhead.total_tokens() as u64).saturating_sub(2400)
+    )));
+    out.push(row(&format!(
+        " {dim}  Cache hit rate:  {:.0}% (config: dashboard_cache_hit_rate){rst}",
+        cache_rate * 100.0
+    )));
+    out.push(row(&format!(
+        " {dim}  Effective cost:  {} tok/turn{rst}",
+        ((overhead.total_tokens() as u64).saturating_sub(2400) as f64 * (1.0 - cache_rate)) as u64
+    )));
+    out.push(row(""));
+    out.push(row(&format!(
+        " {dim}Worst-case (no cache): lean-ctx gain --no-cache-adjust{rst}"
+    )));
+    out.push(row(""));
     out.push(format!("  {}", t.box_bottom_square(w)));
 }
 

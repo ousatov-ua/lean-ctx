@@ -56,6 +56,10 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
     let copy = rest.iter().any(|a| a == "--copy");
     let open = rest.iter().any(|a| a == "--open");
 
+    if rest.iter().any(|a| a == "--no-cache-adjust") {
+        core::context_overhead::set_no_cache_adjust(true);
+    }
+
     if let Some(req) = unpublish_request(rest) {
         let id = match &req {
             UnpublishReq::Id(s) => Some(s.as_str()),
