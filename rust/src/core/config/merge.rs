@@ -39,30 +39,78 @@ impl Config {
                 );
             }
         }
-        if local.ultra_compact {
-            self.ultra_compact = true;
+
+        // Declarative merge helpers (#1080): every field below follows one of a
+        // handful of shapes (opt-in bool, opt-out bool, scalar-if-not-default,
+        // extend-list, replace-list, override-if-Some). Spelling each out by hand
+        // made `merge_local` an 800%-over-budget, 96-cognitive-complexity function
+        // where every new config field risked a copy-paste mistake. These macros
+        // encode the shape once; comparisons use `default` (a real `Config::default()`)
+        // instead of hand-copied literals, so they can never drift from the type's
+        // actual defaults.
+        macro_rules! override_if_true {
+            ($($field:tt)+) => {
+                if local.$($field)+ {
+                    self.$($field)+ = true;
+                }
+            };
         }
-        if local.tee_mode != TeeMode::default() {
-            self.tee_mode = local.tee_mode;
+        macro_rules! override_if_false {
+            ($($field:tt)+) => {
+                if !local.$($field)+ {
+                    self.$($field)+ = false;
+                }
+            };
         }
-        if local.recovery_hints != RecoveryHints::default() {
-            self.recovery_hints = local.recovery_hints;
+        macro_rules! override_if_ne {
+            ($default:expr, $($field:tt)+) => {
+                if local.$($field)+ != $default {
+                    self.$($field)+ = local.$($field)+;
+                }
+            };
         }
-        if local.output_density != OutputDensity::default() {
-            self.output_density = local.output_density;
+        macro_rules! override_if_some {
+            ($($field:tt)+) => {
+                if local.$($field)+.is_some() {
+                    self.$($field)+ = local.$($field)+;
+                }
+            };
         }
-        if local.checkpoint_interval != 15 {
-            self.checkpoint_interval = local.checkpoint_interval;
+        macro_rules! extend_if_nonempty {
+            ($($field:tt)+) => {
+                if !local.$($field)+.is_empty() {
+                    self.$($field)+.extend(local.$($field)+);
+                }
+            };
         }
-        if !local.excluded_commands.is_empty() {
-            self.excluded_commands.extend(local.excluded_commands);
+        macro_rules! replace_if_nonempty {
+            ($($field:tt)+) => {
+                if !local.$($field)+.is_empty() {
+                    self.$($field)+ = local.$($field)+;
+                }
+            };
         }
-        if !local.passthrough_urls.is_empty() {
-            self.passthrough_urls.extend(local.passthrough_urls);
+        // Only override when the local file actually defines the key, regardless
+        // of whether the deserialized value happens to equal the default (used
+        // for fields where "present but equal to default" must still win).
+        macro_rules! override_if_key_present {
+            ($key:literal, $($field:tt)+) => {
+                if local_toml.contains($key) {
+                    self.$($field)+ = local.$($field)+;
+                }
+            };
         }
-        if !local.custom_aliases.is_empty() {
-            self.custom_aliases.extend(local.custom_aliases);
-        }
+
+        let default = Config::default();
+
+        override_if_true!(ultra_compact);
+        override_if_ne!(default.tee_mode, tee_mode);
+        override_if_ne!(default.recovery_hints, recovery_hints);
+        override_if_ne!(default.output_density, output_density);
+        override_if_ne!(default.checkpoint_interval, checkpoint_interval);
+        extend_if_nonempty!(excluded_commands);
+        extend_if_nonempty!(passthrough_urls);
+        extend_if_nonempty!(custom_aliases);
         // Additive merge with dedup: project-local config can add formats on top
         // of the global default (`["toon"]`) without re-listing it.
         for fmt in local.preserve_compact_formats {
@@ -74,252 +122,157 @@ impl Config {
                 self.preserve_compact_formats.push(fmt);
             }
         }
-        if local.slow_command_threshold_ms != 5000 {
-            self.slow_command_threshold_ms = local.slow_command_threshold_ms;
-        }
-        if local.theme != "default" {
-            self.theme = local.theme;
-        }
-        if !local.buddy_enabled {
-            self.buddy_enabled = false;
-        }
-        if !local.enable_wakeup_ctx {
-            self.enable_wakeup_ctx = false;
-        }
-        if !local.redirect_exclude.is_empty() {
-            self.redirect_exclude.extend(local.redirect_exclude);
-        }
-        if !local.disabled_tools.is_empty() {
-            self.disabled_tools.extend(local.disabled_tools);
-        }
-        if local.prefer_native_editor {
-            self.prefer_native_editor = true;
-        }
-        if !local.extra_ignore_patterns.is_empty() {
-            self.extra_ignore_patterns
-                .extend(local.extra_ignore_patterns);
-        }
+        override_if_ne!(default.slow_command_threshold_ms, slow_command_threshold_ms);
+        override_if_ne!(default.theme, theme);
+        override_if_false!(buddy_enabled);
+        override_if_false!(enable_wakeup_ctx);
+        extend_if_nonempty!(redirect_exclude);
+        extend_if_nonempty!(disabled_tools);
+        override_if_true!(prefer_native_editor);
+        extend_if_nonempty!(extra_ignore_patterns);
         // Index filters (#735): repo-local excludes extend the global list; a
         // repo-local include set (the stricter, corpus-defining axis) replaces
         // the global one. Disabling gitignore respect is trust-gated (#833):
         // `strip_sensitive_overrides` resets it for untrusted workspaces.
-        if !local.index.exclude.is_empty() {
-            self.index.exclude.extend(local.index.exclude);
-        }
-        if !local.index.include.is_empty() {
-            self.index.include = local.index.include;
-        }
-        if !local.index.respect_gitignore {
-            self.index.respect_gitignore = false;
-        }
-        if local.rules_scope.is_some() {
-            self.rules_scope = local.rules_scope;
-        }
-        if local.rules_injection.is_some() {
-            self.rules_injection = local.rules_injection;
-        }
-        if local.permission_inheritance.is_some() {
-            self.permission_inheritance = local.permission_inheritance;
-        }
-        if local.proxy.anthropic_upstream.is_some() {
-            self.proxy.anthropic_upstream = local.proxy.anthropic_upstream;
-        }
-        if local.proxy.openai_upstream.is_some() {
-            self.proxy.openai_upstream = local.proxy.openai_upstream;
-        }
-        if local.proxy.chatgpt_upstream.is_some() {
-            self.proxy.chatgpt_upstream = local.proxy.chatgpt_upstream;
-        }
-        if local.proxy.gemini_upstream.is_some() {
-            self.proxy.gemini_upstream = local.proxy.gemini_upstream;
-        }
-        if !local.autonomy.enabled {
-            self.autonomy.enabled = false;
-        }
-        if !local.autonomy.auto_preload {
-            self.autonomy.auto_preload = false;
-        }
-        if !local.autonomy.auto_dedup {
-            self.autonomy.auto_dedup = false;
-        }
-        if !local.autonomy.auto_related {
-            self.autonomy.auto_related = false;
-        }
-        if !local.autonomy.auto_consolidate {
-            self.autonomy.auto_consolidate = false;
-        }
-        if local.autonomy.silent_preload {
-            self.autonomy.silent_preload = true;
-        }
-        if !local.autonomy.silent_preload && self.autonomy.silent_preload {
-            self.autonomy.silent_preload = false;
-        }
-        if local.autonomy.dedup_threshold != AutonomyConfig::default().dedup_threshold {
-            self.autonomy.dedup_threshold = local.autonomy.dedup_threshold;
-        }
-        if local.autonomy.consolidate_every_calls
-            != AutonomyConfig::default().consolidate_every_calls
-        {
-            self.autonomy.consolidate_every_calls = local.autonomy.consolidate_every_calls;
-        }
-        if local.autonomy.consolidate_cooldown_secs
-            != AutonomyConfig::default().consolidate_cooldown_secs
-        {
-            self.autonomy.consolidate_cooldown_secs = local.autonomy.consolidate_cooldown_secs;
-        }
-        if !local.autonomy.cognition_loop_enabled {
-            self.autonomy.cognition_loop_enabled = false;
-        }
-        if local.autonomy.cognition_loop_interval_secs
-            != AutonomyConfig::default().cognition_loop_interval_secs
-        {
-            self.autonomy.cognition_loop_interval_secs =
-                local.autonomy.cognition_loop_interval_secs;
-        }
-        if local.autonomy.cognition_loop_max_steps
-            != AutonomyConfig::default().cognition_loop_max_steps
-        {
-            self.autonomy.cognition_loop_max_steps = local.autonomy.cognition_loop_max_steps;
-        }
-        if local_toml.contains("compression_level") {
-            self.compression_level = local.compression_level;
-        }
-        if local_toml.contains("compression_aggressiveness") {
-            self.compression_aggressiveness = local.compression_aggressiveness;
-        }
-        if local_toml.contains("terse_agent") {
-            self.terse_agent = local.terse_agent;
-        }
-        if !local.archive.enabled {
-            self.archive.enabled = false;
-        }
-        if local.archive.threshold_chars != ArchiveConfig::default().threshold_chars {
-            self.archive.threshold_chars = local.archive.threshold_chars;
-        }
-        if local.archive.max_age_hours != ArchiveConfig::default().max_age_hours {
-            self.archive.max_age_hours = local.archive.max_age_hours;
-        }
-        if local.archive.max_disk_mb != ArchiveConfig::default().max_disk_mb {
-            self.archive.max_disk_mb = local.archive.max_disk_mb;
-        }
-        if !local.archive.ephemeral {
-            self.archive.ephemeral = false;
-        }
-        if local.archive.ephemeral_min_tokens != ArchiveConfig::default().ephemeral_min_tokens {
-            self.archive.ephemeral_min_tokens = local.archive.ephemeral_min_tokens;
-        }
-        let mem_def = MemoryPolicy::default();
-        if local.memory.knowledge.max_facts != mem_def.knowledge.max_facts {
-            self.memory.knowledge.max_facts = local.memory.knowledge.max_facts;
-        }
-        if local.memory.knowledge.max_patterns != mem_def.knowledge.max_patterns {
-            self.memory.knowledge.max_patterns = local.memory.knowledge.max_patterns;
-        }
-        if local.memory.knowledge.max_history != mem_def.knowledge.max_history {
-            self.memory.knowledge.max_history = local.memory.knowledge.max_history;
-        }
-        if local.memory.knowledge.contradiction_threshold
-            != mem_def.knowledge.contradiction_threshold
-        {
-            self.memory.knowledge.contradiction_threshold =
-                local.memory.knowledge.contradiction_threshold;
-        }
-
-        if local.memory.episodic.max_episodes != mem_def.episodic.max_episodes {
-            self.memory.episodic.max_episodes = local.memory.episodic.max_episodes;
-        }
-        if local.memory.episodic.max_actions_per_episode != mem_def.episodic.max_actions_per_episode
-        {
-            self.memory.episodic.max_actions_per_episode =
-                local.memory.episodic.max_actions_per_episode;
-        }
-        if local.memory.episodic.summary_max_chars != mem_def.episodic.summary_max_chars {
-            self.memory.episodic.summary_max_chars = local.memory.episodic.summary_max_chars;
-        }
-
-        if local.memory.procedural.min_repetitions != mem_def.procedural.min_repetitions {
-            self.memory.procedural.min_repetitions = local.memory.procedural.min_repetitions;
-        }
-        if local.memory.procedural.min_sequence_len != mem_def.procedural.min_sequence_len {
-            self.memory.procedural.min_sequence_len = local.memory.procedural.min_sequence_len;
-        }
-        if local.memory.procedural.max_procedures != mem_def.procedural.max_procedures {
-            self.memory.procedural.max_procedures = local.memory.procedural.max_procedures;
-        }
-        if local.memory.procedural.max_window_size != mem_def.procedural.max_window_size {
-            self.memory.procedural.max_window_size = local.memory.procedural.max_window_size;
-        }
-
-        if local.memory.lifecycle.decay_rate != mem_def.lifecycle.decay_rate {
-            self.memory.lifecycle.decay_rate = local.memory.lifecycle.decay_rate;
-        }
-        if local.memory.lifecycle.low_confidence_threshold
-            != mem_def.lifecycle.low_confidence_threshold
-        {
-            self.memory.lifecycle.low_confidence_threshold =
-                local.memory.lifecycle.low_confidence_threshold;
-        }
-        if local.memory.lifecycle.stale_days != mem_def.lifecycle.stale_days {
-            self.memory.lifecycle.stale_days = local.memory.lifecycle.stale_days;
-        }
-        if local.memory.lifecycle.similarity_threshold != mem_def.lifecycle.similarity_threshold {
-            self.memory.lifecycle.similarity_threshold =
-                local.memory.lifecycle.similarity_threshold;
-        }
-        if local.memory.lifecycle.reclaim_headroom_pct != mem_def.lifecycle.reclaim_headroom_pct {
-            self.memory.lifecycle.reclaim_headroom_pct =
-                local.memory.lifecycle.reclaim_headroom_pct;
-        }
-        if local.memory.lifecycle.reclaim_enabled != mem_def.lifecycle.reclaim_enabled {
-            self.memory.lifecycle.reclaim_enabled = local.memory.lifecycle.reclaim_enabled;
-        }
-
-        if local.memory.embeddings.max_facts != mem_def.embeddings.max_facts {
-            self.memory.embeddings.max_facts = local.memory.embeddings.max_facts;
-        }
-        if !local.allow_paths.is_empty() {
-            self.allow_paths.extend(local.allow_paths);
-        }
-        if !local.extra_roots.is_empty() {
-            self.extra_roots.extend(local.extra_roots);
-        }
+        extend_if_nonempty!(index.exclude);
+        replace_if_nonempty!(index.include);
+        override_if_false!(index.respect_gitignore);
+        override_if_some!(rules_scope);
+        override_if_some!(rules_injection);
+        override_if_some!(permission_inheritance);
+        override_if_some!(proxy.anthropic_upstream);
+        override_if_some!(proxy.openai_upstream);
+        override_if_some!(proxy.chatgpt_upstream);
+        override_if_some!(proxy.gemini_upstream);
+        override_if_false!(autonomy.enabled);
+        override_if_false!(autonomy.auto_preload);
+        override_if_false!(autonomy.auto_dedup);
+        override_if_false!(autonomy.auto_related);
+        override_if_false!(autonomy.auto_consolidate);
+        // Equivalent to an unconditional `self.autonomy.silent_preload =
+        // local.autonomy.silent_preload` (the original two-branch form always
+        // reduced to this regardless of `local`'s value); kept as a plain
+        // assignment rather than an opt-in/opt-out macro since it is neither.
+        self.autonomy.silent_preload = local.autonomy.silent_preload;
+        override_if_ne!(default.autonomy.dedup_threshold, autonomy.dedup_threshold);
+        override_if_ne!(
+            default.autonomy.consolidate_every_calls,
+            autonomy.consolidate_every_calls
+        );
+        override_if_ne!(
+            default.autonomy.consolidate_cooldown_secs,
+            autonomy.consolidate_cooldown_secs
+        );
+        override_if_false!(autonomy.cognition_loop_enabled);
+        override_if_ne!(
+            default.autonomy.cognition_loop_interval_secs,
+            autonomy.cognition_loop_interval_secs
+        );
+        override_if_ne!(
+            default.autonomy.cognition_loop_max_steps,
+            autonomy.cognition_loop_max_steps
+        );
+        override_if_key_present!("compression_level", compression_level);
+        override_if_key_present!("compression_aggressiveness", compression_aggressiveness);
+        override_if_key_present!("terse_agent", terse_agent);
+        override_if_false!(archive.enabled);
+        override_if_ne!(default.archive.threshold_chars, archive.threshold_chars);
+        override_if_ne!(default.archive.max_age_hours, archive.max_age_hours);
+        override_if_ne!(default.archive.max_disk_mb, archive.max_disk_mb);
+        override_if_false!(archive.ephemeral);
+        override_if_ne!(
+            default.archive.ephemeral_min_tokens,
+            archive.ephemeral_min_tokens
+        );
+        override_if_ne!(
+            default.memory.knowledge.max_facts,
+            memory.knowledge.max_facts
+        );
+        override_if_ne!(
+            default.memory.knowledge.max_patterns,
+            memory.knowledge.max_patterns
+        );
+        override_if_ne!(
+            default.memory.knowledge.max_history,
+            memory.knowledge.max_history
+        );
+        override_if_ne!(
+            default.memory.knowledge.contradiction_threshold,
+            memory.knowledge.contradiction_threshold
+        );
+        override_if_ne!(
+            default.memory.episodic.max_episodes,
+            memory.episodic.max_episodes
+        );
+        override_if_ne!(
+            default.memory.episodic.max_actions_per_episode,
+            memory.episodic.max_actions_per_episode
+        );
+        override_if_ne!(
+            default.memory.episodic.summary_max_chars,
+            memory.episodic.summary_max_chars
+        );
+        override_if_ne!(
+            default.memory.procedural.min_repetitions,
+            memory.procedural.min_repetitions
+        );
+        override_if_ne!(
+            default.memory.procedural.min_sequence_len,
+            memory.procedural.min_sequence_len
+        );
+        override_if_ne!(
+            default.memory.procedural.max_procedures,
+            memory.procedural.max_procedures
+        );
+        override_if_ne!(
+            default.memory.procedural.max_window_size,
+            memory.procedural.max_window_size
+        );
+        override_if_ne!(
+            default.memory.lifecycle.decay_rate,
+            memory.lifecycle.decay_rate
+        );
+        override_if_ne!(
+            default.memory.lifecycle.low_confidence_threshold,
+            memory.lifecycle.low_confidence_threshold
+        );
+        override_if_ne!(
+            default.memory.lifecycle.stale_days,
+            memory.lifecycle.stale_days
+        );
+        override_if_ne!(
+            default.memory.lifecycle.similarity_threshold,
+            memory.lifecycle.similarity_threshold
+        );
+        override_if_ne!(
+            default.memory.lifecycle.reclaim_headroom_pct,
+            memory.lifecycle.reclaim_headroom_pct
+        );
+        override_if_ne!(
+            default.memory.lifecycle.reclaim_enabled,
+            memory.lifecycle.reclaim_enabled
+        );
+        override_if_ne!(
+            default.memory.embeddings.max_facts,
+            memory.embeddings.max_facts
+        );
+        extend_if_nonempty!(allow_paths);
+        extend_if_nonempty!(extra_roots);
         // Project-local config may only ADD read-only roots (tighten the write
         // boundary), never remove them — merge mirrors extra_roots (#475).
-        if !local.read_only_roots.is_empty() {
-            self.read_only_roots.extend(local.read_only_roots);
-        }
+        extend_if_nonempty!(read_only_roots);
         // Symlink write-through roots (#596) follow extra_roots: a *trusted*
         // workspace may add roots, an untrusted one is stripped above.
-        if !local.allow_symlink_roots.is_empty() {
-            self.allow_symlink_roots.extend(local.allow_symlink_roots);
-        }
-        if local.minimal_overhead {
-            self.minimal_overhead = true;
-        }
-        if local.shell_hook_disabled {
-            self.shell_hook_disabled = true;
-        }
-        if local.skip_agent_aliases {
-            self.skip_agent_aliases = true;
-        }
-        if local.shell_activation != ShellActivation::default() {
-            self.shell_activation = local.shell_activation.clone();
-        }
-        if local.read_redirect != ReadRedirect::default() {
-            self.read_redirect = local.read_redirect;
-        }
-        if local.read_dedup != ReadDedup::default() {
-            self.read_dedup = local.read_dedup;
-        }
-        if local.bm25_max_cache_mb != default_bm25_max_cache_mb() {
-            self.bm25_max_cache_mb = local.bm25_max_cache_mb;
-        }
-        if local.memory_profile != MemoryProfile::default() {
-            self.memory_profile = local.memory_profile;
-        }
-        if local.memory_cleanup != MemoryCleanup::default() {
-            self.memory_cleanup = local.memory_cleanup;
-        }
+        extend_if_nonempty!(allow_symlink_roots);
+        override_if_true!(minimal_overhead);
+        override_if_true!(shell_hook_disabled);
+        override_if_true!(skip_agent_aliases);
+        override_if_ne!(default.shell_activation, shell_activation);
+        override_if_ne!(default.read_redirect, read_redirect);
+        override_if_ne!(default.read_dedup, read_dedup);
+        override_if_ne!(default.bm25_max_cache_mb, bm25_max_cache_mb);
+        override_if_ne!(default.memory_profile, memory_profile);
+        override_if_ne!(default.memory_cleanup, memory_cleanup);
         // Only override when the local file actually defines `shell_allowlist`.
         // The field carries `#[serde(default = "default_shell_allowlist")]`, so a
         // local `.lean-ctx.toml` that omits the key still deserializes to the full
@@ -327,33 +280,14 @@ impl Config {
         // a deliberately shorter global allowlist with the defaults. Comparing against
         // the default (the same pattern used for every other merged field) treats
         // "omitted" as "no override".
-        if local.shell_allowlist != default_shell_allowlist() {
-            self.shell_allowlist = local.shell_allowlist;
-        }
-        if !local.shell_allowlist_extra.is_empty() {
-            self.shell_allowlist_extra
-                .extend(local.shell_allowlist_extra);
-        }
-        if !local.default_tool_categories.is_empty() {
-            self.default_tool_categories = local.default_tool_categories;
-        }
-        if local.tool_profile.is_some() {
-            self.tool_profile = local.tool_profile;
-        }
-        if !local.tools_enabled.is_empty() {
-            self.tools_enabled = local.tools_enabled;
-        }
-        if local.no_degrade {
-            self.no_degrade = true;
-        }
-        if local.delta_explicit {
-            self.delta_explicit = true;
-        }
-        if local.profile.is_some() {
-            self.profile = local.profile;
-        }
-        if local.proxy_timeout_ms.is_some() {
-            self.proxy_timeout_ms = local.proxy_timeout_ms;
-        }
+        override_if_ne!(default.shell_allowlist, shell_allowlist);
+        extend_if_nonempty!(shell_allowlist_extra);
+        replace_if_nonempty!(default_tool_categories);
+        override_if_some!(tool_profile);
+        replace_if_nonempty!(tools_enabled);
+        override_if_true!(no_degrade);
+        override_if_true!(delta_explicit);
+        override_if_some!(profile);
+        override_if_some!(proxy_timeout_ms);
     }
 }
