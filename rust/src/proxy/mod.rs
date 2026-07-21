@@ -100,6 +100,7 @@ pub struct ProxyState {
     pub port: u16,
     pub stats: Arc<ProxyStats>,
     pub introspect: Arc<introspect::IntrospectState>,
+    pub ocla_cache: Option<Arc<ocla_cache_bridge::OclaCacheBridge>>,
     /// Live provider upstreams, refreshed from config.toml without a proxy
     /// restart (#449). Read per request via [`ProxyState::openai_upstream`] etc.
     pub upstreams: tokio::sync::watch::Receiver<Arc<Upstreams>>,
@@ -135,6 +136,7 @@ impl ProxyState {
             port: 0,
             stats: Arc::new(ProxyStats::default()),
             introspect: Arc::new(introspect::IntrospectState::default()),
+            ocla_cache: None,
             upstreams: rx,
             chatgpt_cookies: chatgpt_cookies::shared_chatgpt_cloudflare_cookie_store(),
             mcp_servers: Arc::new(mcp_servers),
@@ -535,6 +537,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
         port,
         stats: Arc::new(ProxyStats::default()),
         introspect: Arc::new(introspect::IntrospectState::default()),
+        ocla_cache: None,
         upstreams: upstream_rx,
         chatgpt_cookies,
         mcp_servers: mcp_servers.clone(),

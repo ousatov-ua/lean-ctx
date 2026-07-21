@@ -186,6 +186,14 @@ pub async fn forward_request(
         .as_ref()
         .and_then(|v| v.get("model"))
         .and_then(|m| m.as_str());
+    let cache_prompt_hash = super::ocla_cache_bridge::prompt_hash(&body_bytes);
+    if let (Some(cache), Some(model)) = (&state.ocla_cache, model) {
+        if let Some(body) = cache.try_cache_hit(model, &cache_prompt_hash, 0.0, 0) {
+            let mut response = Response::new(Body::from(body));
+            trace_id::inject_trace_id(&mut response, &trace_id);
+            return Ok(response);
+        }
+    }
     super::cost::record(
         model,
         tokens_saved,
@@ -301,6 +309,9 @@ pub async fn forward_request(
         cohort,
         wire,
         xlat,
+        state.ocla_cache.as_deref(),
+        model,
+        &cache_prompt_hash,
     )
     .await?;
     trace_id::inject_trace_id(&mut response, &trace_id);
@@ -735,6 +746,9 @@ async fn build_response(
     cohort: Option<super::holdout::Arm>,
     wire: Option<Box<super::usage::WireContext>>,
     xlat: bool,
+    cache: Option<&super::ocla_cache_bridge::OclaCacheBridge>,
+    model: Option<&str>,
+    cache_prompt_hash: &str,
 ) -> Result<Response, StatusCode> {
     let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::OK);
     let resp_headers = response.headers().clone();
@@ -823,6 +837,16 @@ async fn build_response(
     } else {
         resp_bytes.to_vec()
     };
+    if let (Some(cache), Some(model)) = (cache, model) {
+        cache.record_response(
+            model,
+            cache_prompt_hash,
+            0.0,
+            0,
+            &resp_bytes,
+            measured_output_tokens,
+        );
+    }
 
     let mut resp = Response::builder().status(status);
     for (k, v) in &resp_headers {
@@ -1493,5 +1517,11 @@ mod tests {
             cohort_arm(&body, "ChatGPT", "/backend-api/codex/responses"),
             cohort_arm(&body, "OpenAI", "/v1/responses")
         );
+    }
+
+    #[test]
+    fn cache_prompt_hash_is_content_sensitive() {
+        let hash = super::super::ocla_cache_bridge::prompt_hash;
+        assert_ne!(hash(b"one"), hash(b"two"));
     }
 }
