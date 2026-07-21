@@ -1,13 +1,19 @@
 //! Bounded in-memory cache for identical model responses.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Maximum number of responses retained by a response cache.
 pub const MAX_ENTRIES: usize = 512;
 /// Default lifetime for a cached response.
 pub const DEFAULT_TTL: Duration = Duration::from_mins(5);
+
+static GLOBAL_RESPONSE_CACHE: OnceLock<ResponseCache> = OnceLock::new();
+
+pub(crate) fn global_response_cache() -> &'static ResponseCache {
+    GLOBAL_RESPONSE_CACHE.get_or_init(ResponseCache::default)
+}
 
 /// Stable cache key derived from response-defining request fields.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -144,6 +150,7 @@ impl ResponseCache {
         let state = self.lock_state();
         let total = state.hits + state.misses;
         CacheStats {
+            entries: state.entries.len(),
             hits: state.hits,
             misses: state.misses,
             evictions: state.evictions,
@@ -173,6 +180,7 @@ fn remove_expired(entries: &mut VecDeque<(ResponseCacheKey, CachedResponse)>, no
 /// Snapshot of cache activity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CacheStats {
+    pub entries: usize,
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,

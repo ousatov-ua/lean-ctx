@@ -77,6 +77,10 @@ impl SpanCollector {
             .cloned()
             .collect()
     }
+
+    pub(crate) fn span_count(&self) -> usize {
+        self.lock().len()
+    }
 }
 
 struct ActiveSpan {
@@ -94,6 +98,10 @@ static COLLECTOR: OnceLock<SpanCollector> = OnceLock::new();
 
 fn collector() -> &'static SpanCollector {
     COLLECTOR.get_or_init(SpanCollector::new)
+}
+
+pub(crate) fn initialized_collector() -> Option<&'static SpanCollector> {
+    COLLECTOR.get()
 }
 
 fn next_span_id() -> String {

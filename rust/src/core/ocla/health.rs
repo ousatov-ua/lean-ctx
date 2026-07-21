@@ -7,7 +7,10 @@ use serde::Serialize;
 
 use crate::core::a2a::dlq::DeadLetterQueue;
 
+use super::capsule::global_capsule_store;
 use super::registry::OclaRegistry;
+use super::response_cache::global_response_cache;
+use super::tracing::initialized_collector;
 use super::types::{OCLA_API_VERSION, OclaCapability, OclaCapabilityKind, OclaCapabilityStatus};
 use super::unified_ledger::{FileUnifiedLedger, UnifiedLedger};
 
@@ -18,10 +21,24 @@ pub(crate) fn dead_letter_queue() -> &'static DeadLetterQueue {
     DLQ.get_or_init(DeadLetterQueue::new)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DlqHealthDetails {
     pub total: usize,
     pub oldest_age_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_entries: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hits: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub misses: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evictions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -53,7 +70,7 @@ pub struct SystemHealth {
 pub fn check_system_health() -> SystemHealth {
     let started_at = STARTED_AT.get_or_init(Instant::now);
     let registry = OclaRegistry::global();
-    let mut components = Vec::with_capacity(OclaCapabilityKind::ALL.len() + 4);
+    let mut components = Vec::with_capacity(OclaCapabilityKind::ALL.len() + 7);
 
     components.push(poll_capability("observation_hook", || {
         registry.observation_hook.capability()
@@ -102,6 +119,9 @@ pub fn check_system_health() -> SystemHealth {
     components.push(check_ledger());
     components.push(check_budget());
     components.push(check_dlq(dead_letter_queue()));
+    components.push(check_capsule_store());
+    components.push(check_response_cache());
+    components.push(check_tracing());
 
     let overall = aggregate_statuses(&components);
     SystemHealth {
@@ -202,6 +222,75 @@ fn check_dlq(queue: &DeadLetterQueue) -> ComponentHealth {
         details: Some(DlqHealthDetails {
             total: stats.total,
             oldest_age_secs: stats.oldest_age_seconds,
+            ..Default::default()
+        }),
+    }
+}
+
+fn check_capsule_store() -> ComponentHealth {
+    let started_at = Instant::now();
+    let stats = global_capsule_store().stats();
+    let status = if stats.total_entries > 10_000 {
+        HealthStatus::Degraded(format!(
+            "capsule store contains {} entries",
+            stats.total_entries
+        ))
+    } else {
+        HealthStatus::Healthy
+    };
+    ComponentHealth {
+        name: "capsule_store".into(),
+        status,
+        latency_ms: Some(started_at.elapsed().as_millis() as u64),
+        details: Some(DlqHealthDetails {
+            total_entries: Some(stats.total_entries),
+            total_bytes: Some(stats.total_bytes),
+            max_depth: Some(stats.max_depth),
+            ..Default::default()
+        }),
+    }
+}
+
+fn check_response_cache() -> ComponentHealth {
+    let started_at = Instant::now();
+    let stats = global_response_cache().stats();
+    let status = if stats.evictions > stats.hits {
+        HealthStatus::Degraded("response cache is thrashing".into())
+    } else if stats.hit_rate > 0.0 || stats.entries == 0 {
+        HealthStatus::Healthy
+    } else {
+        HealthStatus::Degraded("response cache has no hits".into())
+    };
+    ComponentHealth {
+        name: "response_cache".into(),
+        status,
+        latency_ms: Some(started_at.elapsed().as_millis() as u64),
+        details: Some(DlqHealthDetails {
+            total_entries: Some(stats.entries),
+            hits: Some(stats.hits),
+            misses: Some(stats.misses),
+            evictions: Some(stats.evictions),
+            ..Default::default()
+        }),
+    }
+}
+
+fn check_tracing() -> ComponentHealth {
+    let started_at = Instant::now();
+    let (status, span_count) = match initialized_collector() {
+        Some(collector) => (HealthStatus::Healthy, collector.span_count()),
+        None => (
+            HealthStatus::Degraded("span collector is not initialized".into()),
+            0,
+        ),
+    };
+    ComponentHealth {
+        name: "tracing".into(),
+        status,
+        latency_ms: Some(started_at.elapsed().as_millis() as u64),
+        details: Some(DlqHealthDetails {
+            span_count: Some(span_count),
+            ..Default::default()
         }),
     }
 }
@@ -239,6 +328,49 @@ mod tests {
             latency_ms: None,
             details: None,
         }
+    }
+
+    #[test]
+    fn health_includes_capsule_store() {
+        let report = check_system_health();
+        assert!(
+            report
+                .components
+                .iter()
+                .any(|component| { component.name == "capsule_store" })
+        );
+    }
+
+    #[test]
+    fn health_includes_response_cache() {
+        let report = check_system_health();
+        assert!(
+            report
+                .components
+                .iter()
+                .any(|component| { component.name == "response_cache" })
+        );
+    }
+
+    #[test]
+    fn health_includes_tracing() {
+        let report = check_system_health();
+        assert!(
+            report
+                .components
+                .iter()
+                .any(|component| { component.name == "tracing" })
+        );
+    }
+
+    #[test]
+    fn capsule_store_healthy_when_empty() {
+        let health = check_capsule_store();
+        assert_eq!(health.status, HealthStatus::Healthy);
+        assert_eq!(
+            health.details.as_ref().expect("details").total_entries,
+            Some(0)
+        );
     }
 
     #[test]
@@ -289,7 +421,7 @@ mod tests {
     #[test]
     fn system_health_reports_all_components() {
         let report = check_system_health();
-        assert_eq!(report.components.len(), 18);
+        assert_eq!(report.components.len(), 21);
         assert_eq!(report.version, OCLA_API_VERSION);
     }
 

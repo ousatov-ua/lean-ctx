@@ -1,11 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
 use super::types::{OclaError, OclaResult};
 
 static NEXT_FORK_ID: AtomicU64 = AtomicU64::new(1);
+static GLOBAL_CAPSULE_STORE: OnceLock<CapsuleStore> = OnceLock::new();
+
+pub(crate) fn global_capsule_store() -> &'static CapsuleStore {
+    GLOBAL_CAPSULE_STORE.get_or_init(CapsuleStore::new)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Delta {
