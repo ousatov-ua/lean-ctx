@@ -170,8 +170,7 @@ use support::{
 };
 
 fn mcp_server_quiet_mode() -> bool {
-    std::env::var_os("LEAN_CTX_MCP_SERVER").is_some()
-        || matches!(std::env::var("LEAN_CTX_QUIET"), Ok(value) if value.trim() == "1")
+    crate::core::runtime_flags::mcp_server_enabled() || crate::core::runtime_flags::quiet_enabled()
 }
 
 /// Agents whose global shell-hook artifacts embed the binary path / command

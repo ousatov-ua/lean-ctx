@@ -37,7 +37,7 @@ fn build_and_persist_fix_report(
         PlatformInfo, SetupItem, SetupReport, SetupStepReport, doctor_report_path,
     };
 
-    let _quiet_guard = quiet.then(|| crate::setup::EnvVarGuard::set("LEAN_CTX_QUIET", "1"));
+    let _quiet_guard = quiet.then(crate::core::runtime_flags::scoped_quiet);
     let started_at = Utc::now();
     let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
 

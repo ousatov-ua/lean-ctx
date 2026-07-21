@@ -1,7 +1,7 @@
 use crate::hooks::to_bash_compatible_path;
 
 pub(crate) fn quiet_enabled() -> bool {
-    matches!(std::env::var("LEAN_CTX_QUIET"), Ok(v) if v.trim() == "1")
+    crate::core::runtime_flags::quiet_enabled()
 }
 
 macro_rules! qprintln {
@@ -190,10 +190,6 @@ pub fn cmd_init(args: &[String]) {
 }
 
 pub fn cmd_init_quiet(args: &[String]) {
-    // SAFETY: the `init` CLI command is single-threaded; no other thread reads
-    // the environment between this set and the matching remove below.
-    unsafe { std::env::set_var("LEAN_CTX_QUIET", "1") };
+    let _quiet_guard = crate::core::runtime_flags::scoped_quiet();
     cmd_init(args);
-    // SAFETY: single-threaded CLI command; pairs with the set above.
-    unsafe { std::env::remove_var("LEAN_CTX_QUIET") };
 }

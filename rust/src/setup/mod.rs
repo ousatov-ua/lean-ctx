@@ -5,7 +5,6 @@ use crate::core::portable_binary::resolve_portable_binary;
 use crate::core::setup_report::{PlatformInfo, SetupItem, SetupReport, SetupStepReport};
 use crate::hooks::{HookMode, recommend_hook_mode};
 use chrono::Utc;
-use std::ffi::OsString;
 mod mcp;
 pub use mcp::*;
 mod helpers;
@@ -19,36 +18,31 @@ pub fn claude_config_dir(home: &std::path::Path) -> PathBuf {
     crate::core::editor_registry::claude_state_dir(home)
 }
 
+#[cfg(test)]
 pub(crate) struct EnvVarGuard {
     key: &'static str,
-    previous: Option<OsString>,
+    previous: Option<std::ffi::OsString>,
 }
 
+#[cfg(test)]
 impl EnvVarGuard {
     pub(crate) fn set(key: &'static str, value: &str) -> Self {
         let previous = std::env::var_os(key);
-        // SAFETY: `EnvVarGuard` is only used in single-threaded setup/doctor CLI
-        // flows (and serial-gated tests), so no other thread reads the
-        // environment while the guard mutates it.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
 }
 
+#[cfg(test)]
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(previous) = &self.previous {
-            // SAFETY: see `EnvVarGuard::set` — restoration runs on the same
-            // single-threaded setup/doctor path that created the guard.
             unsafe { std::env::set_var(self.key, previous) };
         } else {
-            // SAFETY: see `EnvVarGuard::set` — restoration runs on the same
-            // single-threaded setup/doctor path that created the guard.
             unsafe { std::env::remove_var(self.key) };
         }
     }
 }
-
 /// Determine the setup level from a first-run interactive menu.
 /// Returns (inject_rules, inject_skills).
 fn first_run_setup_level() -> (bool, bool) {
@@ -795,7 +789,7 @@ pub struct SetupOptions {
 }
 
 pub fn run_setup_with_options(opts: SetupOptions) -> Result<SetupReport, String> {
-    let _quiet_guard = opts.json.then(|| EnvVarGuard::set("LEAN_CTX_QUIET", "1"));
+    let _quiet_guard = opts.json.then(crate::core::runtime_flags::scoped_quiet);
     let started_at = Utc::now();
     let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
     let binary = resolve_portable_binary();

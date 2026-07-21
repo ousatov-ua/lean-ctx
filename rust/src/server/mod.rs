@@ -32,6 +32,7 @@ use rmcp::model::{
     InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
+use std::path::PathBuf;
 
 use crate::tools::{CrpMode, LeanCtxServer};
 mod call_tool;
@@ -141,17 +142,9 @@ fn detect_multi_root_workspace(dir: &std::path::Path) -> Option<String> {
     }
 
     if child_projects.len() >= 2 {
-        let existing = std::env::var("LEAN_CTX_ALLOW_PATH").unwrap_or_default();
-        let sep = if cfg!(windows) { ";" } else { ":" };
-        let merged = if existing.is_empty() {
-            child_projects.join(sep)
-        } else {
-            format!("{existing}{sep}{}", child_projects.join(sep))
-        };
-        // SAFETY: set during MCP `initialize` (connection bootstrap), before any
-        // tool-handler thread reads the jail allow-list via `pathjail`. The only
-        // concurrent startup tasks (proxy spawn, savings publish) never consult it.
-        unsafe { std::env::set_var("LEAN_CTX_ALLOW_PATH", &merged) };
+        crate::core::runtime_flags::add_allow_paths(
+            child_projects.iter().map(PathBuf::from).collect(),
+        );
         tracing::info!(
             "Multi-root workspace detected at {}: auto-allowing {} child projects",
             dir.display(),

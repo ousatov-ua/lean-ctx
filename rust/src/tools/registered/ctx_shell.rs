@@ -247,7 +247,7 @@ impl McpTool for CtxShellTool {
             let arg_raw = get_bool(args, "raw").unwrap_or(false);
             let arg_bypass = get_bool(args, "bypass").unwrap_or(false);
             let env_disabled = std::env::var("LEAN_CTX_DISABLED").is_ok();
-            let env_raw = std::env::var("LEAN_CTX_RAW").is_ok();
+            let env_raw = crate::core::runtime_flags::raw_enabled();
             let (raw, bypass) = resolve_shell_raw_flags(arg_raw, arg_bypass, env_disabled, env_raw);
 
             let crp_mode = ctx.crp_mode;

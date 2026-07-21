@@ -91,15 +91,13 @@ fn log_shadow_intercept(tool: &str, detail: &str) {
 }
 
 fn is_quiet() -> bool {
-    matches!(std::env::var("LEAN_CTX_QUIET"), Ok(v) if v.trim() == "1")
+    crate::core::runtime_flags::quiet_enabled()
 }
 
 /// Mark this process as a hook child so the daemon-client never auto-starts
 /// the daemon from inside a hook (which would create zombie processes).
 pub fn mark_hook_environment() {
-    // SAFETY: called once at hook-process startup (CLI dispatch), before any
-    // threads that read the environment are spawned.
-    unsafe { std::env::set_var("LEAN_CTX_HOOK_CHILD", "1") };
+    crate::core::runtime_flags::mark_hook_child();
 }
 
 /// Arms a watchdog that force-exits the process after the given duration.

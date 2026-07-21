@@ -675,7 +675,7 @@ pub(crate) fn cwd_looks_like_agent_dir(cwd_str: &str) -> bool {
 /// .claude). This usually means the MCP client launched the process from the
 /// wrong CWD, causing "path escapes project root" errors for every tool call.
 pub(crate) fn mcp_server_cwd_outcome() -> Outcome {
-    let is_mcp = std::env::var("LEAN_CTX_MCP_SERVER").is_ok_and(|v| v == "1");
+    let is_mcp = crate::core::runtime_flags::mcp_server_enabled();
     if !is_mcp {
         return Outcome {
             ok: true,

@@ -77,6 +77,9 @@ pub fn allow_paths_from_env_and_config() -> Vec<PathBuf> {
         out.push(canonicalize_secure(&expand_user_path(p)));
     }
 
+    for path in crate::core::runtime_flags::allow_paths() {
+        out.push(canonicalize_secure(&path));
+    }
     // Env entries are expanded too: MCP host configs pass env blocks verbatim
     // (no shell), so "$HOME/code" arrives literally there as well.
     let v = std::env::var("LCTX_ALLOW_PATH")
@@ -216,7 +219,7 @@ pub fn active_relaxations() -> Vec<JailRelaxation> {
         });
     }
 
-    if env_is_set("LEAN_CTX_ALLOW_PATH") || env_is_set("LCTX_ALLOW_PATH") {
+    if crate::core::runtime_flags::allow_path_enabled() {
         out.push(JailRelaxation {
             source: "LEAN_CTX_ALLOW_PATH",
             detail: "widens the read/write allow-list beyond the project root",

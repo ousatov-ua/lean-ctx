@@ -87,9 +87,7 @@ pub fn is_windows_absolute_path(path: &str) -> bool {
 }
 
 pub fn detect_project_root_for_dashboard() -> String {
-    if let Ok(explicit) = std::env::var("LEAN_CTX_DASHBOARD_PROJECT")
-        && !explicit.trim().is_empty()
-    {
+    if let Some(explicit) = crate::core::runtime_flags::dashboard_project() {
         return promote_to_git_root(&explicit);
     }
 

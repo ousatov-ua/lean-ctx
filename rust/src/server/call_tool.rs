@@ -281,7 +281,7 @@ impl LeanCtxServer {
             arg_raw
                 || arg_bypass
                 || std::env::var("LEAN_CTX_DISABLED").is_ok()
-                || std::env::var("LEAN_CTX_RAW").is_ok()
+                || crate::core::runtime_flags::raw_enabled()
         };
 
         let pre_terse_len = result_text.len();

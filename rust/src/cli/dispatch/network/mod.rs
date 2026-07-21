@@ -1,4 +1,4 @@
-use crate::{dashboard, tui};
+use crate::{core, dashboard, tui};
 
 #[cfg(feature = "gateway-server")]
 mod gateway;
@@ -105,10 +105,8 @@ pub(super) fn cmd_dashboard(rest: &[String]) {
         .iter()
         .find_map(|p| p.strip_prefix("--project="))
         .map(String::from);
-    if let Some(ref p) = project {
-        // SAFETY: runs during single-threaded CLI argument parsing, before the
-        // dashboard server (and its threads) starts.
-        unsafe { std::env::set_var("LEAN_CTX_DASHBOARD_PROJECT", p) };
+    if let Some(ref project) = project {
+        core::runtime_flags::set_dashboard_project(project.clone());
     }
     // `--base-path` / `--prefix`: mount the dashboard behind a reverse-proxy
     // subpath (e.g. `/dashboard`). See dashboard::base_path (#355).

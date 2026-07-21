@@ -43,48 +43,8 @@ pub fn run() {
         let rest = args[2..].to_vec();
 
         match args[1].as_str() {
-            "-c" | "exec" => {
-                let raw = rest.first().is_some_and(|a| a == "--raw");
-                let cmd_args = if raw { &args[3..] } else { &args[2..] };
-                let command = if cmd_args.len() == 1 {
-                    cmd_args[0].clone()
-                } else {
-                    shell::join_command(cmd_args)
-                };
-                // The `lean-ctx -c` wrapper runs inside the agent shell, which
-                // carries runtime/session vars the MCP server never sees. Bridge
-                // them so ctx_shell can forward them too (#370).
-                core::agent_runtime_env::capture();
-                if crate::shell::reentry::should_pass_through() {
-                    passthrough(&command);
-                }
-                if raw {
-                    // SAFETY: CLI dispatch is single-threaded; this runs before any
-                    // worker threads start (the process hands off to shell::exec below).
-                    unsafe { std::env::set_var("LEAN_CTX_RAW", "1") };
-                } else {
-                    // SAFETY: CLI dispatch is single-threaded; this runs before any
-                    // worker threads start (the process hands off to shell::exec below).
-                    unsafe { std::env::set_var("LEAN_CTX_COMPRESS", "1") };
-                }
-                let code = shell::exec(&command);
-                core::tool_lifecycle::flush_all();
-                std::process::exit(code);
-            }
-            "-t" | "--track" => {
-                let cmd_args = &args[2..];
-                let code = if cmd_args.len() > 1 {
-                    shell::exec_argv(cmd_args)
-                } else {
-                    let command = cmd_args[0].clone();
-                    if crate::shell::reentry::should_pass_through() {
-                        passthrough(&command);
-                    }
-                    shell::exec(&command)
-                };
-                core::tool_lifecycle::flush_all();
-                std::process::exit(code);
-            }
+            "-c" | "exec" => handle_exec(&args, &rest),
+            "-t" | "--track" => handle_track(&args),
             "shell" | "--shell" => {
                 shell::interactive();
                 return;
@@ -279,160 +239,19 @@ pub fn run() {
                 return;
             }
             "setup" => {
-                // Safety (#476 class): `--help`/`-h` — or any unknown flag —
-                // must NEVER fall through to a real setup run that mutates
-                // shell + agent configs. Short-circuit before any side effect.
-                if rest.iter().any(|a| a == "--help" || a == "-h") {
-                    print_setup_help();
-                    return;
-                }
-                const KNOWN: &[&str] = &[
-                    "--non-interactive",
-                    "--yes",
-                    "-y",
-                    "--fix",
-                    "--json",
-                    "--no-auto-approve",
-                    "--skip-rules",
-                    "--no-agent-aliases",
-                ];
-                if let Some(unknown) = rest
-                    .iter()
-                    .find(|a| a.starts_with('-') && !KNOWN.contains(&a.as_str()))
-                {
-                    eprintln!("setup: unknown flag '{unknown}'\n");
-                    print_setup_help();
-                    std::process::exit(2);
-                }
-                let non_interactive = rest.iter().any(|a| a == "--non-interactive");
-                let yes = rest.iter().any(|a| a == "--yes" || a == "-y");
-                let fix = rest.iter().any(|a| a == "--fix");
-                let json = rest.iter().any(|a| a == "--json");
-                let no_auto_approve = rest.iter().any(|a| a == "--no-auto-approve");
-                let skip_rules = rest.iter().any(|a| a == "--skip-rules");
-                let no_agent_aliases = rest.iter().any(|a| a == "--no-agent-aliases");
-
-                if no_agent_aliases {
-                    let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
-                }
-
-                if non_interactive || fix || json || yes {
-                    let opts = setup::SetupOptions {
-                        non_interactive,
-                        yes,
-                        fix,
-                        json,
-                        no_auto_approve,
-                        skip_rules,
-                        ..Default::default()
-                    };
-                    match setup::run_setup_with_options(opts) {
-                        Ok(report) => {
-                            if json {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string_pretty(&report)
-                                        .unwrap_or_else(|_| "{}".to_string())
-                                );
-                            }
-                            if !report.success {
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("{e}");
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    setup::run_setup();
-                }
+                handle_setup(&rest);
                 return;
             }
             "onboard" => {
-                if rest.iter().any(|a| a == "--help" || a == "-h") {
-                    println!("Usage: lean-ctx onboard [--no-agent-aliases]");
-                    println!("Connect your AI tools with one command: detects installed");
-                    println!("agents, installs hooks/rules/MCP registrations, verifies.");
-                    println!();
-                    println!(
-                        "  --no-agent-aliases  Do not install claude/codex/gemini shell aliases"
-                    );
-                    println!();
-                    println!("Fine-grained control: lean-ctx setup --help");
-                    return;
-                }
-                if rest.iter().any(|a| a == "--no-agent-aliases") {
-                    let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
-                }
-                setup::run_onboard();
+                handle_onboard(&rest);
                 return;
             }
             "install" => {
-                // Plain `lean-ctx install` is a natural thing to type after
-                // installing the binary — treat it as the guided setup rather
-                // than failing with a usage error. `--repair`/`--fix` keeps the
-                // non-interactive, merge-based repair path.
-                let repair = rest.iter().any(|a| a == "--repair" || a == "--fix");
-                let json = rest.iter().any(|a| a == "--json");
-                if !repair {
-                    setup::run_setup();
-                    return;
-                }
-                let opts = setup::SetupOptions {
-                    non_interactive: true,
-                    yes: true,
-                    fix: true,
-                    json,
-                    ..Default::default()
-                };
-                match setup::run_setup_with_options(opts) {
-                    Ok(report) => {
-                        if json {
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&report)
-                                    .unwrap_or_else(|_| "{}".to_string())
-                            );
-                        }
-                        if !report.success {
-                            std::process::exit(1);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
+                handle_install(&rest);
                 return;
             }
             "bootstrap" => {
-                let json = rest.iter().any(|a| a == "--json");
-                let opts = setup::SetupOptions {
-                    non_interactive: true,
-                    yes: true,
-                    fix: true,
-                    json,
-                    ..Default::default()
-                };
-                match setup::run_setup_with_options(opts) {
-                    Ok(report) => {
-                        if json {
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&report)
-                                    .unwrap_or_else(|_| "{}".to_string())
-                            );
-                        }
-                        if !report.success {
-                            std::process::exit(1);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                }
+                handle_bootstrap(&rest);
                 return;
             }
             "wrap" => {
@@ -783,26 +602,7 @@ pub fn run() {
             // The old "bypass" wording read to a model like a *security* bypass,
             // but this only skips compression — the shell allowlist and path jail
             // still apply (GH security audit, finding 5).
-            "raw" | "bypass" => {
-                if rest.is_empty() {
-                    eprintln!("Usage: lean-ctx raw \"command\"");
-                    eprintln!(
-                        "Runs the command with output passed through unchanged (no \
-                         compression). The shell allowlist still applies."
-                    );
-                    std::process::exit(1);
-                }
-                let command = if rest.len() == 1 {
-                    rest[0].clone()
-                } else {
-                    shell::join_command(&args[2..])
-                };
-                // SAFETY: CLI dispatch is single-threaded; this runs before the
-                // process hands off to shell::exec and exits below.
-                unsafe { std::env::set_var("LEAN_CTX_RAW", "1") };
-                let code = shell::exec(&command);
-                std::process::exit(code);
-            }
+            "raw" | "bypass" => handle_raw(&args, &rest),
             "safety-levels" | "safety" => {
                 println!("{}", core::compression_safety::format_safety_table());
                 return;
@@ -925,6 +725,183 @@ fn is_server_mode(args: &[String]) -> bool {
                 "mcp" | "daemon" | "proxy" | "serve" | "watch" | "dashboard" | "gateway"
             )
         })
+}
+
+fn handle_exec(args: &[String], rest: &[String]) -> ! {
+    let raw = rest.first().is_some_and(|a| a == "--raw");
+    let cmd_args = if raw { &args[3..] } else { &args[2..] };
+    let command = if cmd_args.len() == 1 {
+        cmd_args[0].clone()
+    } else {
+        shell::join_command(cmd_args)
+    };
+    // The `lean-ctx -c` wrapper runs inside the agent shell, which carries
+    // runtime/session vars the MCP server never sees. Bridge them so ctx_shell
+    // can forward them too (#370).
+    core::agent_runtime_env::capture();
+    if crate::shell::reentry::should_pass_through() {
+        passthrough(&command);
+    }
+    if raw {
+        core::runtime_flags::enable_raw();
+    } else {
+        core::runtime_flags::enable_compress();
+    }
+    let code = shell::exec(&command);
+    core::tool_lifecycle::flush_all();
+    std::process::exit(code);
+}
+
+fn handle_track(args: &[String]) -> ! {
+    let cmd_args = &args[2..];
+    let code = if cmd_args.len() > 1 {
+        shell::exec_argv(cmd_args)
+    } else {
+        let command = cmd_args[0].clone();
+        if crate::shell::reentry::should_pass_through() {
+            passthrough(&command);
+        }
+        shell::exec(&command)
+    };
+    core::tool_lifecycle::flush_all();
+    std::process::exit(code);
+}
+
+fn handle_setup(rest: &[String]) {
+    // Safety (#476 class): `--help`/`-h` — or any unknown flag — must NEVER
+    // fall through to a real setup run that mutates shell + agent configs.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        print_setup_help();
+        return;
+    }
+    const KNOWN: &[&str] = &[
+        "--non-interactive",
+        "--yes",
+        "-y",
+        "--fix",
+        "--json",
+        "--no-auto-approve",
+        "--skip-rules",
+        "--no-agent-aliases",
+    ];
+    if let Some(unknown) = rest
+        .iter()
+        .find(|a| a.starts_with('-') && !KNOWN.contains(&a.as_str()))
+    {
+        eprintln!("setup: unknown flag '{unknown}'\n");
+        print_setup_help();
+        std::process::exit(2);
+    }
+    let non_interactive = rest.iter().any(|a| a == "--non-interactive");
+    let yes = rest.iter().any(|a| a == "--yes" || a == "-y");
+    let fix = rest.iter().any(|a| a == "--fix");
+    let json = rest.iter().any(|a| a == "--json");
+    let no_auto_approve = rest.iter().any(|a| a == "--no-auto-approve");
+    let skip_rules = rest.iter().any(|a| a == "--skip-rules");
+    let no_agent_aliases = rest.iter().any(|a| a == "--no-agent-aliases");
+
+    if no_agent_aliases {
+        let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
+    }
+
+    if non_interactive || fix || json || yes {
+        let opts = setup::SetupOptions {
+            non_interactive,
+            yes,
+            fix,
+            json,
+            no_auto_approve,
+            skip_rules,
+            ..Default::default()
+        };
+        run_setup_options(opts, json);
+    } else {
+        setup::run_setup();
+    }
+}
+
+fn handle_onboard(rest: &[String]) {
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Usage: lean-ctx onboard [--no-agent-aliases]");
+        println!("Connect your AI tools with one command: detects installed");
+        println!("agents, installs hooks/rules/MCP registrations, verifies.");
+        println!();
+        println!("  --no-agent-aliases  Do not install claude/codex/gemini shell aliases");
+        println!();
+        println!("Fine-grained control: lean-ctx setup --help");
+        return;
+    }
+    if rest.iter().any(|a| a == "--no-agent-aliases") {
+        let _ = crate::core::config::setter::set_by_key("skip_agent_aliases", "true");
+    }
+    setup::run_onboard();
+}
+
+fn handle_install(rest: &[String]) {
+    // Plain `lean-ctx install` is a natural thing to type after installing the
+    // binary; keep it as guided setup unless repair mode was explicitly asked.
+    let repair = rest.iter().any(|a| a == "--repair" || a == "--fix");
+    let json = rest.iter().any(|a| a == "--json");
+    if !repair {
+        setup::run_setup();
+        return;
+    }
+    run_repair_setup(json);
+}
+
+fn handle_bootstrap(rest: &[String]) {
+    let json = rest.iter().any(|a| a == "--json");
+    run_repair_setup(json);
+}
+
+fn run_repair_setup(json: bool) {
+    let opts = setup::SetupOptions {
+        non_interactive: true,
+        yes: true,
+        fix: true,
+        json,
+        ..Default::default()
+    };
+    run_setup_options(opts, json);
+}
+
+fn handle_raw(args: &[String], rest: &[String]) -> ! {
+    if rest.is_empty() {
+        eprintln!("Usage: lean-ctx raw \"command\"");
+        eprintln!(
+            "Runs the command with output passed through unchanged (no compression). \
+             The shell allowlist still applies."
+        );
+        std::process::exit(1);
+    }
+    let command = if rest.len() == 1 {
+        rest[0].clone()
+    } else {
+        shell::join_command(&args[2..])
+    };
+    core::runtime_flags::enable_raw();
+    let code = shell::exec(&command);
+    std::process::exit(code);
+}
+
+fn run_setup_options(opts: setup::SetupOptions, json: bool) {
+    match setup::run_setup_with_options(opts) {
+        Ok(report) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())
+                );
+            }
+            if !report.success {
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Restore the default SIGPIPE disposition for short-lived CLI invocations.

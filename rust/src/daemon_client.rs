@@ -196,7 +196,7 @@ pub fn try_daemon_tool_call_blocking(
         // auto-starting one. This guard MUST stay inside `if !ready` — hoisting it
         // to the top of the function would also block hooks from reusing a running
         // daemon, silently regressing loop/bounce/adaptive parity.
-        if std::env::var("LEAN_CTX_HOOK_CHILD").is_ok() {
+        if crate::core::runtime_flags::hook_child_enabled() {
             return None;
         }
 

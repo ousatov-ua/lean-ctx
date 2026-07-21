@@ -90,7 +90,7 @@ pub fn cmd_read(args: &[String]) {
     // The hook env (set by `mark_hook_environment`, inherited by the subprocess) forces
     // verbatim content on BOTH the daemon (`fresh:true`) and standalone (skip cli_cache)
     // paths. Direct CLI/MCP reads keep caching.
-    let force_fresh = should_force_fresh(args, std::env::var("LEAN_CTX_HOOK_CHILD").is_ok());
+    let force_fresh = should_force_fresh(args, crate::core::runtime_flags::hook_child_enabled());
     // Whether *we* choose the mode (auto): only then do we cap framing to raw.
     // An explicit mode is a deliberate view we return verbatim (#361).
     let requested_auto = mode == "auto";

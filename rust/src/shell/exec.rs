@@ -475,7 +475,7 @@ fn exec_direct(args: &[String]) -> i32 {
 /// can run the command without lean-ctx anyway, so blocking adds friction, not
 /// a boundary) or when `LEAN_CTX_ALLOWLIST_WARN_ONLY=1` explicitly opts out.
 fn allowlist_must_enforce() -> bool {
-    let hook_child = std::env::var("LEAN_CTX_HOOK_CHILD").is_ok();
+    let hook_child = crate::core::runtime_flags::hook_child_enabled();
     let warn_only = std::env::var("LEAN_CTX_ALLOWLIST_WARN_ONLY")
         .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     allowlist_must_enforce_inner(hook_child, warn_only, io::stderr().is_terminal())
@@ -595,8 +595,8 @@ pub fn exec(command: &str) -> i32 {
     }
 
     let cfg = config::Config::load();
-    let force_compress = std::env::var("LEAN_CTX_COMPRESS").is_ok();
-    let raw_mode = std::env::var("LEAN_CTX_RAW").is_ok();
+    let force_compress = crate::core::runtime_flags::compress_enabled();
+    let raw_mode = crate::core::runtime_flags::raw_enabled();
 
     if raw_mode {
         return exec_inherit_tracked(command, &shell, &shell_flag);

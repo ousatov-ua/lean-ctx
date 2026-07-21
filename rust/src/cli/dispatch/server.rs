@@ -13,9 +13,7 @@ pub(super) fn run_mcp_server() -> Result<()> {
     // process entry to the completed MCP initialize handshake.
     let started_at = std::time::Instant::now();
 
-    // SAFETY: set once at MCP server startup, before the Tokio runtime is built
-    // and any worker/blocking threads exist (runtime is constructed below).
-    unsafe { std::env::set_var("LEAN_CTX_MCP_SERVER", "1") };
+    crate::core::runtime_flags::enable_mcp_server();
 
     crate::core::startup_guard::crash_loop_backoff(crate::core::startup_guard::MCP_PROCESS_NAME);
 
