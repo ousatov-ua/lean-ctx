@@ -5,6 +5,9 @@ import type {
   JsonObject,
   LedgerSummary,
 } from "./types.js";
+
+export type CapsuleData = { capsule_ref: string; data: string };
+
 export class OclaClient {
   readonly baseUrl: string;
 
@@ -27,6 +30,30 @@ export class OclaClient {
       method: "POST",
       body: JSON.stringify(envelope),
     });
+  }
+  async registerCapsule(data: string): Promise<string> {
+    const response = await this.request<{ capsule_ref: string }>(
+      "/ocla/v1/capsule",
+      {
+        method: "POST",
+        body: data,
+        headers: { "Content-Type": "text/plain" },
+      },
+    );
+    return response.capsule_ref;
+  }
+  async resolveCapsule(capsuleRef: string): Promise<CapsuleData> {
+    return this.get<CapsuleData>(`/ocla/v1/capsule/${capsuleRef}`);
+  }
+  async forkCapsule(capsuleRef: string, budgetTokens: number): Promise<string> {
+    const response = await this.request<{ capsule_ref: string }>(
+      `/ocla/v1/capsule/${capsuleRef}/fork`,
+      {
+        method: "POST",
+        body: JSON.stringify({ budget_tokens: budgetTokens }),
+      },
+    );
+    return response.capsule_ref;
   }
   async ledgerSummary(): Promise<LedgerSummary> {
     return this.get<LedgerSummary>("/ocla/v1/ledger/summary");

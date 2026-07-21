@@ -67,6 +67,30 @@ class OclaClient:
         response.raise_for_status()
         return EnvelopeResponse.model_validate(response.json())
 
+    async def register_capsule(self, data: str) -> str:
+        """Register capsule data and return its reference."""
+
+        response = await self._client.post(self._url("capsule"), content=data)
+        response.raise_for_status()
+        return response.json()["capsule_ref"]
+
+    async def resolve_capsule(self, capsule_ref: str) -> dict[str, Any]:
+        """Resolve a capsule reference and return its complete response."""
+
+        response = await self._client.get(self._url(f"capsule/{capsule_ref}"))
+        response.raise_for_status()
+        return response.json()
+
+    async def fork_capsule(self, capsule_ref: str, budget_tokens: int) -> str:
+        """Fork a capsule with a token budget and return the new reference."""
+
+        response = await self._client.post(
+            self._url(f"capsule/{capsule_ref}/fork"),
+            json={"budget_tokens": budget_tokens},
+        )
+        response.raise_for_status()
+        return response.json()["capsule_ref"]
+
     async def ledger_summary(self) -> LedgerSummary:
         """Return the current compact savings-ledger summary."""
 

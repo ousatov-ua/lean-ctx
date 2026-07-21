@@ -1,6 +1,7 @@
 package ocla
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -97,6 +98,65 @@ func TestClientCallsEveryEndpoint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestClientCallsCapsuleEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/ocla/v1/capsule":
+			if r.Method != http.MethodPost {
+				t.Errorf("register method = %s", r.Method)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != "capsule data" {
+				t.Errorf("register body = %q", body)
+			}
+			if got := r.Header.Get("Content-Type"); got != "text/plain" {
+				t.Errorf("register content type = %q", got)
+			}
+			_, _ = io.WriteString(w, `{"capsule_ref":"capsule:1"}`)
+		case "/ocla/v1/capsule/capsule:1":
+			if r.Method != http.MethodGet {
+				t.Errorf("resolve method = %s", r.Method)
+			}
+			_ = json.NewEncoder(w).Encode(CapsuleData{
+				CapsuleRef: "capsule:1", Data: "capsule data",
+			})
+		case "/ocla/v1/capsule/capsule:1/fork":
+			if r.Method != http.MethodPost {
+				t.Errorf("fork method = %s", r.Method)
+			}
+			var payload map[string]int64
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["budget_tokens"] != 1000 {
+				t.Errorf("fork payload = %#v", payload)
+			}
+			_, _ = io.WriteString(w, `{"capsule_ref":"capsule:2"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	registered, err := client.RegisterCapsule(context.Background(), "capsule data")
+	if err != nil || registered != "capsule:1" {
+		t.Fatalf("registered = %q, err = %v", registered, err)
+	}
+	resolved, err := client.ResolveCapsule(context.Background(), registered)
+	if err != nil || resolved.CapsuleRef != registered || resolved.Data != "capsule data" {
+		t.Fatalf("resolved = %#v, err = %v", resolved, err)
+	}
+	forked, err := client.ForkCapsule(context.Background(), registered, 1000)
+	if err != nil || forked != "capsule:2" {
+		t.Fatalf("forked = %q, err = %v", forked, err)
 	}
 }
 

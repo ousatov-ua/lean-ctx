@@ -96,6 +96,11 @@ type LedgerSummaryResponse struct {
 	USD    float64 `json:"usd"`
 }
 
+type CapsuleData struct {
+	CapsuleRef string `json:"capsule_ref"`
+	Data       string `json:"data"`
+}
+
 type ErrorResponse struct {
 	Error string `json:"error"`
 	Code  string `json:"code,omitempty"`

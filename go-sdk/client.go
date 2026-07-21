@@ -2,6 +2,7 @@ package ocla
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,6 +76,56 @@ func (c *OclaClient) ValidateEnvelopeBatch(envelopes []json.RawMessage) (BatchRe
 	return response, err
 }
 
+func (c *OclaClient) RegisterCapsule(ctx context.Context, data string) (string, error) {
+	var response struct {
+		CapsuleRef string `json:"capsule_ref"`
+	}
+	err := c.requestContext(
+		ctx,
+		http.MethodPost,
+		"/ocla/v1/capsule",
+		strings.NewReader(data),
+		"text/plain",
+		&response,
+	)
+	return response.CapsuleRef, err
+}
+
+func (c *OclaClient) ResolveCapsule(ctx context.Context, capsuleRef string) (*CapsuleData, error) {
+	var response CapsuleData
+	err := c.requestContext(
+		ctx,
+		http.MethodGet,
+		"/ocla/v1/capsule/"+capsuleRef,
+		nil,
+		"",
+		&response,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *OclaClient) ForkCapsule(ctx context.Context, capsuleRef string, budgetTokens int64) (string, error) {
+	encoded, err := json.Marshal(map[string]int64{"budget_tokens": budgetTokens})
+	if err != nil {
+		return "", fmt.Errorf("encode OCLA request: %w", err)
+	}
+	var response struct {
+		CapsuleRef string `json:"capsule_ref"`
+	}
+	err = c.requestContext(
+		ctx,
+		http.MethodPost,
+		"/ocla/v1/capsule/"+capsuleRef+"/fork",
+		bytes.NewReader(encoded),
+		"application/json",
+		&response,
+	)
+	return response.CapsuleRef, err
+}
+
 func (c *OclaClient) Agents() (AgentsResponse, error) {
 	var response AgentsResponse
 	err := c.request(http.MethodGet, "/ocla/v1/agents", nil, &response)
@@ -95,21 +146,33 @@ func (c *OclaClient) LedgerSummary() (LedgerSummaryResponse, error) {
 
 func (c *OclaClient) request(method, path string, payload any, target any) error {
 	var body io.Reader
+	contentType := ""
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("encode OCLA request: %w", err)
 		}
 		body = bytes.NewReader(encoded)
+		contentType = "application/json"
 	}
 
-	req, err := http.NewRequest(method, c.baseURL+path, body)
+	return c.requestContext(context.Background(), method, path, body, contentType, target)
+}
+
+func (c *OclaClient) requestContext(
+	ctx context.Context,
+	method, path string,
+	body io.Reader,
+	contentType string,
+	target any,
+) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return fmt.Errorf("create OCLA request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)

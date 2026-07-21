@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 
@@ -103,5 +104,47 @@ def test_validate_envelope_and_ledger_summary() -> None:
         assert summary.tokens == 120
         assert summary.usd == 0.42
         await http_client.aclose()
+
+    run(scenario())
+
+
+def test_capsule_endpoints() -> None:
+    def response(payload: dict) -> Mock:
+        mocked = Mock()
+        mocked.json.return_value = payload
+        return mocked
+
+    http_client = Mock()
+    http_client.post = AsyncMock(
+        side_effect=[
+            response({"capsule_ref": "capsule:1"}),
+            response({"capsule_ref": "capsule:2"}),
+        ]
+    )
+    http_client.get = AsyncMock(
+        return_value=response(
+            {"capsule_ref": "capsule:1", "data": "capsule data"}
+        )
+    )
+    sdk = OclaClient("https://ocla.test", client=http_client)
+
+    async def scenario() -> None:
+        registered = await sdk.register_capsule("capsule data")
+        resolved = await sdk.resolve_capsule(registered)
+        forked = await sdk.fork_capsule(registered, 1000)
+
+        assert registered == "capsule:1"
+        assert resolved == {"capsule_ref": "capsule:1", "data": "capsule data"}
+        assert forked == "capsule:2"
+        http_client.post.assert_any_await(
+            "https://ocla.test/ocla/v1/capsule", content="capsule data"
+        )
+        http_client.post.assert_any_await(
+            "https://ocla.test/ocla/v1/capsule/capsule:1/fork",
+            json={"budget_tokens": 1000},
+        )
+        http_client.get.assert_awaited_once_with(
+            "https://ocla.test/ocla/v1/capsule/capsule:1"
+        )
 
     run(scenario())
