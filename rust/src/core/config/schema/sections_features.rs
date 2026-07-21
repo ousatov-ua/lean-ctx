@@ -326,6 +326,38 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "LEAN_CTX_CONTEXT_BUDGET_TOKENS",
         ),
     );
+    context.insert(
+        "proactive_expansion".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.context.proactive_expansion),
+            "Inject relevant CCR archives into later tool responses",
+        ),
+    );
+    context.insert(
+        "proactive_expansion_budget_tokens".into(),
+        key(
+            "usize",
+            serde_json::json!(cfg.context.proactive_expansion_budget_tokens),
+            "Maximum proactive archive tokens per tool response",
+        ),
+    );
+    context.insert(
+        "proactive_expansion_threshold".into(),
+        key(
+            "f64",
+            serde_json::json!(cfg.context.proactive_expansion_threshold),
+            "Minimum normalized BM25 score for proactive expansion",
+        ),
+    );
+    context.insert(
+        "proactive_expansion_max_age_secs".into(),
+        key(
+            "u64",
+            serde_json::json!(cfg.context.proactive_expansion_max_age_secs),
+            "Maximum age of CCR content eligible for proactive expansion",
+        ),
+    );
     sections.insert(
         "context".into(),
         SectionSchema {

@@ -1387,6 +1387,26 @@ impl Config {
             .unwrap_or(self.context.budget_tokens)
     }
 
+    /// Whether later tool calls may receive matching CCR context.
+    pub fn proactive_expansion_effective(&self) -> bool {
+        self.context.proactive_expansion
+    }
+
+    /// Per-response token budget for proactive CCR expansion.
+    pub fn proactive_expansion_budget_tokens_effective(&self) -> usize {
+        self.context.proactive_expansion_budget_tokens
+    }
+
+    /// Normalized BM25 score threshold for proactive CCR expansion.
+    pub fn proactive_expansion_threshold_effective(&self) -> f64 {
+        self.context.proactive_expansion_threshold
+    }
+
+    /// Maximum archive age considered for proactive expansion.
+    pub fn proactive_expansion_max_age_secs_effective(&self) -> u64 {
+        self.context.proactive_expansion_max_age_secs
+    }
+
     /// Archive max_disk_mb derived from simplified max_disk_mb if the detail
     /// value is still at its default. Explicit overrides take priority.
     pub fn archive_max_disk_mb_effective(&self) -> u64 {

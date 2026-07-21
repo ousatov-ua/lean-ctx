@@ -327,6 +327,14 @@ pub struct ContextConfig {
     pub diet_relevance_threshold: f64,
     pub diet_rebalance_on_change: bool,
     pub diet_staleness_enabled: bool,
+    /// Inject matching CCR archives into later tool responses.
+    pub proactive_expansion: bool,
+    /// Maximum proactive archive content per tool response.
+    pub proactive_expansion_budget_tokens: usize,
+    /// Minimum normalized BM25 score required for an injection.
+    pub proactive_expansion_threshold: f64,
+    /// Ignore archived content older than this many seconds; 0 disables age expiry.
+    pub proactive_expansion_max_age_secs: u64,
 }
 
 impl Default for ContextConfig {
@@ -337,6 +345,10 @@ impl Default for ContextConfig {
             diet_relevance_threshold: 0.15,
             diet_rebalance_on_change: true,
             diet_staleness_enabled: true,
+            proactive_expansion: true,
+            proactive_expansion_budget_tokens: 2000,
+            proactive_expansion_threshold: 0.6,
+            proactive_expansion_max_age_secs: 3600,
         }
     }
 }

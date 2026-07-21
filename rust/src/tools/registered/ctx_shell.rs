@@ -253,6 +253,13 @@ impl McpTool for CtxShellTool {
             let crp_mode = ctx.crp_mode;
             let cmd_clone = command.clone();
             let cwd_clone = effective_cwd;
+            let proactive_block = if raw {
+                None
+            } else {
+                crate::core::relevance_tracker::proactive_context(&format!(
+                    "ctx_shell command={cmd_clone} cwd={cwd_clone}"
+                ))
+            };
 
             let extra_env: std::collections::HashMap<String, String> = args
                 .get("env")
@@ -397,6 +404,11 @@ impl McpTool for CtxShellTool {
             let final_out = format!(
                 "{result_out}{tee_hint}{shell_mismatch}{cwd_jail_hint}{nudge}{exit_suffix}"
             );
+            let final_out = if let Some(block) = proactive_block {
+                format!("{final_out}{block}")
+            } else {
+                final_out
+            };
 
             Ok(ToolOutput {
                 text: final_out,

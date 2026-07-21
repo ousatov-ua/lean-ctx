@@ -1129,6 +1129,17 @@ impl CtxReadTool {
         } else {
             format!("{output}{hints_suffix}{graph_suffix}")
         };
+        let proactive_query = format!(
+            "ctx_read path={path} mode={resolved_mode} task={}",
+            task_ref.unwrap_or_default()
+        );
+        let final_output = if let Some(block) =
+            crate::core::relevance_tracker::proactive_context_for_path(&proactive_query, path)
+        {
+            format!("{final_output}{block}")
+        } else {
+            final_output
+        };
 
         Ok(ToolOutput {
             text: final_output,

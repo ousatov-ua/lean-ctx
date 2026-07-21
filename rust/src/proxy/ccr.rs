@@ -152,6 +152,20 @@ fn persist_with(content: &str, prefix: &str) -> Option<String> {
             }
         }
     }
+    if path.is_file() {
+        let source_tool = match prefix {
+            "json" | "tbl" | "yaml" => "ctx_read",
+            "html" => "ctx_shell",
+            _ => "proxy",
+        };
+        crate::core::relevance_tracker::register_compressed(
+            handle.clone(),
+            content,
+            source_tool,
+            crate::core::tokens::count_tokens(content),
+            0,
+        );
+    }
     Some(handle)
 }
 

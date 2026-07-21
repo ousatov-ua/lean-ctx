@@ -11,20 +11,22 @@
 //! (query_terms, stored_entries, budget). No timestamps in scoring —
 //! age eviction uses monotonic seq_ticks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_BUDGET_TOKENS: usize = 2000;
 const DEFAULT_THRESHOLD: f64 = 0.6;
 const MAX_ENTRIES: usize = 100;
 const MAX_KEYWORDS_PER_ENTRY: usize = 20;
 const CHARS_PER_TOKEN: usize = 4;
+const DEFAULT_MAX_AGE_SECS: u64 = 3600;
 
 static TRACKER: std::sync::LazyLock<Mutex<RelevanceTracker>> =
     std::sync::LazyLock::new(|| Mutex::new(RelevanceTracker::new()));
 
 /// Access the global relevance tracker.
-pub fn global() -> &'static Mutex<RelevanceTracker> {
+pub(crate) fn global() -> &'static Mutex<RelevanceTracker> {
     &TRACKER
 }
 
@@ -36,6 +38,7 @@ pub struct CompressedContentEntry {
     pub source_tool: &'static str,
     pub original_tokens: usize,
     pub compressed_tokens: usize,
+    pub timestamp: u64,
     pub seq_tick: u64,
 }
 
@@ -53,6 +56,8 @@ pub struct RelevanceTracker {
     seq_counter: u64,
     budget_tokens: usize,
     threshold: f64,
+    max_age_secs: u64,
+    disabled_handles: BTreeSet<String>,
 }
 
 impl Default for RelevanceTracker {
@@ -68,16 +73,39 @@ impl RelevanceTracker {
             seq_counter: 0,
             budget_tokens: DEFAULT_BUDGET_TOKENS,
             threshold: DEFAULT_THRESHOLD,
+            max_age_secs: DEFAULT_MAX_AGE_SECS,
+            disabled_handles: BTreeSet::new(),
         }
     }
 
     pub fn with_config(budget_tokens: usize, threshold: f64) -> Self {
+        Self::with_config_and_age(budget_tokens, threshold, DEFAULT_MAX_AGE_SECS)
+    }
+
+    pub fn with_config_and_age(budget_tokens: usize, threshold: f64, max_age_secs: u64) -> Self {
         Self {
             entries: Vec::new(),
             seq_counter: 0,
             budget_tokens,
-            threshold,
+            threshold: if threshold.is_finite() {
+                threshold.clamp(0.0, 1.0)
+            } else {
+                DEFAULT_THRESHOLD
+            },
+            max_age_secs,
+            disabled_handles: BTreeSet::new(),
         }
+    }
+
+    /// Update runtime settings without discarding already indexed entries.
+    pub fn configure(&mut self, budget_tokens: usize, threshold: f64, max_age_secs: u64) {
+        self.budget_tokens = budget_tokens;
+        self.threshold = if threshold.is_finite() {
+            threshold.clamp(0.0, 1.0)
+        } else {
+            DEFAULT_THRESHOLD
+        };
+        self.max_age_secs = max_age_secs;
     }
 
     /// Register a new compressed content entry with extracted keywords.
@@ -89,9 +117,41 @@ impl RelevanceTracker {
         original_tokens: usize,
         compressed_tokens: usize,
     ) {
+        self.register_at(
+            handle,
+            original_content,
+            source_tool,
+            original_tokens,
+            compressed_tokens,
+            now_secs(),
+        );
+    }
+
+    /// Register content with an explicit timestamp for deterministic tests and
+    /// replayed session state.
+    pub fn register_at(
+        &mut self,
+        handle: String,
+        original_content: &str,
+        source_tool: &'static str,
+        original_tokens: usize,
+        compressed_tokens: usize,
+        timestamp: u64,
+    ) {
         self.seq_counter += 1;
 
         let keywords = extract_keywords(original_content);
+
+        if let Some(existing) = self.entries.iter_mut().find(|e| e.handle == handle) {
+            existing.keywords = keywords;
+            existing.source_tool = source_tool;
+            existing.original_tokens = original_tokens;
+            existing.compressed_tokens = compressed_tokens;
+            existing.timestamp = timestamp;
+            existing.seq_tick = self.seq_counter;
+            self.disabled_handles.remove(&existing.handle);
+            return;
+        }
 
         let entry = CompressedContentEntry {
             handle,
@@ -99,6 +159,7 @@ impl RelevanceTracker {
             source_tool,
             original_tokens,
             compressed_tokens,
+            timestamp,
             seq_tick: self.seq_counter,
         };
 
@@ -109,6 +170,11 @@ impl RelevanceTracker {
             self.entries.sort_by_key(|e| e.seq_tick);
             self.entries.drain(..self.entries.len() - MAX_ENTRIES);
         }
+    }
+
+    /// Stop proactive expansion for one archive after a caller reports a bounce.
+    pub fn disable_handle(&mut self, handle: &str) {
+        self.disabled_handles.insert(handle.to_string());
     }
 
     /// Find entries matching the current query context. Returns matches
@@ -123,11 +189,18 @@ impl RelevanceTracker {
             return Vec::new();
         }
 
+        let now = now_secs();
         let mut scored: Vec<(usize, f64)> = self
             .entries
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| {
+                if self.disabled_handles.contains(&entry.handle)
+                    || (self.max_age_secs > 0
+                        && now.saturating_sub(entry.timestamp) > self.max_age_secs)
+                {
+                    return None;
+                }
                 let score = bm25_score(&query_terms, &entry.keywords);
                 if score >= self.threshold {
                     Some((i, score))
@@ -144,7 +217,13 @@ impl RelevanceTracker {
 
         for (idx, score) in scored {
             let entry = &self.entries[idx];
-            let estimated_tokens = entry.original_tokens.min(budget_remaining);
+            let available_savings = entry
+                .original_tokens
+                .saturating_sub(entry.compressed_tokens);
+            let estimated_tokens = entry
+                .original_tokens
+                .min(available_savings)
+                .min(budget_remaining);
             if estimated_tokens == 0 {
                 break;
             }
@@ -173,6 +252,7 @@ impl RelevanceTracker {
         let mut block = String::from("\n--- PROACTIVE CONTEXT ---\n");
         block.push_str("Previously compressed data relevant to this request:\n\n");
 
+        let mut expanded = false;
         for m in &matches {
             if let Some(content) = load_from_ccr(&m.handle, self.budget_tokens) {
                 let preview = truncate_to_budget(&content, m.estimated_tokens);
@@ -183,9 +263,13 @@ impl RelevanceTracker {
                 ));
                 block.push_str(&preview);
                 block.push_str("\n\n");
+                expanded = true;
             }
         }
 
+        if !expanded {
+            return None;
+        }
         block.push_str("--- END PROACTIVE CONTEXT ---");
         Some(block)
     }
@@ -195,7 +279,67 @@ impl RelevanceTracker {
     pub fn reset(&mut self) {
         self.entries.clear();
         self.seq_counter = 0;
+        self.disabled_handles.clear();
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+/// Register a CCR artifact for later proactive expansion.
+pub(crate) fn register_compressed(
+    handle: String,
+    original_content: &str,
+    source_tool: &'static str,
+    original_tokens: usize,
+    compressed_tokens: usize,
+) {
+    if let Ok(mut tracker) = global().lock() {
+        tracker.register(
+            handle,
+            original_content,
+            source_tool,
+            original_tokens,
+            compressed_tokens,
+        );
+    }
+}
+
+/// Return a response suffix when the current request matches archived content.
+/// Configuration is read here so a running process observes config changes.
+pub(crate) fn proactive_context(query_context: &str) -> Option<String> {
+    let cfg = crate::core::config::Config::load();
+    if !cfg.proactive_expansion_effective() {
+        return None;
+    }
+
+    let mut tracker = global().lock().ok()?;
+    tracker.configure(
+        cfg.proactive_expansion_budget_tokens_effective(),
+        cfg.proactive_expansion_threshold_effective(),
+        cfg.proactive_expansion_max_age_secs_effective(),
+    );
+    let block = tracker.expand_if_relevant(query_context)?;
+    crate::core::context_overhead::record_proactive_injection(crate::core::tokens::count_tokens(
+        &block,
+    ));
+    Some(block)
+}
+
+/// Bounce-aware query path used by file reads. A path already pinned to full
+/// delivery must not receive additional proactive context.
+pub(crate) fn proactive_context_for_path(query_context: &str, path: &str) -> Option<String> {
+    if crate::core::bounce_tracker::global()
+        .lock()
+        .ok()
+        .is_some_and(|tracker| tracker.should_force_full(path))
+    {
+        return None;
+    }
+    proactive_context(query_context)
 }
 
 // --- BM25 Scoring ---
@@ -289,7 +433,7 @@ fn load_from_ccr(handle: &str, _budget: usize) -> Option<String> {
 }
 
 fn truncate_to_budget(content: &str, max_tokens: usize) -> String {
-    let max_chars = max_tokens * CHARS_PER_TOKEN;
+    let max_chars = max_tokens.saturating_mul(CHARS_PER_TOKEN);
     if content.len() <= max_chars {
         return content.to_string();
     }

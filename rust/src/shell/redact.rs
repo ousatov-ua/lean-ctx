@@ -49,7 +49,15 @@ pub fn save_tee(command: &str, output: &str) -> Option<String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
-    Some(path.to_string_lossy().to_string())
+    let handle = path.to_string_lossy().to_string();
+    crate::core::relevance_tracker::register_compressed(
+        handle.clone(),
+        output,
+        "ctx_shell",
+        crate::core::tokens::count_tokens(output),
+        0,
+    );
+    Some(handle)
 }
 
 /// Lock-free gate that lets [`cleanup_old_tee_logs`]'s directory scan run at
