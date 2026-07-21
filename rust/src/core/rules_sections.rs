@@ -119,8 +119,9 @@ pub fn shadow_minimal_section(p: &ToolProfile) -> String {
     }
 
     format!(
-        "lean-ctx shadow mode: native file/search/shell calls auto-route to ctx_* \
+        "lean-ctx shadow mode: native read/search/shell calls auto-route to ctx_* \
          — no tool-mapping needed.\n\
+         File editing → native Edit/StrReplace (lean-ctx only handles reads); if denied, use ctx_patch.\n\
          Exclusive tools (no native trigger): {}.",
         exclusives.join(", ")
     )

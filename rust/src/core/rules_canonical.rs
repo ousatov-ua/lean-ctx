@@ -208,8 +208,9 @@ pub const LITM_END: &str = "TOOL PREFERENCE (END): ctx_compose>chain ctx_read>Re
 /// enforcement happens at the call layer, not in the prompt. Only the lean-ctx
 /// tools that have *no* native trigger to intercept still need advertising.
 pub const SHADOW_MINIMAL: &str = "\
-lean-ctx shadow mode: native file/search/shell calls auto-route to ctx_* — no tool-mapping needed.\n\
-Exclusive tools (no native trigger): ctx_compose (understand code, call first), ctx_search(action=symbol) (exact symbol), ctx_callgraph (callers), ctx_search(action=semantic) (by meaning), ctx_knowledge / ctx_session (memory).";
+lean-ctx shadow mode: native read/search/shell calls auto-route to ctx_* — no tool-mapping needed.\n\
+File editing → native Edit/StrReplace (lean-ctx only handles reads); if denied, use ctx_patch.\n\
+Exclusive tools (no native trigger): ctx_compose (understand code, call first), ctx_search(action=symbol) (exact symbol), ctx_search(action=semantic) (by meaning), ctx_callgraph (callers), ctx_knowledge / ctx_session (memory).";
 
 /// Hook-covered header (GL #1153): the honest replacement for the
 /// `CRITICAL`/`BULLETS`/`NEVER` mapping on hosts whose *installed hooks*
