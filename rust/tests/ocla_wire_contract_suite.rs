@@ -122,6 +122,26 @@ async fn json_request(method: &str, uri: &str, body: Option<Value>) -> (StatusCo
     (status, value)
 }
 
+async fn text_request(uri: &str, body: &str) -> (StatusCode, Value) {
+    let response = ocla_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(body.to_owned()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1_000_000)
+        .await
+        .expect("response body");
+    let value = serde_json::from_slice(&body).expect("JSON response");
+    (status, value)
+}
+
 #[test]
 fn canonical_envelope_matches_golden_fixture() {
     let wire = encode_envelope(&canonical_envelope()).expect("encode canonical envelope");
@@ -310,6 +330,62 @@ async fn health_get_returns_aggregated_report_schema() {
             .expect("components")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn capsule_register_returns_ref() {
+    let (status, body) = text_request("/ocla/v1/capsule", "contract capsule").await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    let capsule_ref = body["capsule_ref"].as_str().expect("capsule reference");
+    assert!(capsule_ref.starts_with("capsule:"));
+    assert_eq!(capsule_ref.len(), "capsule:".len() + 64);
+}
+
+#[tokio::test]
+async fn capsule_resolve_returns_data() {
+    let capsule_data = "contract resolve capsule";
+    let (register_status, registered) = text_request("/ocla/v1/capsule", capsule_data).await;
+    assert_eq!(register_status, StatusCode::CREATED);
+    let capsule_ref = registered["capsule_ref"]
+        .as_str()
+        .expect("capsule reference");
+
+    let (status, resolved) =
+        json_request("GET", &format!("/ocla/v1/capsule/{capsule_ref}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resolved["capsule_ref"], capsule_ref);
+    assert_eq!(resolved["data"], capsule_data);
+}
+
+#[tokio::test]
+async fn capsule_fork_creates_child() {
+    let (register_status, registered) =
+        text_request("/ocla/v1/capsule", "contract fork capsule").await;
+    assert_eq!(register_status, StatusCode::CREATED);
+    let parent_ref = registered["capsule_ref"]
+        .as_str()
+        .expect("parent reference");
+
+    let (fork_status, forked) = json_request(
+        "POST",
+        &format!("/ocla/v1/capsule/{parent_ref}/fork"),
+        Some(serde_json::json!({"budget_tokens": 256})),
+    )
+    .await;
+    assert_eq!(fork_status, StatusCode::CREATED);
+    let child_ref = forked["capsule_ref"].as_str().expect("child reference");
+    assert!(child_ref.starts_with("capsule:"));
+    assert_ne!(child_ref, parent_ref);
+}
+
+#[tokio::test]
+async fn capsule_resolve_unknown_returns_404() {
+    let (status, body) =
+        json_request("GET", "/ocla/v1/capsule/capsule:contract-missing", None).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "capsule not found");
 }
 
 #[test]
