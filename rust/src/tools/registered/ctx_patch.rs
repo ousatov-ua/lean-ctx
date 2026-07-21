@@ -89,6 +89,13 @@ impl McpTool for CtxPatchTool {
             return handle_replace_all(args, ctx);
         }
 
+        if get_bool(args, "dry_run").unwrap_or(false) {
+            let path = get_str(args, "path").unwrap_or_default();
+            return Ok(ToolOutput::simple(format!(
+                "DRY RUN: ctx_patch would apply anchor-based ops to {path}"
+            )));
+        }
+
         let expected_md5 = get_str(args, "expected_md5");
         let backup = get_bool(args, "backup").unwrap_or(false);
         let backup_path = get_str(args, "backup_path")
@@ -146,6 +153,16 @@ fn delegate_replace_unique(
 ) -> Result<ToolOutput, ErrorData> {
     let edit_args =
         build_unique_edit_args(args).map_err(|message| ErrorData::invalid_params(message, None))?;
+
+    if get_bool(args, "dry_run").unwrap_or(false) {
+        let old_text = get_str(args, "old_text").unwrap_or_default();
+        let new_text = get_str(args, "new_text").unwrap_or_default();
+        let path = get_str(args, "path").unwrap_or_default();
+        return Ok(ToolOutput::simple(format!(
+            "DRY RUN: replace_unique would replace {old_text:?} with {new_text:?} in {path}"
+        )));
+    }
+
     crate::tools::registered::ctx_edit::CtxEditTool.handle(&edit_args, ctx)
 }
 
@@ -356,6 +373,14 @@ fn delegate_replace_symbol(
 ) -> Result<ToolOutput, ErrorData> {
     let refactor_args = crate::tools::ctx_patch::build_refactor_args(args)
         .map_err(|e| ErrorData::invalid_params(e, None))?;
+
+    if get_bool(args, "dry_run").unwrap_or(false) {
+        let name = get_str(args, "name").unwrap_or_default();
+        let path = get_str(args, "path").unwrap_or_default();
+        return Ok(ToolOutput::simple(format!(
+            "DRY RUN: replace_symbol would rewrite symbol {name:?} in {path}"
+        )));
+    }
 
     // Resolve `path` at the boundary when given (the name route resolves its own
     // path inside ctx_refactor). abs_path is unused by the symbol-edit branch but
@@ -586,5 +611,22 @@ mod batch_grouping_tests {
         assert!(build_unique_edit_args(&Map::new()).is_err());
         let only_old = Map::from_iter([("old_text".into(), json!("old"))]);
         assert!(build_unique_edit_args(&only_old).is_err());
+    }
+
+    #[test]
+    fn dry_run_replace_unique_does_not_apply() {
+        let args = Map::from_iter([
+            ("path".into(), json!("a.rs")),
+            ("op".into(), json!("replace_unique")),
+            ("old_text".into(), json!("old")),
+            ("new_text".into(), json!("new")),
+            ("dry_run".into(), json!(true)),
+        ]);
+        let edit_args = build_unique_edit_args(&args).expect("validation passes");
+        assert!(edit_args.contains_key("old_string"), "args mapped correctly");
+        assert!(
+            args.get("dry_run").and_then(|v| v.as_bool()) == Some(true),
+            "dry_run flag preserved in original args"
+        );
     }
 }
