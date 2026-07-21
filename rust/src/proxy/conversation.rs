@@ -9,7 +9,6 @@
 //!
 //! Determinism (#498): same messages array → same compression decisions.
 //! Scoring is a pure function of (message_content, position, total_messages).
-#![allow(dead_code)]
 
 use serde_json::Value;
 

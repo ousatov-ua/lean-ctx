@@ -13,6 +13,7 @@ pub mod codesign;
 pub mod compress_preview;
 pub mod compression_safety;
 pub mod compressor;
+#[cfg(feature = "experimental")]
 pub mod context_budget;
 pub mod datadog_push;
 pub mod entropy;
@@ -37,7 +38,9 @@ pub mod protect;
 pub mod rabin_karp;
 pub mod relevance_tracker;
 pub mod rule_artifacts;
+#[cfg(feature = "experimental")]
 pub mod rule_scorer;
+#[cfg(feature = "experimental")]
 pub mod rule_staleness;
 pub mod rules_canonical;
 pub mod rules_channel;

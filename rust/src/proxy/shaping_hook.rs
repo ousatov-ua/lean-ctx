@@ -6,7 +6,6 @@
 //! 2. Conversation compression (score+tier messages on long conversations)
 //!
 //! Both are gated on `Config::response_shaping_mode` / `Config::conversation_compression`.
-#![allow(dead_code)]
 
 use super::conversation;
 use super::response_shaper::{self, ShapingMode, ShapingResult};
