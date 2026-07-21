@@ -74,6 +74,21 @@ pub fn handle(
         );
     }
 
+    // #1131: when the top score is below the minimum relevance threshold, the
+    // task likely does not match the current project state (stale persisted
+    // session, wrong worktree, etc.). Report the preload as unusable so
+    // autonomy does not inject it as AUTO CONTEXT.
+    const MIN_USEFUL_SCORE: f64 = 0.25;
+    let max_score = candidates.iter().map(|c| c.score).fold(0.0_f64, f64::max);
+    if max_score < MIN_USEFUL_SCORE {
+        return (
+            format!(
+                "[task: {task}]\nNo sufficiently relevant files (max score {max_score:.1} < {MIN_USEFUL_SCORE}). Use ctx_overview for project map."
+            ),
+            false,
+        );
+    }
+
     // Boltzmann allocation: p(file_i) = exp(score_i / T) / Z
     // Temperature T is derived from task specificity:
     //   - Many keywords / specific file mentions → low T → concentrate budget
@@ -281,13 +296,7 @@ pub fn handle(
     let preload_tokens = count_tokens(&preload_result);
     let savings = protocol::format_savings(total_estimated_saved, preload_tokens);
 
-    let body = if crp_mode.is_tdd() {
-        format!("{preload_result}\n{savings}")
-    } else {
-        format!(
-            "{preload_result}\n\nNext: ctx_read(path, mode=\"full\") for any file above.\n{savings}"
-        )
-    };
+    let body = format!("{preload_result}\n{savings}");
     (body, true)
 }
 
