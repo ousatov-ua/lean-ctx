@@ -16,6 +16,53 @@ pub const KEEP_DATA_DIVISOR: usize = 2;
 const MIN_HTML_BYTES: usize = 5000;
 const MAX_EXTRACTED_TOKENS: usize = 8000;
 const CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+const TRACKING_QUERY_KEYS: &[&str] = &["fbclid", "gclid", "mc_cid", "mc_eid", "_ga", "ref_src"];
+
+/// A code block extracted from the selected article body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeBlock {
+    /// Language hint from `class="language-*"`/`class="lang-*"`, or empty.
+    pub language: String,
+    /// Verbatim text inside the `<pre>`/`<code>` element.
+    pub content: String,
+}
+
+/// Article metadata found in document `<meta>`, `<link>`, and `<time>` nodes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArticleMeta {
+    pub author: Option<String>,
+    pub date: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Deterministic article extraction result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractionResult {
+    pub title: Option<String>,
+    pub content: String,
+    pub code_blocks: Vec<CodeBlock>,
+    pub metadata: ArticleMeta,
+    /// Fraction of input bytes removed from the rendered article, in `[0, 1]`.
+    pub token_reduction: f64,
+}
+
+impl ExtractionResult {
+    /// Render the compact one-line source marker used by shell/proxy callers.
+    #[must_use]
+    pub fn metadata_line(&self) -> Option<String> {
+        let mut fields = Vec::new();
+        if let Some(url) = self.metadata.url.as_deref() {
+            fields.push(url);
+        }
+        if let Some(title) = self.title.as_deref() {
+            fields.push(title);
+        }
+        if let Some(date) = self.metadata.date.as_deref() {
+            fields.push(date);
+        }
+        (!fields.is_empty()).then(|| format!("Source: {}", fields.join(" | ")))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CrushResult {
@@ -26,11 +73,10 @@ pub struct CrushResult {
 }
 
 pub fn is_html_content(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    trimmed.starts_with("<!DOCTYPE")
-        || trimmed.starts_with("<!doctype")
+    let trimmed = content.trim_start().to_ascii_lowercase();
+    trimmed.starts_with("<!doctype")
         || trimmed.starts_with("<html")
-        || trimmed.starts_with("<HTML")
+        || trimmed.starts_with("<?xml")
         || (trimmed.contains("<head") && trimmed.contains("<body"))
 }
 
@@ -42,10 +88,14 @@ pub fn crush_if_beneficial(html: &str) -> Option<CrushResult> {
         return None;
     }
 
-    let extracted = extract_article(html);
-    if extracted.is_empty() {
+    let extraction = extract_article_content(html);
+    if extraction.content.is_empty() {
         return None;
     }
+    let extracted = match extraction.metadata_line() {
+        Some(line) => format!("{line}\n\n{}", extraction.content),
+        None => extraction.content,
+    };
 
     let original_tokens = html.len() / CHARS_PER_TOKEN_ESTIMATE;
     let extracted_tokens = extracted.len() / CHARS_PER_TOKEN_ESTIMATE;
@@ -81,10 +131,29 @@ pub fn crush_if_beneficial(html: &str) -> Option<CrushResult> {
 }
 
 pub fn extract_article(html: &str) -> String {
+    extract_article_content(html).content
+}
+
+/// Extract selected article content, metadata, and sacred code blocks.
+pub fn extract_article_content(html: &str) -> ExtractionResult {
     let tokens = tokenize(html);
     let nodes = build_tree(&tokens);
     let article = select_main_content(&nodes);
-    nodes_to_markdown(&article)
+    let content = nodes_to_markdown(&article);
+    let (title, metadata) = extract_metadata(&nodes, &article);
+    let code_blocks = collect_code_blocks(&article);
+    let token_reduction = if html.is_empty() {
+        0.0
+    } else {
+        (1.0 - content.len() as f64 / html.len() as f64).clamp(0.0, 1.0)
+    };
+    ExtractionResult {
+        title,
+        content,
+        code_blocks,
+        metadata,
+        token_reduction,
+    }
 }
 
 // --- HTML Tokenizer ---
@@ -515,6 +584,138 @@ fn find_element_by_id_class<'a>(
     None
 }
 
+fn attribute<'a>(el: &'a HtmlNode, name: &str) -> Option<&'a str> {
+    el.attrs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn node_text(nodes: &[HtmlNodeChild]) -> String {
+    let mut text = String::new();
+    raw_text(nodes, &mut text);
+    normalize_whitespace(&text).trim().to_string()
+}
+
+fn raw_text(nodes: &[HtmlNodeChild], out: &mut String) {
+    for child in nodes {
+        match child {
+            HtmlNodeChild::Text(text) => out.push_str(text),
+            HtmlNodeChild::Element(el) => raw_text(&el.children, out),
+        }
+    }
+}
+
+fn find_meta_value(nodes: &[HtmlNodeChild], names: &[&str]) -> Option<String> {
+    for child in nodes {
+        let HtmlNodeChild::Element(el) = child else {
+            continue;
+        };
+        if el.tag == "meta"
+            && let Some(value) = attribute(el, "content")
+            && !value.trim().is_empty()
+            && names.iter().any(|name| {
+                attribute(el, "name")
+                    .or_else(|| attribute(el, "property"))
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(name))
+            })
+        {
+            return Some(value.trim().to_string());
+        }
+        if let Some(value) = find_meta_value(&el.children, names) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn find_canonical_url(nodes: &[HtmlNodeChild]) -> Option<String> {
+    for child in nodes {
+        let HtmlNodeChild::Element(el) = child else {
+            continue;
+        };
+        if el.tag == "link"
+            && attribute(el, "rel").is_some_and(|rel| {
+                rel.split_whitespace()
+                    .any(|v| v.eq_ignore_ascii_case("canonical"))
+            })
+            && let Some(href) = attribute(el, "href")
+            && !href.trim().is_empty()
+        {
+            return Some(href.trim().to_string());
+        }
+        if let Some(value) = find_canonical_url(&el.children) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn extract_metadata(
+    nodes: &[HtmlNodeChild],
+    article: &[HtmlNodeChild],
+) -> (Option<String>, ArticleMeta) {
+    let title = find_element_by_tag(nodes, "title")
+        .map(|el| node_text(&el.children))
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            find_element_by_tag(article, "h1")
+                .map(|el| node_text(&el.children))
+                .filter(|value| !value.is_empty())
+        });
+    let author = find_meta_value(nodes, &["author", "article:author"]);
+    let date = find_meta_value(
+        nodes,
+        &[
+            "date",
+            "article:published_time",
+            "article:modified_time",
+            "pubdate",
+        ],
+    )
+    .or_else(|| {
+        find_element_by_tag(nodes, "time").and_then(|el| {
+            attribute(el, "datetime").map(str::to_string).or_else(|| {
+                let text = node_text(&el.children);
+                (!text.is_empty()).then_some(text)
+            })
+        })
+    });
+    let url = find_meta_value(nodes, &["og:url", "twitter:url", "url"])
+        .or_else(|| find_canonical_url(nodes));
+    (title, ArticleMeta { author, date, url })
+}
+
+fn collect_code_blocks(nodes: &[HtmlNodeChild]) -> Vec<CodeBlock> {
+    let mut blocks = Vec::new();
+    collect_code_blocks_inner(nodes, &mut blocks);
+    blocks
+}
+
+fn collect_code_blocks_inner(nodes: &[HtmlNodeChild], blocks: &mut Vec<CodeBlock>) {
+    for child in nodes {
+        let HtmlNodeChild::Element(el) = child else {
+            continue;
+        };
+        if el.tag == "pre" || el.tag == "code" {
+            let mut content = String::new();
+            raw_text(&el.children, &mut content);
+            blocks.push(CodeBlock {
+                language: if el.tag == "pre" {
+                    detect_code_language(el)
+                } else {
+                    code_language(el)
+                },
+                content,
+            });
+            if el.tag == "pre" {
+                continue;
+            }
+        }
+        collect_code_blocks_inner(&el.children, blocks);
+    }
+}
+
 fn filter_boilerplate(nodes: &[HtmlNodeChild]) -> Vec<HtmlNodeChild> {
     nodes
         .iter()
@@ -582,6 +783,33 @@ fn render_nodes(nodes: &[HtmlNodeChild], out: &mut String, state: &mut RenderSta
             HtmlNodeChild::Element(el) => render_element(el, out, state),
         }
     }
+}
+
+fn collapse_tracking_parameters(href: &str) -> String {
+    let Some((base, query_and_fragment)) = href.split_once('?') else {
+        return href.to_string();
+    };
+    let (query, fragment) = query_and_fragment
+        .split_once('#')
+        .map_or((query_and_fragment, ""), |parts| parts);
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|part| {
+            let key = part.split_once('=').map_or(*part, |(key, _)| key);
+            let lower = key.to_ascii_lowercase();
+            !lower.starts_with("utm_") && !TRACKING_QUERY_KEYS.contains(&lower.as_str())
+        })
+        .collect();
+    let mut result = base.to_string();
+    if !kept.is_empty() {
+        result.push('?');
+        result.push_str(&kept.join("&"));
+    }
+    if !fragment.is_empty() {
+        result.push('#');
+        result.push_str(fragment);
+    }
+    result
 }
 
 fn render_element(el: &HtmlNode, out: &mut String, state: &mut RenderState) {
@@ -682,7 +910,7 @@ fn render_element(el: &HtmlNode, out: &mut String, state: &mut RenderState) {
                 out.push('[');
                 out.push_str(&link_text);
                 out.push_str("](");
-                out.push_str(href);
+                out.push_str(&collapse_tracking_parameters(href));
                 out.push(')');
             } else if !link_text.is_empty() {
                 out.push_str(&link_text);
@@ -817,49 +1045,53 @@ fn collect_rows_recursive(el: &HtmlNode, rows: &mut Vec<Vec<String>>) {
     }
 }
 
+fn code_language(el: &HtmlNode) -> String {
+    let class = attribute(el, "class").unwrap_or("");
+    for cls in class.split_whitespace() {
+        if let Some(lang) = cls.strip_prefix("language-") {
+            return lang.to_string();
+        }
+        if let Some(lang) = cls.strip_prefix("lang-") {
+            return lang.to_string();
+        }
+        if matches!(
+            cls,
+            "rust"
+                | "python"
+                | "javascript"
+                | "typescript"
+                | "go"
+                | "java"
+                | "c"
+                | "cpp"
+                | "ruby"
+                | "bash"
+                | "sh"
+                | "json"
+                | "yaml"
+                | "toml"
+                | "sql"
+                | "html"
+                | "css"
+        ) {
+            return cls.to_string();
+        }
+    }
+    String::new()
+}
+
 fn detect_code_language(pre: &HtmlNode) -> String {
     for child in &pre.children {
         if let HtmlNodeChild::Element(code) = child {
             if code.tag == "code" {
-                let class = code
-                    .attrs
-                    .iter()
-                    .find(|(k, _)| k == "class")
-                    .map_or("", |(_, v)| v.as_str());
-                for cls in class.split_whitespace() {
-                    if let Some(lang) = cls.strip_prefix("language-") {
-                        return lang.to_string();
-                    }
-                    if let Some(lang) = cls.strip_prefix("lang-") {
-                        return lang.to_string();
-                    }
-                    if matches!(
-                        cls,
-                        "rust"
-                            | "python"
-                            | "javascript"
-                            | "typescript"
-                            | "go"
-                            | "java"
-                            | "c"
-                            | "cpp"
-                            | "ruby"
-                            | "bash"
-                            | "sh"
-                            | "json"
-                            | "yaml"
-                            | "toml"
-                            | "sql"
-                            | "html"
-                            | "css"
-                    ) {
-                        return cls.to_string();
-                    }
+                let language = code_language(code);
+                if !language.is_empty() {
+                    return language;
                 }
             }
         }
     }
-    String::new()
+    code_language(pre)
 }
 
 fn normalize_whitespace(text: &str) -> String {
