@@ -1,11 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 
 use super::types::{OclaError, OclaResult};
 
 static NEXT_FORK_ID: AtomicU64 = AtomicU64::new(1);
+
+static GLOBAL_CAPSULE_STORE: OnceLock<CapsuleStore> = OnceLock::new();
+
+#[must_use]
+pub fn global_capsule_store() -> &'static CapsuleStore {
+    GLOBAL_CAPSULE_STORE.get_or_init(CapsuleStore::new)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Delta {
@@ -86,6 +93,17 @@ impl CapsuleStore {
             .read()
             .map_err(|_| invalid("capsule store lock poisoned"))?;
         resolve_entries(&entries, capsule_ref)
+    }
+
+    pub(crate) fn budget_tokens(&self, capsule_ref: &str) -> OclaResult<u64> {
+        let entries = self
+            .entries
+            .read()
+            .map_err(|_| invalid("capsule store lock poisoned"))?;
+        entries
+            .get(capsule_ref)
+            .map(|entry| entry.budget_tokens)
+            .ok_or_else(|| invalid(format!("unknown capsule: {capsule_ref}")))
     }
 
     pub fn apply_delta(&self, capsule_ref: &str, delta: Delta) -> OclaResult<()> {
@@ -239,6 +257,17 @@ mod tests {
     }
 
     #[test]
+    fn global_store_registers_capsule() {
+        let capsule_ref = global_capsule_store().register(b"global capsule");
+        assert_eq!(
+            global_capsule_store()
+                .resolve(&capsule_ref)
+                .expect("global resolves"),
+            b"global capsule"
+        );
+    }
+
+    #[test]
     fn register_resolves_original_data() {
         let store = CapsuleStore::new();
         let capsule_ref = store.register(b"hello");
@@ -253,6 +282,7 @@ mod tests {
         let parent_ref = store.register(b"hello");
         let child_ref = store.fork(&parent_ref, 100).expect("fork succeeds");
         assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hello");
+        assert_eq!(store.budget_tokens(&child_ref).expect("budget exists"), 100);
     }
     #[test]
     fn fork_delta_resolves_patched_data() {

@@ -7,6 +7,7 @@
 
 use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 use crate::core::agents::AgentRegistry;
+use crate::core::ocla::capsule::global_capsule_store;
 use crate::core::ocla::traits::{AgentGateway, OclaService};
 use crate::core::ocla::types::{
     AgentEnvelope, OclaCapability, OclaCapabilityKind, OclaError, OclaResult,
@@ -20,6 +21,9 @@ impl BuiltinAgentGateway {
         Self
     }
 
+    pub fn can_relay(&self, capsule_ref: &str, _to_agent_id: &str) -> bool {
+        capsule_ref.is_empty() || global_capsule_store().resolve(capsule_ref).is_ok()
+    }
     pub fn route_message(
         &self, // used for trait impl method grouping
         from_agent: &str,
@@ -77,11 +81,25 @@ impl OclaService for BuiltinAgentGateway {
 
 impl AgentGateway for BuiltinAgentGateway {
     fn relay_agent(&self, envelope: AgentEnvelope) -> OclaResult<AgentEnvelope> {
+        let mut envelope = envelope;
         if envelope.budget_tokens == 0 {
             return Err(OclaError::Rejected(
                 OclaCapabilityKind::AgentGateway,
                 "zero budget".into(),
             ));
+        }
+        if !envelope.capsule_ref.is_empty() {
+            let parent_ref = envelope.capsule_ref.clone();
+            envelope.capsule_ref = global_capsule_store()
+                .fork(&parent_ref, envelope.budget_tokens)
+                .map_err(|error| {
+                    tracing::debug!(error = %error, "capsule fork failed for relay");
+                    OclaError::Rejected(
+                        OclaCapabilityKind::AgentGateway,
+                        format!("capsule fork failed: {error}"),
+                    )
+                })?;
+            tracing::debug!("capsule forked for relay");
         }
 
         ocla_bus::emit(OclaEvent::AgentChainEvent {
@@ -128,16 +146,60 @@ mod tests {
             },
             from_agent_id: "agent-a".into(),
             to_agent_id: "agent-b".into(),
-            capsule_ref: "capsule:abc".into(),
+            capsule_ref: String::new(),
             budget_tokens: budget,
         }
     }
 
     #[test]
-    fn relay_passes_valid_envelope() {
+    fn relay_without_capsule_passes_through() {
         let gateway = BuiltinAgentGateway::new();
         let result = gateway.relay_agent(envelope(1000)).unwrap();
         assert_eq!(result.from_agent_id, "agent-a");
+        assert!(result.capsule_ref.is_empty());
+    }
+
+    #[test]
+    fn relay_with_capsule_forks() {
+        let gateway = BuiltinAgentGateway::new();
+        let parent_ref = global_capsule_store().register(b"relay capsule");
+        let mut input = envelope(1000);
+        input.capsule_ref = parent_ref.clone();
+
+        let result = gateway.relay_agent(input).expect("relay succeeds");
+
+        assert_ne!(result.capsule_ref, parent_ref);
+        assert_eq!(
+            global_capsule_store()
+                .resolve(&result.capsule_ref)
+                .expect("child resolves"),
+            b"relay capsule"
+        );
+    }
+
+    #[test]
+    fn can_relay_false_for_unknown_ref() {
+        let gateway = BuiltinAgentGateway::new();
+
+        assert!(gateway.can_relay("", "agent-b"));
+        assert!(!gateway.can_relay("capsule:unknown-ref", "agent-b"));
+    }
+
+    #[test]
+    fn relay_deducts_budget_tokens() {
+        let gateway = BuiltinAgentGateway::new();
+        let parent_ref = global_capsule_store().register(b"budget capsule");
+        let mut input = envelope(321);
+        input.capsule_ref = parent_ref;
+
+        let result = gateway.relay_agent(input).expect("relay succeeds");
+
+        assert_eq!(
+            global_capsule_store()
+                .budget_tokens(&result.capsule_ref)
+                .expect("child budget exists"),
+            321
+        );
     }
 
     #[test]
