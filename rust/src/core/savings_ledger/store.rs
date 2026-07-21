@@ -1033,7 +1033,7 @@ mod tests {
         let p = temp_path("approve");
         let original = append(&p, sample(100)).unwrap();
 
-        let updated = approve_event(&p, &original.entry_hash, CustomerApproval::Approved).unwrap();
+        let updated = approve_event(&p, &original.entry_hash, &CustomerApproval::Approved).unwrap();
 
         assert_eq!(updated.customer_approval, Some(CustomerApproval::Approved));
         assert!(verify(&p).valid);
@@ -1049,7 +1049,7 @@ mod tests {
         let p = temp_path("settle");
         let original = append(&p, sample(100)).unwrap();
 
-        let updated = settle_event(&p, &original.entry_hash, SettlementStatus::Settled).unwrap();
+        let updated = settle_event(&p, &original.entry_hash, &SettlementStatus::Settled).unwrap();
 
         assert_eq!(updated.settlement_status, Some(SettlementStatus::Settled));
         assert!(verify(&p).valid);
@@ -1066,7 +1066,7 @@ mod tests {
         append(&p, sample(100)).unwrap();
         append(&p, sample(0)).unwrap();
         let approved = append(&p, sample(50)).unwrap();
-        approve_event(&p, &approved.entry_hash, CustomerApproval::Approved).unwrap();
+        approve_event(&p, &approved.entry_hash, &CustomerApproval::Approved).unwrap();
 
         let pending = query_pending_approval(&p);
         assert_eq!(pending.len(), 1);

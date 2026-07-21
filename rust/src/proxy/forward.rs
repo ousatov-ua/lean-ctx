@@ -895,6 +895,7 @@ mod tests {
     use crate::core::ocla::types::{
         IntentDecision, IntentRequest, OclaCapability, OclaCapabilityKind, OclaResult,
     };
+    use crate::proxy::intent::ProxyIntentClassification;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
