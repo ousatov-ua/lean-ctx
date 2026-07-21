@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::marked_block;
 
 use super::claude::anthropic_api_key_available;
+use super::commandcode::{commandcode_auth_available, render_commandcode_shell_exports};
 use super::grok::{ShellFlavor, effective_grok_auth_mode, render_grok_shell_exports};
 use super::util::{ANTHROPIC_OMITTED_NOTE, PROXY_ENV_END, PROXY_ENV_START, is_proxy_reachable};
 
@@ -34,6 +35,11 @@ pub(crate) fn install_shell_exports(home: &Path, port: u16, quiet: bool, force_e
     // Match install_grok_env: --force with no auth still exports the subscription rail.
     let grok_mode = effective_grok_auth_mode(home, force_endpoint);
     let posix_grok = render_grok_shell_exports(&base, grok_mode, ShellFlavor::Posix);
+    // Command Code: single gateway rail — session/API-key → api.commandcode.ai.
+    // Match install_commandcode_env: --force with no auth still exports the rail.
+    let commandcode_available = commandcode_auth_available(home) || force_endpoint;
+    let posix_commandcode =
+        render_commandcode_shell_exports(&base, commandcode_available, ShellFlavor::Posix);
 
     let posix_anthropic = if include_anthropic {
         format!(r#"export ANTHROPIC_BASE_URL="{base}""#)
@@ -46,6 +52,7 @@ pub(crate) fn install_shell_exports(home: &Path, port: u16, quiet: bool, force_e
 export OPENAI_BASE_URL="{openai_base}"
 export GEMINI_API_BASE_URL="{base}"
 {posix_grok}
+{posix_commandcode}
 {PROXY_ENV_END}"#
     );
 
@@ -74,12 +81,15 @@ export GEMINI_API_BASE_URL="{base}"
             format!("# {ANTHROPIC_OMITTED_NOTE}")
         };
         let fish_grok = render_grok_shell_exports(&base, grok_mode, ShellFlavor::Fish);
+        let fish_commandcode =
+            render_commandcode_shell_exports(&base, commandcode_available, ShellFlavor::Fish);
         let fish_block = format!(
             r#"{PROXY_ENV_START}
 {fish_anthropic}
 set -gx OPENAI_BASE_URL "{openai_base}"
 set -gx GEMINI_API_BASE_URL "{base}"
 {fish_grok}
+{fish_commandcode}
 {PROXY_ENV_END}"#
         );
         marked_block::upsert(
@@ -103,12 +113,15 @@ set -gx GEMINI_API_BASE_URL "{base}"
             format!("# {ANTHROPIC_OMITTED_NOTE}")
         };
         let ps_grok = render_grok_shell_exports(&base, grok_mode, ShellFlavor::PowerShell);
+        let ps_commandcode =
+            render_commandcode_shell_exports(&base, commandcode_available, ShellFlavor::PowerShell);
         let ps_block = format!(
             r#"{PROXY_ENV_START}
 {ps_anthropic}
 $env:OPENAI_BASE_URL = "{openai_base}"
 $env:GEMINI_API_BASE_URL = "{base}"
 {ps_grok}
+{ps_commandcode}
 {PROXY_ENV_END}"#
         );
         marked_block::upsert(

@@ -5,6 +5,7 @@
 
 mod claude;
 mod codex;
+mod commandcode;
 mod grok;
 mod pi;
 mod shell;
@@ -20,6 +21,7 @@ use crate::marked_block;
 
 use claude::{install_claude_env, install_claude_env_inner, uninstall_claude_env};
 use codex::{codex_config_has_local_proxy_entry, strip_codex_proxy_entries, uninstall_codex_env};
+use commandcode::{install_commandcode_env, uninstall_commandcode_env};
 use grok::{
     grok_config_has_local_proxy_entry, install_grok_env, strip_grok_proxy_entries,
     uninstall_grok_env,
@@ -47,6 +49,7 @@ pub fn install_proxy_env(home: &Path, port: u16, quiet: bool) {
     install_codex_env(home, port, quiet);
     install_pi_env(home, port, quiet, false);
     install_grok_env(home, port, quiet, false);
+    install_commandcode_env(home, port, quiet, false);
 }
 
 /// Install proxy env without config guard (used by `lean-ctx proxy enable` which has already set the flag).
@@ -63,6 +66,7 @@ pub fn install_proxy_env_unchecked(home: &Path, port: u16, quiet: bool, force_en
     install_codex_env(home, port, quiet);
     install_pi_env(home, port, quiet, force_endpoint);
     install_grok_env(home, port, quiet, force_endpoint);
+    install_commandcode_env(home, port, quiet, force_endpoint);
 }
 
 pub fn preview_proxy_cleanup(home: &Path) {
@@ -92,6 +96,13 @@ pub fn preview_proxy_cleanup(home: &Path) {
         && grok_config_has_local_proxy_entry(&content)
     {
         println!("  Would remove Grok proxy models_base_url from config.toml");
+    }
+
+    let cc_mcp = home.join(".commandcode/mcp.json");
+    if let Ok(content) = std::fs::read_to_string(cc_mcp)
+        && content.contains("lean-ctx")
+    {
+        println!("  Would remove lean-ctx from Command Code MCP (~/.commandcode/mcp.json)");
     }
 }
 
@@ -221,4 +232,5 @@ pub fn uninstall_proxy_env(home: &Path, quiet: bool) {
     uninstall_codex_env(home, quiet);
     uninstall_pi_env(home, quiet);
     uninstall_grok_env(home, quiet);
+    uninstall_commandcode_env(home, quiet);
 }

@@ -199,6 +199,10 @@ pub struct ProxyStats {
     /// shape, separate identity so `proxy status` does not fold xAI traffic
     /// into the OpenAI bucket.
     pub grok: ProviderStats,
+    /// Command Code gateway rail (`/providers/commandcode`) — separate identity
+    /// so `proxy status` does not fold Command Code traffic into the wire-shape
+    /// bucket.
+    pub commandcode: ProviderStats,
 }
 
 #[derive(Default)]
@@ -223,6 +227,7 @@ impl Default for ProxyStats {
             chatgpt: ProviderStats::default(),
             gemini: ProviderStats::default(),
             grok: ProviderStats::default(),
+            commandcode: ProviderStats::default(),
         }
     }
 }
@@ -279,7 +284,8 @@ impl ProxyStats {
     /// return `None` (still counted in the totals, never misattributed to a bucket);
     /// every real upstream — Gemini included — passes an explicit label.
     /// `"Grok"` is the identity label for registry routes `grok-chat` / `xai`
-    /// (OpenAI wire shape; see `providers::stats_label`).
+    /// (OpenAI wire shape; see `providers::stats_label`). `"CommandCode"` is the
+    /// identity label for the `commandcode` registry route.
     fn provider(&self, provider_label: &str) -> Option<&ProviderStats> {
         match provider_label {
             "Anthropic" => Some(&self.anthropic),
@@ -287,6 +293,7 @@ impl ProxyStats {
             "ChatGPT" => Some(&self.chatgpt),
             "Gemini" => Some(&self.gemini),
             "Grok" => Some(&self.grok),
+            "CommandCode" => Some(&self.commandcode),
             _ => None,
         }
     }
@@ -298,6 +305,7 @@ impl ProxyStats {
             "chatgpt": self.chatgpt.summary(),
             "gemini": self.gemini.summary(),
             "grok": self.grok.summary(),
+            "commandcode": self.commandcode.summary(),
         })
     }
 }

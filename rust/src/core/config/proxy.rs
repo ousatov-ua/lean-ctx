@@ -1299,6 +1299,9 @@ const ALLOWED_UPSTREAM_HOSTS: &[&str] = &[
     // when `lean-ctx proxy enable` wires Grok (API-key rail + subscription rail).
     "api.x.ai",
     "cli-chat-proxy.grok.com",
+    // Command Code gateway. Used by the auto-seeded `commandcode` registry
+    // provider when `lean-ctx proxy enable` wires Command Code.
+    "api.commandcode.ai",
 ];
 
 pub(super) fn validate_upstream_url(

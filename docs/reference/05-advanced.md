@@ -45,9 +45,37 @@ started — run `lean-ctx proxy start` (or rely on the LaunchAgent/systemd unit)
 
 **Under the hood:** runs on `LEAN_CTX_PROXY_PORT` (default 4444), auth via
 `session_token`. `proxy enable` writes `*_BASE_URL` exports into your shell RC,
-`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`), and Codex `config.toml`
-(`OPENAI_BASE_URL`), and installs `com.leanctx.proxy.plist` (macOS) or a systemd
-user unit (Linux). Upstreams are configurable in `[proxy]`.
+`~/.claude/settings.json` (`ANTHROPIC_BASE_URL`), Codex `config.toml`
+(`OPENAI_BASE_URL`), Grok dual-rail URLs when `~/.grok` is present, and
+Command Code (`cmd`) when `~/.commandcode` + session auth exist — plus
+installs `com.leanctx.proxy.plist` (macOS) or a systemd user unit (Linux).
+Upstreams are configurable in `[proxy]`.
+
+### Command Code (`cmd`)
+
+[Command Code](https://commandcode.ai) (binary `cmd`, package `command-code`)
+uses a single gateway rail:
+
+| Piece | Value |
+|-------|-------|
+| Shell | `COMMANDCODE_SANDBOX=true` + `COMMANDCODE_API_URL=http://127.0.0.1:<port>/providers/commandcode` |
+| Auth | `~/.commandcode/auth.json` (`apiKey`) or `COMMAND_CODE_API_KEY` |
+| Upstream | `https://api.commandcode.ai` (auto-seeded `[[proxy.providers]]` id `commandcode`) |
+| MCP | `~/.commandcode/mcp.json` — lean-ctx stdio server written by `proxy enable` |
+
+**Important:** the CLI ignores `COMMANDCODE_API_URL` unless `COMMANDCODE_SANDBOX=true`
+(both are written by `proxy enable`). Login with `cmd login`.
+
+The proxy forwards Command Code version headers (`x-command-code-version`, …).
+Without them the upstream returns `403 upgrade_required` ("CLI is out of date")
+even for current clients.
+
+```bash
+npm i -g command-code
+cmd login
+lean-ctx proxy enable   # seeds provider + shell env + ~/.commandcode/mcp.json
+cmd                     # traffic → local proxy → api.commandcode.ai
+```
 
 **Plays nice with provider prompt caching.** Anthropic's `cache_control` and
 OpenAI's automatic prompt caching bill cached prefix tokens at a fraction of

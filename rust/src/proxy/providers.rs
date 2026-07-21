@@ -109,6 +109,16 @@ pub(super) fn is_grok_provider_id(id: &str) -> bool {
     )
 }
 
+/// Registry ids that share the Command Code gateway rail (`commandcode`).
+/// Separate `proxy status` bucket so traffic does not fold into the wire-shape
+/// line.
+pub(super) fn is_commandcode_provider_id(id: &str) -> bool {
+    matches!(
+        id.trim().to_ascii_lowercase().as_str(),
+        "commandcode" | "command-code"
+    )
+}
+
 /// Per-upstream stats label for a registry route.
 ///
 /// Wire shape stays `OpenAI`/`Anthropic`/… for compression; identity for
@@ -116,6 +126,7 @@ pub(super) fn is_grok_provider_id(id: &str) -> bool {
 pub(super) fn stats_label<'a>(registry_id: Option<&str>, shape_label: &'a str) -> &'a str {
     match registry_id {
         Some(id) if is_grok_provider_id(id) => "Grok",
+        Some(id) if is_commandcode_provider_id(id) => "CommandCode",
         _ => shape_label,
     }
 }
@@ -334,6 +345,22 @@ mod tests {
         assert!(is_grok_provider_id(" Grok "));
         assert!(!is_grok_provider_id("openai"));
         assert!(!is_grok_provider_id("foundry"));
+    }
+
+    #[test]
+    fn stats_label_maps_commandcode_rail_to_commandcode_bucket() {
+        assert_eq!(stats_label(Some("commandcode"), "OpenAI"), "CommandCode");
+        assert_eq!(stats_label(Some("command-code"), "OpenAI"), "CommandCode");
+        assert_eq!(stats_label(Some(" CommandCode "), "OpenAI"), "CommandCode");
+    }
+
+    #[test]
+    fn is_commandcode_provider_id_accepts_rail_ids() {
+        assert!(is_commandcode_provider_id("commandcode"));
+        assert!(is_commandcode_provider_id("command-code"));
+        assert!(is_commandcode_provider_id(" COMMANDCODE "));
+        assert!(!is_commandcode_provider_id("openai"));
+        assert!(!is_commandcode_provider_id("grok"));
     }
 
     #[test]

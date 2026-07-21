@@ -1,5 +1,6 @@
 use super::claude::*;
 use super::codex::*;
+use super::commandcode::*;
 use super::grok::*;
 use super::pi::*;
 use super::shell::*;
@@ -1148,4 +1149,148 @@ fn reconcile_proxy_provider_does_not_touch_other_ids() {
     assert!(matches!(action, ProviderEnsureAction::Updated { .. }));
     assert_eq!(providers[0].base_url, "https://api.openai.com/v1");
     assert_eq!(providers[1].base_url, XAI_UPSTREAM);
+}
+
+// --- Command Code rail ------------------------------------------------------
+
+#[test]
+fn commandcode_session_auth_detects_auth_json() {
+    let home = tempfile::tempdir().unwrap();
+    let cc_dir = home.path().join(".commandcode");
+    std::fs::create_dir_all(&cc_dir).unwrap();
+    assert!(!commandcode_session_auth_available(home.path()));
+    std::fs::write(
+        cc_dir.join("auth.json"),
+        r#"{"apiKey":"cc-key-123","userId":"u1","userName":"user","keyName":"default","authenticatedAt":"2026-01-01"}"#,
+    )
+    .unwrap();
+    assert!(commandcode_session_auth_available(home.path()));
+    std::fs::write(cc_dir.join("auth.json"), r#"{"apiKey":"  "}"#).unwrap();
+    assert!(!commandcode_session_auth_available(home.path()));
+    std::fs::write(cc_dir.join("auth.json"), "not json").unwrap();
+    assert!(!commandcode_session_auth_available(home.path()));
+}
+
+#[test]
+fn commandcode_shell_exports_emit_sandbox_and_api_url() {
+    let posix =
+        render_commandcode_shell_exports("http://127.0.0.1:18765", true, ShellFlavor::Posix);
+    assert!(
+        posix.contains(
+            r#"export COMMANDCODE_API_URL="http://127.0.0.1:18765/providers/commandcode""#
+        ),
+        "must export the registry rail URL: {posix}"
+    );
+    assert!(
+        posix.contains(r#"export COMMANDCODE_SANDBOX="true""#),
+        "CLI only honours COMMANDCODE_API_URL under sandbox: {posix}"
+    );
+
+    let fish = render_commandcode_shell_exports("http://127.0.0.1:18765", true, ShellFlavor::Fish);
+    assert!(
+        fish.contains(
+            r#"set -gx COMMANDCODE_API_URL "http://127.0.0.1:18765/providers/commandcode""#
+        )
+    );
+
+    let ps =
+        render_commandcode_shell_exports("http://127.0.0.1:18765", true, ShellFlavor::PowerShell);
+    assert!(
+        ps.contains(r#"$env:COMMANDCODE_API_URL = "http://127.0.0.1:18765/providers/commandcode""#)
+    );
+}
+
+#[test]
+fn commandcode_shell_exports_omit_note_without_auth() {
+    let posix =
+        render_commandcode_shell_exports("http://127.0.0.1:18765", false, ShellFlavor::Posix);
+    assert!(posix.starts_with("# "), "omit note is a comment: {posix}");
+    assert!(
+        !posix.contains("COMMANDCODE_API_URL"),
+        "must not export the URL when no auth is detectable: {posix}"
+    );
+}
+
+#[test]
+fn commandcode_proxy_base_url_targets_registry_route() {
+    assert_eq!(
+        commandcode_proxy_base_url(4444),
+        "http://127.0.0.1:4444/providers/commandcode"
+    );
+}
+
+#[test]
+fn reconcile_proxy_provider_seeds_commandcode_rail() {
+    let mut providers = vec![];
+    let action = reconcile_proxy_provider(&mut providers, "commandcode", COMMANDCODE_UPSTREAM);
+    assert_eq!(action, ProviderEnsureAction::Seeded);
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0].id, "commandcode");
+    assert_eq!(providers[0].base_url, COMMANDCODE_UPSTREAM);
+    assert_eq!(providers[0].shape, crate::core::config::WireShape::OpenAi);
+    assert!(providers[0].api_key_env.is_none());
+}
+
+#[test]
+fn commandcode_mcp_install_writes_lean_ctx_entry() {
+    let home = tempfile::tempdir().unwrap();
+    let msg = install_commandcode_mcp(home.path()).unwrap();
+    assert!(msg.contains("wrote lean-ctx"), "{msg}");
+    let path = commandcode_mcp_path(home.path());
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let entry = &v["mcpServers"]["lean-ctx"];
+    assert_eq!(entry["transport"], "stdio");
+    assert_eq!(entry["enabled"], true);
+    assert_eq!(entry["command"], "lean-ctx");
+    assert!(
+        entry["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("shadow mode"),
+        "instructions present"
+    );
+}
+
+#[test]
+fn commandcode_mcp_install_preserves_other_servers() {
+    let home = tempfile::tempdir().unwrap();
+    let path = commandcode_mcp_path(home.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"other":{"command":"echo","enabled":true}}}"#,
+    )
+    .unwrap();
+    install_commandcode_mcp(home.path()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(v["mcpServers"].get("other").is_some());
+    assert!(v["mcpServers"].get("lean-ctx").is_some());
+}
+
+#[test]
+fn commandcode_mcp_uninstall_removes_only_lean_ctx() {
+    let home = tempfile::tempdir().unwrap();
+    let path = commandcode_mcp_path(home.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"mcpServers":{"lean-ctx":{"command":"lean-ctx"},"other":{"command":"echo"}}}"#,
+    )
+    .unwrap();
+    let msg = uninstall_commandcode_mcp(home.path()).unwrap();
+    assert!(msg.is_some());
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(v["mcpServers"].get("lean-ctx").is_none());
+    assert!(v["mcpServers"].get("other").is_some());
+}
+
+#[test]
+fn commandcode_omitted_note_mentions_cmd_login() {
+    assert!(
+        COMMANDCODE_OMITTED_NOTE.contains("cmd login"),
+        "binary is cmd, not commandcode: {COMMANDCODE_OMITTED_NOTE}"
+    );
 }

@@ -99,6 +99,13 @@ fn is_provider_route_registry_providers() {
     assert!(is_provider_route("/providers/grok-chat/v1/responses"));
     assert!(is_provider_route("/providers/xai/v1/models"));
     assert!(is_provider_route("/providers/foundry/v1/chat/completions"));
+    // Command Code gateway rail: base URL is
+    // `http://127.0.0.1:4444/providers/commandcode`, so the CLI hits
+    // `/providers/commandcode/alpha/...` with its own session Bearer.
+    assert!(is_provider_route("/providers/commandcode/alpha/whoami"));
+    assert!(is_provider_route(
+        "/providers/commandcode/alpha/agent/generate"
+    ));
     // Bare prefix without trailing path still matches the registry mount.
     assert!(is_provider_route("/providers/grok-chat"));
     // Unrelated paths stay closed.

@@ -57,6 +57,7 @@ fn print_compression_by_upstream(v: &serde_json::Value) {
         ("ChatGPT", "chatgpt"),
         ("Gemini", "gemini"),
         ("Grok", "grok"),
+        ("CommandCode", "commandcode"),
     ] {
         let Some(row) = per_upstream.get(key).and_then(|x| x.as_object()) else {
             continue;
@@ -173,12 +174,23 @@ fn print_live_upstreams_and_drift(v: &serde_json::Value, cfg: &crate::core::conf
                 || id.eq_ignore_ascii_case("grok")
             {
                 "Grok"
+            } else if id.eq_ignore_ascii_case("commandcode")
+                || id.eq_ignore_ascii_case("command-code")
+            {
+                "CommandCode"
             } else {
                 id
             };
-            // Prefer a stable Grok display name; still show registry id when it
+            // Prefer a stable display name; still show registry id when it
             // differs (e.g. grok-chat vs xai).
-            if label == "Grok" && !id.eq_ignore_ascii_case("grok") {
+            let canonical_id = match label {
+                "Grok" => Some("grok"),
+                "CommandCode" => Some("commandcode"),
+                _ => None,
+            };
+            if let Some(canon) = canonical_id
+                && !id.eq_ignore_ascii_case(canon)
+            {
                 println!("    {label:<10} {base}  [{id}]");
             } else {
                 println!("    {label:<10} {base}");

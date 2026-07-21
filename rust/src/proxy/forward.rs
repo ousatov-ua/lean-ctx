@@ -609,6 +609,20 @@ pub(super) const ALLOWED_REQUEST_HEADERS: &[&str] = &[
     "x-grok-max-completion-tokens",
     "x-grok-doom-loop-check",
     "x-grok-managed-gateway",
+    // Command Code (`cmd`) CLI headers. Without `x-command-code-version`
+    // the upstream returns 403 `upgrade_required` ("CLI is out of date")
+    // even for current clients — the version gate runs before body validation.
+    "x-command-code-version",
+    "x-cli-environment",
+    "x-oauth-token",
+    "x-oauth-provider",
+    "x-project-slug",
+    "x-taste-learning",
+    "x-taste-usage",
+    "x-oss-primary-provider",
+    "x-system-prompt-breakdown",
+    "x-cmd-zdr",
+    "x-session-id",
 ];
 
 pub(super) fn is_allowed_request_header(name: &str) -> bool {
@@ -1472,5 +1486,29 @@ mod tests {
     fn cache_prompt_hash_is_content_sensitive() {
         let hash = super::super::ocla_cache_bridge::prompt_hash;
         assert_ne!(hash(b"one"), hash(b"two"));
+    }
+}
+
+#[test]
+fn forwards_commandcode_cli_headers() {
+    // Command Code (`cmd`) gates agent calls on `x-command-code-version`.
+    // Stripping it yields 403 upgrade_required ("CLI is out of date").
+    for required in [
+        "x-command-code-version",
+        "x-cli-environment",
+        "x-oauth-token",
+        "x-oauth-provider",
+        "x-project-slug",
+        "x-taste-learning",
+        "x-taste-usage",
+        "x-oss-primary-provider",
+        "x-system-prompt-breakdown",
+        "x-cmd-zdr",
+        "x-session-id", // shared; pin so CC session stays wired
+    ] {
+        assert!(
+            ALLOWED_REQUEST_HEADERS.contains(&required),
+            "Command Code CLI header `{required}` must be on the request allowlist"
+        );
     }
 }
