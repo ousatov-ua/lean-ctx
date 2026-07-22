@@ -1154,7 +1154,7 @@ mod tests {
 
     #[test]
     fn extracts_article_element() {
-        let html = r#"
+        let html = r"
             <html><body>
                 <nav>Navigation stuff</nav>
                 <article>
@@ -1163,7 +1163,7 @@ mod tests {
                 </article>
                 <footer>Footer junk</footer>
             </body></html>
-        "#;
+        ";
         let result = extract_article(html);
         assert!(result.contains("# Title"));
         assert!(result.contains("Important content here."));
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[test]
     fn extracts_main_element() {
-        let html = r#"
+        let html = r"
             <html><body>
                 <header>Header</header>
                 <main>
@@ -1182,7 +1182,7 @@ mod tests {
                 </main>
                 <aside>Sidebar</aside>
             </body></html>
-        "#;
+        ";
         let result = extract_article(html);
         assert!(result.contains("## Main Content"));
         assert!(result.contains("The real stuff."));
@@ -1215,14 +1215,14 @@ mod tests {
 
     #[test]
     fn converts_tables() {
-        let html = r#"
+        let html = r"
             <html><body><article>
                 <table>
                     <tr><th>Name</th><th>Value</th></tr>
                     <tr><td>foo</td><td>42</td></tr>
                 </table>
             </article></body></html>
-        "#;
+        ";
         let result = extract_article(html);
         assert!(result.contains("| Name | Value |"));
         assert!(result.contains("| foo | 42 |"));
@@ -1277,7 +1277,7 @@ mod edge_tests {
     fn handles_deeply_nested_structures() {
         let mut html = String::from("<html><body><article>");
         for i in 0..50 {
-            html.push_str(&format!("<div><p>Level {}</p>", i));
+            html.push_str(&format!("<div><p>Level {i}</p>"));
         }
         for _ in 0..50 {
             html.push_str("</div>");

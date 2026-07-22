@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn bridge_serves_recorded_response_and_misses_other_requests() {
-        let bridge = OclaCacheBridge::new(Arc::new(ResponseCache::new(4, Duration::from_secs(60))));
+        let bridge = OclaCacheBridge::new(Arc::new(ResponseCache::new(4, Duration::from_mins(1))));
         let hash = prompt_hash(br#"{"prompt":"hello"}"#);
 
         assert!(bridge.try_cache_hit("model", &hash, 0.2, 128).is_none());

@@ -229,6 +229,12 @@ pub fn export_trace(trace_id: &str) -> serde_json::Value {
     })
 }
 
+impl Default for SpanCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,11 +300,5 @@ mod tests {
         let spans = collector.spans_for_trace("overflow");
         assert_eq!(spans[0].span_id, "1");
         assert_eq!(spans[MAX_SPANS - 1].span_id, MAX_SPANS.to_string());
-    }
-}
-
-impl Default for SpanCollector {
-    fn default() -> Self {
-        Self::new()
     }
 }

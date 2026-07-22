@@ -283,7 +283,7 @@ mod tests {
         ];
         for (input, expected) in &cases {
             let result = strip_preamble(input);
-            assert_eq!(result.trim(), *expected, "Failed for input: {}", input);
+            assert_eq!(result.trim(), *expected, "Failed for input: {input}");
         }
     }
 
