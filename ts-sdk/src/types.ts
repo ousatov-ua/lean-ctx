@@ -76,3 +76,76 @@ export interface LedgerSummary {
 export interface OclaErrorResponse {
   error: string;
 }
+
+// --- Context Kernel Wire Types ---
+
+export type SensitivityLevel = "public" | "internal" | "confidential" | "restricted";
+export type ReceiptOutcome = "accepted" | "rejected" | "partial" | "unknown";
+
+export interface QualitySignal {
+  name: string;
+  value: number;
+}
+
+export interface PlanBudget {
+  total: number;
+  used: number;
+}
+
+export interface PlanEntry {
+  object_id: string;
+  provider: string;
+  view: string;
+  tokens: number;
+  phi: number;
+  reason: string;
+}
+
+export interface ExcludedEntry {
+  object_id: string;
+  reason: string;
+}
+
+export interface ContextPlanV1 {
+  plan_id: string;
+  intent: string;
+  budget: PlanBudget;
+  selected: PlanEntry[];
+  excluded: ExcludedEntry[];
+  deferred: ExcludedEntry[];
+  provider_stats: Record<string, { candidates: number; selected: number }>;
+}
+
+export interface ContextReceiptV1 {
+  receipt_id: string;
+  plan_id: string;
+  delivered_tokens: number;
+  cache_hits: number;
+  cache_misses: number;
+  outcome: ReceiptOutcome;
+  quality_signals: QualitySignal[];
+  feedback_attribution: Record<string, number>;
+}
+
+export interface ContextPolicy {
+  max_sensitivity: SensitivityLevel;
+  allowed_sources: string[] | null;
+  blocked_sources: string[];
+  budget_cap_tokens: number | null;
+  retention_days: number | null;
+}
+
+export interface AttributionEntry {
+  provider: string;
+  tokens_contributed: number;
+  tokens_saved: number;
+  efficiency: number;
+}
+
+export interface AttributionReport {
+  plan_id: string;
+  receipt_id: string;
+  total_tokens_delivered: number;
+  total_tokens_saved: number;
+  entries: AttributionEntry[];
+}
