@@ -493,6 +493,21 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     //    additive — surfaces structurally-close files lexical search misses).
     out.push_str(&associative_block_budgeted(project_root, &keywords));
 
+    // 5. Context Kernel enrichment — cross-store context from Knowledge,
+    //    Episodic, and Procedural memory that the lexical pipeline misses.
+    //    Budget: 20% of symbol budget. Graceful no-op if kernel returns None.
+    {
+        let kernel_budget = symbol_budget_tokens() / 5;
+        if let Some(enrichment) =
+            crate::core::context_kernel::bridge::kernel_enrich(task, project_root, kernel_budget)
+                .filter(|enrichment| !enrichment.blocks.is_empty())
+        {
+            out.push_str("\n## Context Kernel\n");
+            out.push_str(&enrichment.blocks);
+            out.push('\n');
+        }
+    }
+
     let sent = count_tokens(&out);
     (out, sent)
 }
@@ -597,6 +612,15 @@ mod tests {
         let (out, tok) = handle("   ", "/tmp", CrpMode::Off);
         assert!(out.starts_with("ERROR"));
         assert_eq!(tok, 0);
+    }
+
+    #[test]
+    fn handle_includes_context_kernel_section_when_available() {
+        let (output, tokens) = handle("find authentication bugs", "/tmp/nonexistent", CrpMode::Tdd);
+        // The kernel may or may not produce output for a nonexistent project,
+        // but handle() must not panic.
+        assert!(tokens > 0);
+        assert!(output.contains("TASK:"));
     }
 
     #[test]

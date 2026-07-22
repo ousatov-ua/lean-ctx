@@ -114,6 +114,7 @@ default = [
   # LEANCTX_PGVECTOR_URL work out of the box (both are env-gated at runtime).
   "qdrant",
   "pgvector",
+  "context_kernel",
 ]
 jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 dev-tools = []
@@ -494,4 +495,3 @@ harness = false
 [patch.crates-io]
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp" }
 rmcp-macros = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp-macros" }
-

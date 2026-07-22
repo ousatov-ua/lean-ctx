@@ -289,7 +289,7 @@ mod tests {
             id: id.to_string(),
             source_path: format!(".cursor/rules/{id}.mdc"),
             content: content.to_string(),
-            path_globs: globs.iter().map(|s| s.to_string()).collect(),
+            path_globs: globs.iter().map(ToString::to_string).collect(),
             tokens: content.len() / 4,
             keywords: extract_rule_keywords(content),
         }
@@ -297,10 +297,10 @@ mod tests {
 
     fn make_context(files: &[&str], keywords: &[&str]) -> SessionContext {
         SessionContext {
-            open_files: files.iter().map(|s| s.to_string()).collect(),
+            open_files: files.iter().map(ToString::to_string).collect(),
             recent_tool_calls: vec![],
             working_directory: "src/proxy".to_string(),
-            recent_content_keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            recent_content_keywords: keywords.iter().map(ToString::to_string).collect(),
         }
     }
 

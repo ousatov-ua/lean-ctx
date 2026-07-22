@@ -273,6 +273,10 @@ mod tests {
         assert!(!min.contains("ctx_compose"));
         assert!(!min.contains("ctx_callgraph"));
         assert!(min.contains("ctx_search(action=symbol)"));
+        assert!(!min.contains("ctx_patch"));
+
+        let power = shadow_minimal_section(&ToolProfile::Power);
+        assert!(power.contains("ctx_patch"));
     }
 
     #[test]

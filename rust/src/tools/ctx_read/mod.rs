@@ -12,6 +12,7 @@ use crate::core::tokens::count_tokens;
 use crate::tools::CrpMode;
 // `pub(crate)`: the conformance suite renders modes directly for its
 // accuracy invariants (GL#441).
+mod kernel;
 pub(crate) mod render;
 pub(crate) use render::*;
 /// Type-safe read-mode vocabulary (#528): single source of truth for which
@@ -342,7 +343,9 @@ pub fn handle_with_task(
     crp_mode: CrpMode,
     task: Option<&str>,
 ) -> String {
-    handle_with_options(cache, path, mode, false, crp_mode, task)
+    let mut result = handle_with_options(cache, path, mode, false, crp_mode, task);
+    kernel::enrich_with_kernel(&mut result, task);
+    result
 }
 
 /// Like `handle_with_task`, also returns the resolved mode name and pre-counted tokens.

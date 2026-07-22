@@ -504,7 +504,7 @@ mod tests {
 
         for i in 0..10 {
             tracker.register(
-                format!("entry_{}.log", i),
+                format!("entry_{i}.log"),
                 "proxy forward authentication tokens request handling",
                 "ctx_shell",
                 500, // 500 tokens each
@@ -525,8 +525,8 @@ mod tests {
         let mut tracker = RelevanceTracker::new();
         for i in 0..150 {
             tracker.register(
-                format!("entry_{}.log", i),
-                &format!("content for entry number {}", i),
+                format!("entry_{i}.log"),
+                &format!("content for entry number {i}"),
                 "ctx_shell",
                 100,
                 10,

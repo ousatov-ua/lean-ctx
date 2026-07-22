@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn model_aware_ttl_overrides_default() {
-        let mut cache = ResponseCache::new(4, Duration::from_secs(60));
+        let mut cache = ResponseCache::new(4, Duration::from_mins(1));
         let gpt = cache_key("gpt-4o");
         let other = cache_key("other-model");
         let created_at = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
@@ -417,11 +417,11 @@ mod tests {
 
         cache.put(
             first.clone(),
-            response(b"first", created_at, Duration::from_secs(60)),
+            response(b"first", created_at, Duration::from_mins(1)),
         );
         cache.put(
             second.clone(),
-            response(b"second", created_at, Duration::from_secs(60)),
+            response(b"second", created_at, Duration::from_mins(1)),
         );
 
         assert!(cache.get(&first).is_none());
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn set_policy_changes_behavior() {
-        let mut cache = ResponseCache::new(4, Duration::from_secs(60));
+        let mut cache = ResponseCache::new(4, Duration::from_mins(1));
         let gpt = cache_key("gpt-4o");
         let created_at = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
 

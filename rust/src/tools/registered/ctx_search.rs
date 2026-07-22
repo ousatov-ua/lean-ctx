@@ -330,7 +330,7 @@ fn handle_semantic(args: &Map<String, Value>, ctx: &ToolContext) -> Result<ToolO
     let artifacts = get_bool(args, "artifacts").unwrap_or(false);
     prime_bm25_cache(ctx);
 
-    let result = tokio::task::block_in_place(|| {
+    let mut result = tokio::task::block_in_place(|| {
         crate::tools::ctx_semantic_search::handle(
             &query,
             &path,
@@ -343,6 +343,18 @@ fn handle_semantic(args: &Map<String, Value>, ctx: &ToolContext) -> Result<ToolO
             Some(artifacts),
         )
     });
+
+    // Context Kernel: enrich semantic search with cross-store context
+    {
+        let kernel_budget = 100;
+        if let Some(enrichment) =
+            crate::core::context_kernel::bridge::kernel_enrich(&query, &path, kernel_budget)
+            && !enrichment.blocks.is_empty()
+        {
+            result.push_str("\n--- kernel context ---\n");
+            result.push_str(&enrichment.blocks);
+        }
+    }
     Ok(semantic_output(result))
 }
 
