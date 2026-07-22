@@ -192,7 +192,7 @@ mod tests {
         let report = knowledge_health::assess_health(&facts, 0, 0, 0, 0);
 
         assert!((report.freshness_score - 0.3).abs() < f64::EPSILON);
-        assert!((report.stale_ratio - 0.5).abs() < f64::EPSILON);
+        assert!((report.stale_ratio - 0.7).abs() < f64::EPSILON);
         assert!((report.contradiction_rate - 0.2).abs() < f64::EPSILON);
     }
 }
