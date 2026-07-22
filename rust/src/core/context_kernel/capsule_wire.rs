@@ -82,6 +82,16 @@ impl ContextCapsuleV1 {
         }
     }
 }
+impl DeltaTransfer {
+    /// Returns `true` if the delta has fewer total refs than the updated capsule.
+    ///
+    /// When this returns `false`, callers should send the full capsule instead
+    /// of the delta, since the disjoint-update case can produce a delta that
+    /// is larger than the full capsule.
+    pub fn is_efficient(&self, updated_ref_count: usize) -> bool {
+        self.added_refs.len() + self.removed_refs.len() < updated_ref_count
+    }
+}
 
 /// Computes the reference and budget difference between two capsules.
 pub fn compute_delta(base: &ContextCapsuleV1, updated: &ContextCapsuleV1) -> DeltaTransfer {

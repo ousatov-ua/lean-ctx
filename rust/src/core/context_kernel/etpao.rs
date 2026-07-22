@@ -20,6 +20,8 @@ pub struct EtpaoMetrics {
     pub accepted_outcomes: u64,
     pub first_pass_successes: u64,
     pub total_requests: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
 }
 
 impl EtpaoMetrics {
@@ -46,8 +48,11 @@ impl EtpaoMetrics {
     }
 
     /// Returns cache hits as a fraction of total requests.
-    pub fn cache_hit_rate(&self, cache_hits: u64) -> f64 {
-        ratio(cache_hits, self.total_requests)
+    pub fn cache_hit_rate(&self) -> f64 {
+        ratio(
+            self.cache_hits,
+            self.cache_hits.saturating_add(self.cache_misses),
+        )
     }
 
     /// Adds another scope's counters to this metric set.
@@ -68,6 +73,8 @@ impl EtpaoMetrics {
             .first_pass_successes
             .saturating_add(other.first_pass_successes);
         self.total_requests = self.total_requests.saturating_add(other.total_requests);
+        self.cache_hits = self.cache_hits.saturating_add(other.cache_hits);
+        self.cache_misses = self.cache_misses.saturating_add(other.cache_misses);
     }
 }
 
@@ -97,9 +104,17 @@ impl EtpaoTracker {
             .saturating_add(receipt.delivered_tokens as u64);
         metrics.total_requests = metrics.total_requests.saturating_add(1);
 
+        metrics.cache_hits = metrics.cache_hits.saturating_add(receipt.cache_hits as u64);
+        metrics.cache_misses = metrics
+            .cache_misses
+            .saturating_add(receipt.cache_misses as u64);
+
         if outcome == ReceiptOutcome::Accepted {
             metrics.accepted_outcomes = metrics.accepted_outcomes.saturating_add(1);
-            metrics.first_pass_successes = metrics.first_pass_successes.saturating_add(1);
+            // Only count first-pass if no cache misses (proxy for no retries)
+            if receipt.cache_misses == 0 {
+                metrics.first_pass_successes = metrics.first_pass_successes.saturating_add(1);
+            }
         }
     }
 
@@ -239,11 +254,13 @@ mod tests {
         let metrics = EtpaoMetrics {
             first_pass_successes: 3,
             total_requests: 4,
+            cache_hits: 2,
+            cache_misses: 2,
             ..EtpaoMetrics::default()
         };
 
         assert_eq!(metrics.first_pass_success_rate(), 0.75);
-        assert_eq!(metrics.cache_hit_rate(2), 0.5);
+        assert_eq!(metrics.cache_hit_rate(), 0.5);
     }
 
     #[test]
