@@ -63,6 +63,7 @@ pub fn write_config_with_options(
         ConfigType::AugmentVsCode => write_augment_vscode(target, binary, opts),
         ConfigType::OpenClaw => write_openclaw_config(target, binary, opts),
         ConfigType::VibeToml => write_vibe_toml(target, binary, opts),
+        ConfigType::CommandCode => write_commandcode_config(target, binary, opts),
     }
 }
 
@@ -74,7 +75,8 @@ pub fn remove_lean_ctx_server(
         ConfigType::McpJson
         | ConfigType::JetBrains
         | ConfigType::GeminiSettings
-        | ConfigType::QoderSettings => remove_lean_ctx_mcp_server(&target.config_path, opts),
+        | ConfigType::QoderSettings
+        | ConfigType::CommandCode => remove_lean_ctx_mcp_server(&target.config_path, opts),
         ConfigType::VsCodeMcp | ConfigType::CopilotCli => {
             remove_lean_ctx_vscode_server(&target.config_path, opts)
         }

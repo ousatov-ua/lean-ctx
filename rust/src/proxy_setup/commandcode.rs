@@ -18,7 +18,7 @@ pub(crate) const COMMANDCODE_PROVIDER_ID: &str = "commandcode";
 pub(crate) const COMMANDCODE_UPSTREAM: &str = "https://api.commandcode.ai";
 
 /// Instructions block for Command Code MCP hosts (shadow-mode rules).
-const COMMANDCODE_MCP_INSTRUCTIONS: &str = "\
+pub(crate) const COMMANDCODE_MCP_INSTRUCTIONS: &str = "\
 lean-ctx shadow mode: native file/search/shell calls auto-route to ctx_* — no tool-mapping needed.\n\
 Exclusive tools (no native trigger): ctx_compose (understand code, call first), \
 ctx_search(action=symbol) (exact symbol), ctx_search(action=semantic) (by meaning), \

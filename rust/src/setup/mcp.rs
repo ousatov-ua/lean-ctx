@@ -152,6 +152,12 @@ pub(crate) fn agent_mcp_targets(
             crate::core::editor_registry::codebuddy_mcp_json_path(home),
             ConfigType::McpJson,
         ),
+        "commandcode" => push(
+            &mut targets,
+            "Command Code",
+            home.join(".commandcode/mcp.json"),
+            ConfigType::CommandCode,
+        ),
         "augment" => {
             push(
                 &mut targets,
@@ -418,6 +424,12 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             crate::core::editor_registry::codebuddy_mcp_json_path(&home),
             ConfigType::McpJson,
         ),
+        "commandcode" => push(
+            &mut targets,
+            "Command Code",
+            home.join(".commandcode/mcp.json"),
+            ConfigType::CommandCode,
+        ),
         "augment" => {
             push(
                 &mut targets,
@@ -648,6 +660,17 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
 #[cfg(test)]
 mod qodercli_tests {
     use super::*;
+
+    #[test]
+    fn commandcode_agent_target_uses_command_code_schema() {
+        let home = std::path::Path::new("/home/tester");
+        let targets = agent_mcp_targets("commandcode", home).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "Command Code");
+        assert_eq!(targets[0].config_path, home.join(".commandcode/mcp.json"));
+        assert_eq!(targets[0].config_type, ConfigType::CommandCode);
+    }
 
     #[test]
     fn qodercli_agent_target_uses_settings_json() {

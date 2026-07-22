@@ -34,4 +34,7 @@ pub enum ConfigType {
     OpenClaw,
     /// Mistral Vibe (`~/.vibe/config.toml`): TOML-based config with `[[mcp_servers]]` array
     VibeToml,
+    /// Command Code (`~/.commandcode/mcp.json`): `mcpServers` root with a
+    /// custom entry schema (`transport`/`enabled`/`command`/`instructions`).
+    CommandCode,
 }

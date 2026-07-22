@@ -1002,7 +1002,9 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
         // its separate `Code - Insiders/User/mcp.json` is written by the
         // editor-registry writer (GH #694), and the Copilot hook layer is
         // user-global (`~/.copilot`), already covered by copilot/vscode.
-        "vscode-insiders" => {}
+        // Command Code has no hook surface either; shadow mode rides on the
+        // MCP entry's `instructions` field written by the same writer.
+        "vscode-insiders" | "commandcode" => {}
         "pi" => install_pi_hook_with_mode(global, mode),
         "qoder" | "qodercli" => install_qoder_hook_with_mode(mode),
         "qoderwork" => install_mcp_json_agent(
@@ -1067,7 +1069,7 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
             eprintln!("Unknown agent: {agent}");
             eprintln!("  Supported: aider, amazonq, amp, antigravity, antigravity-cli, augment,");
             eprintln!(
-                "    claude, cline, codebuddy, codex, continue, copilot, crush, cursor, emacs, gemini, grok,"
+                "    claude, cline, codebuddy, codex, commandcode, continue, copilot, crush, cursor, emacs, gemini, grok,"
             );
             eprintln!(
                 "    grok-build, hermes, jetbrains, kiro, neovim, openclaw, opencode, pi, qoder,"

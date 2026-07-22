@@ -86,6 +86,38 @@ fn crush_config_writes_mcp_root() {
 }
 
 #[test]
+fn commandcode_config_uses_command_code_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(
+        &path,
+        r#"{ "mcpServers": { "other": { "command": "other-bin" } } }"#,
+    )
+    .unwrap();
+
+    let t = target("test", path.clone(), ConfigType::CommandCode);
+    let res = write_commandcode_config(&t, "/new/path/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(res.action, WriteAction::Updated);
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["mcpServers"]["other"]["command"], "other-bin");
+    let entry = &json["mcpServers"]["lean-ctx"];
+    assert_eq!(entry["transport"], "stdio");
+    assert_eq!(entry["enabled"], true);
+    assert_eq!(entry["command"], "/new/path/lean-ctx");
+    assert!(
+        entry["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("shadow mode")
+    );
+
+    // Idempotent: second write reports Already.
+    let res = write_commandcode_config(&t, "/new/path/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(res.action, WriteAction::Already);
+}
+
+#[test]
 fn codex_toml_upserts_existing_section() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
