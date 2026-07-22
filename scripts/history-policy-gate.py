@@ -186,6 +186,12 @@ def current_tree_scan(root, policy, ref="HEAD"):
     return findings
 
 
+def secret_match_count(root, timeout, ref, path, regex):
+    """Count secret-rule matches for path at ref. Missing path → 0."""
+    blob = git(root, timeout, "show", f"{ref}:{path}", allowed=(0, 128))
+    return len(re.findall(regex, blob.decode(errors="surrogateescape")))
+
+
 def delta_scan(root, policy):
     timeout = policy["limits"]["command_timeout_seconds"]
     base = policy["baseline"]["commit"]
@@ -194,20 +200,56 @@ def delta_scan(root, policy):
     for path in paths:
         if rule := rule_for_path(path, policy):
             findings.append(finding("delta-path", rule, path, base + "..HEAD"))
-    stream = git(root, timeout, "log", "--format=%x1e%H", "--name-only", "--no-renames", "--pickaxe-regex", "-S", policy["secret_rule"]["pickaxe_regex"], base + "..HEAD").decode(errors="surrogateescape")
+    regex = policy["secret_rule"]["pickaxe_regex"]
+    stream = git(
+        root,
+        timeout,
+        "log",
+        "--format=%x1e%H",
+        "--name-only",
+        "--no-renames",
+        "--pickaxe-regex",
+        "-S",
+        regex,
+        base + "..HEAD",
+    ).decode(errors="surrogateescape")
     for record in stream.split("\x1e"):
-        lines = [line for line in record.splitlines() if line]
-        if lines:
-            for path in sorted(set(lines[1:])):
-                if not scanner_source(path, policy):
-                    findings.append(finding("delta-secret", policy["secret_rule"]["id"], path, lines[0]))
+        lines_rec = [line for line in record.splitlines() if line]
+        if not lines_rec:
+            continue
+        commit = lines_rec[0]
+        for path in sorted(set(lines_rec[1:])):
+            if scanner_source(path, policy):
+                continue
+            # Pickaxe -S fires on introduce AND remove. Only flag introductions.
+            before = secret_match_count(root, timeout, f"{commit}^", path, regex)
+            after = secret_match_count(root, timeout, commit, path, regex)
+            if after <= before:
+                continue
+            findings.append(finding("delta-secret", policy["secret_rule"]["id"], path, commit))
     return findings
 
 
 def gate(root, policy):
     baseline = validate_baseline(root, policy)
     inherited = set(baseline.get("current_tree_finding_ids", []))
-    current = [item for item in current_tree_scan(root, policy) if item["id"] not in inherited]
+    base = policy["baseline"]["commit"]
+    # Content edits change blob hashes and therefore finding IDs. Treat the same
+    # (scanner, rule, path) already present at the audited baseline as inherited
+    # so docs/code churn on known findings does not fail the delta gate.
+    baseline_keys = {
+        (item["scanner"], item["rule"], item["path"])
+        for item in current_tree_scan(root, policy, ref=base)
+    }
+
+    def is_new_current(item):
+        if item["id"] in inherited:
+            return False
+        if (item["scanner"], item["rule"], item["path"]) in baseline_keys:
+            return False
+        return True
+
+    current = [item for item in current_tree_scan(root, policy) if is_new_current(item)]
     findings = bounded(current + delta_scan(root, policy), policy)
     return {
         "schema_version": "leanctx.history-delta-evidence/v1",

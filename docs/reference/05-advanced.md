@@ -403,7 +403,7 @@ lean-ctx config set proxy.counterfactual_metering true
 Postgres usage store and an admin listener:
 
 ```bash
-DATABASE_URL="postgres://gateway@db/leanctx" \
+DATABASE_URL="<your-postgres-dsn>" \
 LEAN_CTX_GATEWAY_ADMIN_TOKEN="$(openssl rand -hex 24)" \
 lean-ctx gateway serve --port=8484 --admin-port=8485
 ```

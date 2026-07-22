@@ -170,5 +170,60 @@ class HistoryPolicyGateTests(unittest.TestCase):
             GATE.full_audit(self.repo, policy)
 
 
+
+    def _rebaseline_current_tree(self):
+        """Freeze baseline at HEAD with current-tree finding IDs accepted."""
+        commit = self.git("rev-parse", "HEAD").strip()
+        policy = self.policy()
+        findings = GATE.current_tree_scan(self.repo, policy)
+        ids = [item["id"] for item in findings]
+        report_rel = policy["baseline"]["report"]
+        # Fingerprint includes baseline.commit — update that before hashing.
+        policy["baseline"] = {
+            "commit": commit,
+            "report": report_rel,
+            "report_sha256": "0" * 64,
+        }
+        report = {
+            "schema_version": "leanctx.full-history-evidence/v1",
+            "audited_commit": commit,
+            "policy_sha256": GATE.policy_fingerprint(policy),
+            "scanner_versions": GATE.BASELINE_SCANNER_VERSIONS,
+            "counts": {"commits": 1, "objects": 1, "findings": len(ids)},
+            "current_tree_finding_ids": ids,
+            "finding_set_sha256": hashlib.sha256(GATE.canonical(ids)).hexdigest(),
+            "audit_status": "rotation-and-rewrite-decision-pending",
+        }
+        report_path = self.repo / report_rel
+        report_path.write_bytes(GATE.canonical(report))
+        policy["baseline"]["report_sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+        self.policy_path.write_bytes(GATE.canonical(policy))
+
+    def test_edit_baselined_secret_path_still_passes(self):
+        """Content churn on a path already known at baseline must not fail the gate."""
+        (self.repo / "docs").mkdir(exist_ok=True)
+        (self.repo / "docs/readme.md").write_text("token = sk_" + "live_BASELINE_EXAMPLE\n")
+        self.commit("baseline secret example")
+        self._rebaseline_current_tree()
+        # Edit same file (new blob) while keeping a matching pattern.
+        (self.repo / "docs/readme.md").write_text(
+            "# note\ntoken = sk_" + "live_BASELINE_EXAMPLE\nmore\n"
+        )
+        self.commit("docs edit keeping secret-like example")
+        report = GATE.gate(self.repo, self.policy())
+        self.assertEqual(report["findings"], [])
+
+    def test_remove_baselined_secret_passes(self):
+        """Removing a baselined secret-like example must not fail via delta pickaxe."""
+        (self.repo / "docs").mkdir(exist_ok=True)
+        (self.repo / "docs/readme.md").write_text("token = sk_" + "live_BASELINE_EXAMPLE\n")
+        self.commit("baseline secret example")
+        self._rebaseline_current_tree()
+        (self.repo / "docs/readme.md").write_text("token = <redacted>\n")
+        self.commit("remove secret-like example")
+        report = GATE.gate(self.repo, self.policy())
+        self.assertEqual(report["findings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
