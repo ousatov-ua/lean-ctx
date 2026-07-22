@@ -58,9 +58,12 @@ impl KernelHealth {
             .filter(|provider| provider.available)
             .count();
 
+        if total == 0 {
+            return DegradationLevel::Bypass;
+        }
         match available {
             n if n == total => DegradationLevel::Full,
-            n if n >= total / 2 => DegradationLevel::Reduced,
+            n if n * 2 >= total => DegradationLevel::Reduced,
             n if n >= 1 => DegradationLevel::Minimal,
             _ => DegradationLevel::Bypass,
         }

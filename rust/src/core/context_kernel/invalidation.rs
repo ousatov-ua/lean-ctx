@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::types::{ContextPlanV1, ContextReceiptV1};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Reason for invalidating cached context objects.
 pub enum InvalidationReason {
     SourceChanged,
     PolicyChanged,
@@ -16,6 +17,7 @@ pub enum InvalidationReason {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// An event describing which content references became invalid and why.
 pub struct InvalidationEvent {
     pub event_id: String,
     pub reason: InvalidationReason,
@@ -42,6 +44,7 @@ impl InvalidationEvent {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Outcome of propagating an invalidation through kernel state.
 pub struct InvalidationResult {
     pub invalidated_plan_ids: Vec<String>,
     pub invalidated_receipt_ids: Vec<String>,
@@ -50,6 +53,7 @@ pub struct InvalidationResult {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Tracks plan and receipt content references for invalidation propagation.
 pub struct KernelInvalidationState {
     plan_content_refs: HashMap<String, Vec<String>>,
     receipt_content_refs: HashMap<String, Vec<String>>,
@@ -58,10 +62,12 @@ pub struct KernelInvalidationState {
 }
 
 impl KernelInvalidationState {
+    /// Creates an empty invalidation state.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Records a plan's content references for future invalidation lookups.
     pub fn register_plan(&mut self, plan: &ContextPlanV1) {
         let content_refs: Vec<String> = plan
             .selected
@@ -76,6 +82,7 @@ impl KernelInvalidationState {
             .insert(plan.plan_id.clone(), content_refs);
     }
 
+    /// Links a receipt to its plan's content references.
     pub fn register_receipt(&mut self, receipt: &ContextReceiptV1) {
         let content_refs = self
             .plan_content_refs
@@ -89,6 +96,7 @@ impl KernelInvalidationState {
             .insert(receipt.receipt_id.clone(), receipt.plan_id.clone());
     }
 
+    /// Returns all plans, receipts, and candidates affected by the event.
     pub fn propagate(&self, event: &InvalidationEvent) -> InvalidationResult {
         let mut result = InvalidationResult::default();
 
@@ -125,8 +133,9 @@ impl KernelInvalidationState {
         result
     }
 
-    pub fn purge_stale(&mut self, older_than_plans: usize) {
-        let remove_count = self.plan_order.len().saturating_sub(older_than_plans);
+    /// Removes the oldest entries, keeping at most `keep_recent` plans tracked.
+    pub fn purge_stale(&mut self, keep_recent: usize) {
+        let remove_count = self.plan_order.len().saturating_sub(keep_recent);
         let removed_plan_ids: Vec<String> = self.plan_order.drain(..remove_count).collect();
 
         for plan_id in &removed_plan_ids {

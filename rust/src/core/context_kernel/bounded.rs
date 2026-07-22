@@ -144,6 +144,9 @@ impl CircuitBreaker {
     }
 
     /// Returns whether a dependency call should proceed.
+    ///
+    /// **Side effect**: if the breaker is `Open` and the cooldown has
+    /// elapsed, this transitions the state to `HalfOpen`.
     pub fn should_allow(&mut self) -> bool {
         match self.state {
             CircuitState::Closed | CircuitState::HalfOpen => true,

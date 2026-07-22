@@ -120,7 +120,7 @@ pub fn default_snapshot_path() -> PathBuf {
 
 fn temporary_path(path: &Path) -> PathBuf {
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
+    temporary.push(format!(".tmp.{}", std::process::id()));
     PathBuf::from(temporary)
 }
 
