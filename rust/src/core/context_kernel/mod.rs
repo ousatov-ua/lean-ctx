@@ -3,8 +3,12 @@
 pub mod attribution;
 pub mod bench;
 pub mod bounded;
+pub mod a2a_fixes;
+pub mod accounting_fix;
+pub mod activation;
 pub mod bridge;
 pub mod capsule_wire;
+pub mod context_dedup;
 pub mod conformance;
 pub mod degradation;
 pub mod enforce;
@@ -21,3 +25,4 @@ pub mod recovery;
 pub mod result_fusion;
 pub mod shadow;
 pub mod types;
+
