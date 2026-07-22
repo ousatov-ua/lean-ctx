@@ -10,3 +10,4 @@
 # committed recording (eval/recording.json) is tracked for deterministic replay.
 /eval-suite/
 /ab-report.json
+*.kt
